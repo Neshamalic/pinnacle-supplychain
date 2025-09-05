@@ -1,27 +1,30 @@
-import React, { Suspense, lazy } from "react";
-import { Routes, Route } from "react-router-dom";
-import NotFound from "./pages/not-found"; // ajusta si tu 404 se llama distinto
+// src/Routes.jsx
+import { lazy, Suspense } from "react";
+import { Routes, Route, Navigate } from "react-router-dom";
+import ScrollToTop from "./components/ScrollToTop";
 
-// IMPORTS: usa el mismo casing que en el filesystem
-import CommunicationLogPage from "./pages/communication-log"; // <-- carpeta en minúsculas
-
-// Ejemplos de otras páginas (ajusta según tu proyecto):
-import Home from "./pages/home";
-import Tenders from "./pages/tenders";             // Asegúrate que sea exactamente "pages/tenders"
-import Procurement from "./pages/procurement";     // y que esas carpetas existan en minúsculas
-import ImportManagement from "./pages/import-management";
-import PurchaseOrderTracking from "./pages/purchase-order-tracking";
+// Lazy pages (asegúrate que existan esas carpetas con un index.jsx adentro)
+const Home = lazy(() => import("./pages/home"));
+const PurchaseOrderTracking = lazy(() => import("./pages/purchase-order-tracking"));
+const ImportManagement = lazy(() => import("./pages/import-management"));
+const Tenders = lazy(() => import("./pages/tenders"));
+const Procurement = lazy(() => import("./pages/procurement"));
+const CommunicationsLog = lazy(() => import("./pages/communications-log")); // 👈 esta es la clave
+const NotFound = lazy(() => import("./pages/NotFound"));
 
 export default function AppRoutes() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Cargando…</div>}>
+    <Suspense fallback={<div className="p-6">Loading…</div>}>
+      <ScrollToTop />
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/communication-log" element={<CommunicationLogPage />} />
+        <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
+        <Route path="/import-management" element={<ImportManagement />} />
         <Route path="/tenders" element={<Tenders />} />
         <Route path="/procurement" element={<Procurement />} />
-        <Route path="/import-management" element={<ImportManagement />} />
-        <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
+        <Route path="/communications-log" element={<CommunicationsLog />} /> {/* 👈 */}
+        {/* alias por si usaste singular en algún menú */}
+        <Route path="/communication-log" element={<Navigate to="/communications-log" replace />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Suspense>
