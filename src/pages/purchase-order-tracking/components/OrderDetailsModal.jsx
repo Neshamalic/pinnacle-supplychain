@@ -5,8 +5,8 @@ import OrderStatusBadge from './OrderStatusBadge';
 import OrderProgressBar from './OrderProgressBar';
 
 // ✅ Datos reales desde Google Sheets (communications)
-import { useSheet } from '../../../../lib/sheetsApi';
-import { mapCommunications } from '../../../../lib/adapters';
+import { useSheet } from "../../../lib/sheetsApi.js";
+import { mapCommunications } from "../../../lib/adapters.js";
 
 const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage }) => {
   const [activeTab, setActiveTab] = useState('details');
