@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import Icon from '../../../components/AppIcon';
-import Button from '../../../components/ui/Button';
+import Icon from '@/components/AppIcon';
+import Button from '@/components/ui/Button';
 import OrderStatusBadge from './OrderStatusBadge';
 import OrderProgressBar from './OrderProgressBar';
 
 // ✅ Datos reales desde Google Sheets (communications)
-import { useSheet } from "../../../lib/sheetsApi.js";
-import { mapCommunications } from "../../../lib/adapters.js";
+import { useSheet } from '@/lib/sheetsApi.js';
+import { mapCommunications } from '@/lib/adapters.js';
 
 const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage }) => {
   const [activeTab, setActiveTab] = useState('details');
