@@ -1,41 +1,29 @@
-// src/Routes.jsx
-import React, { lazy, Suspense, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import React, { Suspense, lazy } from "react";
+import { Routes, Route } from "react-router-dom";
+import NotFound from "./pages/not-found"; // ajusta si tu 404 se llama distinto
 
-const Dashboard = lazy(() => import('./pages/dashboard'));
-const DemandForecasting = lazy(() => import('./pages/demand-forecasting'));
-const ImportManagement = lazy(() => import('./pages/import-management'));
-const PurchaseOrderTracking = lazy(() => import('./pages/purchase-order-tracking'));
-const TenderManagement = lazy(() => import('./pages/tender-management'));
-const CommunicationsLog = lazy(() => import('./pages/communications-log'));
-const NotFound = lazy(() => import('./pages/NotFound.jsx'));
+// IMPORTS: usa el mismo casing que en el filesystem
+import CommunicationLogPage from "./pages/communication-log"; // <-- carpeta en minúsculas
 
-function ScrollToTop() {
-  const { pathname } = useLocation();
-  useEffect(() => {
-    if (typeof window !== 'undefined') window.scrollTo(0, 0);
-  }, [pathname]);
-  return null;
-}
+// Ejemplos de otras páginas (ajusta según tu proyecto):
+import Home from "./pages/home";
+import Tenders from "./pages/tenders";             // Asegúrate que sea exactamente "pages/tenders"
+import Procurement from "./pages/procurement";     // y que esas carpetas existan en minúsculas
+import ImportManagement from "./pages/import-management";
+import PurchaseOrderTracking from "./pages/purchase-order-tracking";
 
 export default function AppRoutes() {
   return (
-    <BrowserRouter>
-      <ScrollToTop />
-      <Suspense fallback={<div style={{ padding: 16 }}>Loading…</div>}>
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/demand-forecasting" element={<DemandForecasting />} />
-          <Route path="/import-management" element={<ImportManagement />} />
-          <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
-          <Route path="/tender-management" element={<TenderManagement />} />
-          <Route path="/communications-log" element={<CommunicationsLog />} />
-
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </Suspense>
-    </BrowserRouter>
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Cargando…</div>}>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/communication-log" element={<CommunicationLogPage />} />
+        <Route path="/tenders" element={<Tenders />} />
+        <Route path="/procurement" element={<Procurement />} />
+        <Route path="/import-management" element={<ImportManagement />} />
+        <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </Suspense>
   );
 }
