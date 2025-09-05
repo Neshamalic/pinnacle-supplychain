@@ -1,39 +1,45 @@
 // src/Routes.jsx
-import React from "react";
-import { Routes as Switch, Route } from "react-router-dom";
+import React, { lazy, Suspense, useEffect } from 'react';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 
-// ✅ Usa alias @ para rutas desde /src
-import ScrollToTop from "@/components/ScrollToTop";
-import ErrorBoundary from "@/components/ErrorBoundary";
-import NotFound from "@/pages/NotFound";
+// Páginas que SÍ existen en tu árbol
+const Dashboard = lazy(() => import('./pages/dashboard'));
+const DemandForecasting = lazy(() => import('./pages/demand-forecasting'));
+const ImportManagement = lazy(() => import('./pages/import-management'));
+const PurchaseOrderTracking = lazy(() => import('./pages/purchase-order-tracking'));
+const TenderManagement = lazy(() => import('./pages/tender-management'));
+const CommunicationsLog = lazy(() => import('./pages/communications-log'));
 
-// Rutas de pages (pueden ser relativas o con @; dejamos relativas como estaban)
-import Dashboard from "./pages/dashboard";
-import Procurement from "./pages/procurement";
-import PurchaseOrderTracking from "./pages/purchase-order-tracking";
-import ImportManagement from "./pages/import-management";
-import Tenders from "./pages/tenders";
-import CommunicationsLog from "./pages/communications-log";
-import DemandForecasting from "./pages/demand-forecasting";
-import Settings from "./pages/settings";
+// Este archivo existe como archivo suelto (ojo con mayúsculas/minúsculas)
+const NotFound = lazy(() => import('./pages/NotFound.jsx'));
 
-const Routes = () => {
+// Scroll al top en cada cambio de ruta (reemplaza al viejo "components/ScrollToTop")
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+}
+
+export default function AppRoutes() {
   return (
-    <ErrorBoundary>
+    <>
       <ScrollToTop />
-      <Switch>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/procurement" element={<Procurement />} />
-        <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
-        <Route path="/import-management" element={<ImportManagement />} />
-        <Route path="/tenders" element={<Tenders />} />
-        <Route path="/communications-log" element={<CommunicationsLog />} />
-        <Route path="/demand-forecasting" element={<DemandForecasting />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="*" element={<NotFound />} />
-      </Switch>
-    </ErrorBoundary>
-  );
-};
+      <Suspense fallback={<div style={{ padding: 16 }}>Loading…</div>}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-export default Routes;
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/demand-forecasting" element={<DemandForecasting />} />
+          <Route path="/import-management" element={<ImportManagement />} />
+          <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
+          <Route path="/tender-management" element={<TenderManagement />} />
+          <Route path="/communications-log" element={<CommunicationsLog />} />
+
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </Suspense>
+    </>
+  );
+}
