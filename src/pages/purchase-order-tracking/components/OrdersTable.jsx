@@ -5,8 +5,8 @@ import OrderStatusBadge from './OrderStatusBadge';
 import OrderDetailsModal from './OrderDetailsModal';
 
 // ✅ IMPORTS CORRECTOS (4 niveles hacia arriba desde /components/)
-import { useSheet } from '../../../../lib/sheetsApi';
-import { mapPurchaseOrders } from '../../../../lib/adapters';
+import { useSheet } from "../../../lib/sheetsApi.js";
+import { mapPurchaseOrders } from "../../../lib/adapters.js";
 
 const OrdersTable = ({ currentLanguage, filters }) => {
   const [selectedOrder, setSelectedOrder] = useState(null);
