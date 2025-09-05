@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
-import Icon from '../../../components/AppIcon';
-import Button from '../../../components/ui/Button';
+import Icon from '@/components/AppIcon';
+import Button from '@/components/ui/Button';
 import OrderStatusBadge from './OrderStatusBadge';
 import OrderDetailsModal from './OrderDetailsModal';
 
-// ✅ IMPORTS CORRECTOS (4 niveles hacia arriba desde /components/)
-import { useSheet } from "../../../lib/sheetsApi.js";
-import { mapPurchaseOrders } from "../../../lib/adapters.js";
+// ✅ IMPORTS desde src/lib usando alias '@'
+import { useSheet } from '@/lib/sheetsApi.js';
+import { mapPurchaseOrders } from '@/lib/adapters.js';
 
-const OrdersTable = ({ currentLanguage, filters }) => {
+  const OrdersTable = ({ currentLanguage, filters }) => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
