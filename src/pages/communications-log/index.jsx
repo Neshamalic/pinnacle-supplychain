@@ -6,15 +6,18 @@ import { mapCommunications } from "../../lib/adapters";
 export default function CommunicationsLog() {
   const { rows, loading, error } = useSheet("communications", mapCommunications);
 
-  if (loading) return <div className="p-6">Cargando comunicaciones…</div>;
-  if (error) return <div className="p-6 text-red-600">Error: {error}</div>;
-
   return (
-    <div className="max-w-5xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold mb-4">Communications Log</h1>
-      {rows.length === 0 ? (
+    <div className="max-w-5xl mx-auto p-6 space-y-4">
+      <h1 className="text-2xl font-semibold">Communications Log</h1>
+
+      {loading && <div>Cargando comunicaciones…</div>}
+      {error && <div className="text-red-600">Error: {String(error)}</div>}
+
+      {!loading && !error && rows.length === 0 && (
         <div className="text-muted-foreground">No hay comunicaciones.</div>
-      ) : (
+      )}
+
+      {!loading && !error && rows.length > 0 && (
         <ul className="space-y-3">
           {rows.map((r) => (
             <li key={r.id} className="border rounded p-3">
