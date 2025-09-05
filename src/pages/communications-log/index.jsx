@@ -1,35 +1,49 @@
 // src/pages/communications-log/index.jsx
-import React from "react";
-import { useSheet } from "../../lib/sheetsApi";
-import { mapCommunications } from "../../lib/adapters";
+import React from 'react';
+import { useSheet } from '../../lib/sheetsApi';
+import { mapCommunications } from '../../lib/adapters';
 
 export default function CommunicationsLog() {
-  const { rows, loading, error } = useSheet("communications", mapCommunications);
+  const { rows, loading, error } = useSheet('communications', mapCommunications);
+
+  if (loading) return <div style={{ padding: 16 }}>Loading communications…</div>;
+
+  if (error) {
+    return (
+      <div style={{ padding: 16, color: '#b00020' }}>
+        <h3>Error</h3>
+        <pre style={{ whiteSpace: 'pre-wrap' }}>{String(error)}</pre>
+      </div>
+    );
+  }
+
+  const list = Array.isArray(rows) ? rows : [];
+
+  if (list.length === 0) {
+    return (
+      <div style={{ padding: 16 }}>
+        <h3>No communications found.</h3>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-4">
-      <h1 className="text-2xl font-semibold">Communications Log</h1>
-
-      {loading && <div>Cargando comunicaciones…</div>}
-      {error && <div className="text-red-600">Error: {String(error)}</div>}
-
-      {!loading && !error && rows.length === 0 && (
-        <div className="text-muted-foreground">No hay comunicaciones.</div>
-      )}
-
-      {!loading && !error && rows.length > 0 && (
-        <ul className="space-y-3">
-          {rows.map((r) => (
-            <li key={r.id} className="border rounded p-3">
-              <div className="font-medium">{r.subject || "(Sin asunto)"}</div>
-              <div className="text-sm text-muted-foreground">
-                {r.type} · {r.createdDate || "sin fecha"}
-              </div>
-              {r.preview && <div className="mt-1 text-sm">{r.preview}</div>}
-            </li>
-          ))}
-        </ul>
-      )}
+    <div style={{ padding: 16 }}>
+      <h2>Communications</h2>
+      <div style={{ display: 'grid', gap: 12 }}>
+        {list.map((c) => (
+          <div key={c.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <strong>{c.subject || 'No subject'}</strong>
+              <span style={{ color: '#6b7280' }}>{c.createdDate || ''}</span>
+            </div>
+            {c.from && <div style={{ color: '#6b7280', marginBottom: 6 }}>From: {c.from}</div>}
+            <div style={{ whiteSpace: 'pre-wrap' }}>
+              {c.preview || c.content || '(no content)'}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
