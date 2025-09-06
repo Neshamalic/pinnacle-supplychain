@@ -1,280 +1,108 @@
-// src/pages/tender-management/index.jsx
 import React, { useMemo, useState } from "react";
-import Icon from "../../components/AppIcon";
-import Button from "../../components/ui/Button";
 import { useSheet, writeRow } from "../../lib/sheetsApi";
 import { mapTenders } from "../../lib/adapters";
 
-const STATUS_COLORS = {
-  Draft: "bg-gray-200 text-gray-800",
-  Submitted: "bg-blue-100 text-blue-700",
-  "In Delivery": "bg-amber-100 text-amber-700",
-  Awarded: "bg-emerald-100 text-emerald-700",
-  Rejected: "bg-red-100 text-red-700",
-};
+// Adjust if your sheet name or key differs
+const SHEET = "tenders";
 
-function StatusPill({ value }) {
-  const cls = STATUS_COLORS[value] || "bg-slate-100 text-slate-700";
-  return (
-    <span className={`px-2 py-1 rounded text-xs font-medium ${cls}`}>{value || "—"}</span>
-  );
-}
+function TenderManagementPage() {
+  // Pull data from Google Sheet using the mapTenders adapter
+  const { rows, loading, error } = useSheet(SHEET, mapTenders);
 
-function formatCLP(n) {
-  if (n == null || n === "") return "—";
-  return new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(
-    Number(n)
-  );
-}
+  // Local UI state
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
 
-function formatDate(d) {
-  if (!d) return "—";
-  const dd = new Date(d);
-  if (isNaN(dd.getTime())) return d; // ya viene bonito
-  return new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit" }).format(dd);
-}
-
-/* -------------------- MODAL CREATE/EDIT -------------------- */
-function TenderFormModal({ open, onClose, initial, onSaved }) {
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState(() => ({
-    tender_id: initial?.tenderId || "",
-    title: initial?.title || "",
-    status: initial?.status || "",
-    products_count: initial?.productsCount ?? "",
-    delivery_date: initial?.deliveryDate || "",
-    stock_coverage_days: initial?.stockCoverage ?? "",
-    total_value_clp: initial?.totalValue ?? "",
-  }));
-
-  if (!open) return null;
-
-  const isEdit = Boolean(initial);
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setForm((p) => ({ ...p, [name]: value }));
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      if (isEdit) {
-        // Clave por tender_id (ajusta si tu clave es otra)
-        await writeRow("tenders", "update", {
-          keys: { tender_id: initial.tenderId },
-          values: form,
-        });
-      } else {
-        await writeRow("tenders", "create", { values: form });
-      }
-      onSaved?.();
-      onClose();
-    } catch (err) {
-      alert(`Error al guardar: ${err?.message || err}`);
-    } finally {
-      setSaving(false);
+  // Basic filtering and sorting
+  const filtered = useMemo(() => {
+    let list = rows || [];
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (r) => (r.tenderId || "").toLowerCase().includes(q) || (r.title || "").toLowerCase().includes(q)
+      );
     }
-  };
+    if (statusFilter) {
+      list = list.filter((r) => (r.status || "") === statusFilter);
+    }
+    return list;
+  }, [rows, search, statusFilter]);
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
-      <div className="bg-white w-full max-w-2xl rounded-xl shadow-modal p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-foreground">
-            {isEdit ? "Edit Tender" : "New Tender"}
-          </h3>
-          <Button variant="ghost" size="icon" onClick={onClose}>
-            <Icon name="X" size={18} />
-          </Button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Tender ID (clave). En edición permitimos verlo pero no cambiarlo */}
-          <div className="col-span-1">
-            <label className="block text-sm text-muted-foreground mb-1">Tender ID</label>
-            <input
-              className="w-full border border-border rounded px-3 py-2"
-              name="tender_id"
-              value={form.tender_id}
-              onChange={handleChange}
-              placeholder="CENABAST-2024-001"
-              disabled={isEdit}
-              required
-            />
-          </div>
-
-          <div className="col-span-1">
-            <label className="block text-sm text-muted-foreground mb-1">Status</label>
-            <select
-              className="w-full border border-border rounded px-3 py-2"
-              name="status"
-              value={form.status}
-              onChange={handleChange}
-            >
-              <option value="">Select…</option>
-              <option>Draft</option>
-              <option>Submitted</option>
-              <option>In Delivery</option>
-              <option>Awarded</option>
-              <option>Rejected</option>
-            </select>
-          </div>
-
-          <div className="md:col-span-2">
-            <label className="block text-sm text-muted-foreground mb-1">Title</label>
-            <input
-              className="w-full border border-border rounded px-3 py-2"
-              name="title"
-              value={form.title}
-              onChange={handleChange}
-              placeholder="Suministro de medicamentos…"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-muted-foreground mb-1">Products (count)</label>
-            <input
-              className="w-full border border-border rounded px-3 py-2"
-              name="products_count"
-              type="number"
-              value={form.products_count}
-              onChange={handleChange}
-              min="0"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-muted-foreground mb-1">Delivery date</label>
-            <input
-              className="w-full border border-border rounded px-3 py-2"
-              name="delivery_date"
-              type="date"
-              value={form.delivery_date}
-              onChange={handleChange}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-muted-foreground mb-1">Stock coverage (days)</label>
-            <input
-              className="w-full border border-border rounded px-3 py-2"
-              name="stock_coverage_days"
-              type="number"
-              value={form.stock_coverage_days}
-              onChange={handleChange}
-              min="0"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-muted-foreground mb-1">Total value (CLP)</label>
-            <input
-              className="w-full border border-border rounded px-3 py-2"
-              name="total_value_clp"
-              type="number"
-              value={form.total_value_clp}
-              onChange={handleChange}
-              min="0"
-            />
-          </div>
-
-          <div className="md:col-span-2 flex justify-end gap-3 pt-2">
-            <Button variant="outline" type="button" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------- CONFIRM DELETE -------------------- */
-function ConfirmDelete({ open, onClose, onConfirm, tender }) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
-      <div className="bg-white w-full max-w-md rounded-xl shadow-modal p-6">
-        <h3 className="text-lg font-semibold text-foreground mb-2">Delete tender</h3>
-        <p className="text-sm text-muted-foreground">
-          Are you sure you want to delete <b>{tender?.tenderId}</b>? This cannot be undone.
-        </p>
-        <div className="flex justify-end gap-3 mt-6">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button variant="destructive" onClick={onConfirm}>Delete</Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------- PAGE -------------------- */
-export default function TenderManagement() {
-  const { rows, loading, error } = useSheet("tenders", mapTenders);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [toDelete, setToDelete] = useState(null);
-
-  const tenders = useMemo(() => rows ?? [], [rows]);
-
-  const openNew = () => {
-    setEditing(null);
-    setModalOpen(true);
-  };
-  const openEdit = (row) => {
-    setEditing(row);
-    setModalOpen(true);
-  };
-
-  const handleSaved = () => {
-    // forma simple de refrescar (si quieres algo más fino, cambia useSheet para exponer refresh)
-    window.location.reload();
-  };
-
-  const askDelete = (row) => {
-    setToDelete(row);
-    setConfirmOpen(true);
-  };
-
-  const doDelete = async () => {
+  // Handler for create/edit (use writeRow with { action: 'create' | 'update' })
+  async function handleSave(payload) {
     try {
-      await writeRow("tenders", "delete", {
-        keys: { tender_id: toDelete.tenderId },
+      await writeRow(SHEET, payload.id ? "update" : "create", {
+        tender_id: payload.tenderId,
+        title: payload.title,
+        status: payload.status,
+        products_count: payload.productsCount ?? 0,
+        delivery_date: payload.deliveryDate || null,
+        stock_coverage_days: payload.stockCoverage ?? null,
+        total_value_clp: payload.totalValue ?? null,
+        created_date: payload.createdDate,
       });
-      setConfirmOpen(false);
-      setToDelete(null);
       window.location.reload();
     } catch (err) {
-      alert(`Error deleting: ${err?.message || err}`);
+      alert("Error saving: " + (err?.message || String(err)));
     }
-  };
+  }
+
+  // Handler for delete (use writeRow with { action: 'delete' })
+  async function handleDelete(row) {
+    if (!confirm(`Delete tender ${row.tenderId}?`)) return;
+    try {
+      await writeRow(SHEET, "delete", { tender_id: row.tenderId });
+      window.location.reload();
+    } catch (err) {
+      alert("Error deleting: " + (err?.message || String(err)));
+    }
+  }
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Tender Management</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage and oversee all CENABAST tenders from registration through delivery tracking.
-          </p>
+    <div className="p-6">
+      <h1 className="text-2xl font-semibold">Tender Management</h1>
+      <p className="text-sm text-muted-foreground mb-6">
+        Manage and oversee all CENABAST tenders from registration through delivery tracking.
+      </p>
+
+      {/* Summary cards (optional) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-card border border-border rounded-lg p-4">
+          <div className="text-sm text-muted-foreground">Active</div>
+          <div className="text-2xl font-semibold">{filtered.length}</div>
         </div>
-        <Button onClick={openNew} iconName="Plus">
-          New Tender
-        </Button>
+        {/* ... add more cards if you want ... */}
       </div>
 
-      {/* Content */}
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+      {/* Filters */}
+      <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-6">
+        <aside className="bg-card border border-border rounded-lg p-4">
+          <label className="block text-sm text-muted-foreground">Search</label>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="mt-1 w-full border border-border rounded px-3 py-2"
+            placeholder="Tender ID or Title…"
+          />
+
+          <label className="block text-sm text-muted-foreground mt-4">Status</label>
+          <select
+            className="mt-1 w-full border border-border rounded px-3 py-2"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            <option value="">All</option>
+            <option>Draft</option>
+            <option>Submitted</option>
+            <option>In Delivery</option>
+            <option>Rejected</option>
+            <option>Awarded</option>
+          </select>
+        </aside>
+
+        {/* Data table */}
+        <section className="bg-card border border-border rounded-lg overflow-x-auto">
+          <table className="min-w-full text-sm">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="px-4 py-3 text-left">Tender ID</th>
@@ -284,79 +112,58 @@ export default function TenderManagement() {
                 <th className="px-4 py-3 text-left">Delivery Date</th>
                 <th className="px-4 py-3 text-left">Stock Coverage</th>
                 <th className="px-4 py-3 text-left">Total Value</th>
-                <th className="px-4 py-3 text-left">Actions</th>
+                <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {loading && (
                 <tr>
                   <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
-                    Loading tenders…
+                    Loading…
                   </td>
                 </tr>
               )}
-              {error && !loading && (
+              {error && (
                 <tr>
                   <td colSpan={8} className="px-4 py-8 text-center text-red-600">
-                    Error: {error}
+                    Error: {String(error)}
                   </td>
                 </tr>
               )}
-              {!loading && !error && tenders.length === 0 && (
+              {!loading && !error && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                     No tenders found.
                   </td>
                 </tr>
               )}
               {!loading &&
                 !error &&
-                tenders.map((t) => (
-                  <tr key={t.id || t.tenderId} className="hover:bg-muted/40">
-                    <td className="px-4 py-3">{t.tenderId || "—"}</td>
-                    <td className="px-4 py-3">{t.title || "—"}</td>
-                    <td className="px-4 py-3">{t.productsCount ?? "—"}</td>
-                    <td className="px-4 py-3">
-                      <StatusPill value={t.status} />
-                    </td>
-                    <td className="px-4 py-3">{formatDate(t.deliveryDate)}</td>
-                    <td className="px-4 py-3">{t.stockCoverage != null ? `${t.stockCoverage} days` : "—"}</td>
-                    <td className="px-4 py-3">{formatCLP(t.totalValue)}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="sm" iconName="Edit" onClick={() => openEdit(t)}>
-                          Edit
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          iconName="Trash2"
-                          onClick={() => askDelete(t)}
-                        >
-                          Delete
-                        </Button>
-                      </div>
+                filtered.map((row) => (
+                  <tr key={row.tenderId}>
+                    <td className="px-4 py-3">{row.tenderId}</td>
+                    <td className="px-4 py-3">{row.title || "—"}</td>
+                    <td className="px-4 py-3">{row.productsCount ?? 0}</td>
+                    <td className="px-4 py-3">{row.status || "—"}</td>
+                    <td className="px-4 py-3">{niceDate(row.deliveryDate)}</td>
+                    <td className="px-4 py-3">{row.stockCoverage != null ? `${row.stockCoverage} days` : "—"}</td>
+                    <td className="px-4 py-3">{numberCLP(row.totalValue)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button className="mr-2 text-blue-600 hover:underline" onClick={() => {
+                        // open edit modal (not shown here)
+                      }}>
+                        Edit
+                      </button>
+                      <button className="text-red-600 hover:underline" onClick={() => handleDelete(row)}>Delete</button>
                     </td>
                   </tr>
                 ))}
             </tbody>
           </table>
-        </div>
+        </section>
       </div>
-
-      {/* Modals */}
-      <TenderFormModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        initial={editing}
-        onSaved={handleSaved}
-      />
-      <ConfirmDelete
-        open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        onConfirm={doDelete}
-        tender={toDelete}
-      />
     </div>
   );
 }
+
+export default TenderManagementPage;
