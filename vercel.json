@@ -1,5 +1,9 @@
 {
   "rewrites": [
+    { "source": "/assets/(.*)", "destination": "/assets/$1" },
+    { "source": "/favicon.ico", "destination": "/favicon.ico" },
+    { "source": "/robots.txt", "destination": "/robots.txt" },
+
     { "source": "/(.*)", "destination": "/" }
   ]
 }
