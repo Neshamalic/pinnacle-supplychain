@@ -1,8 +1,18 @@
 // src/lib/adapters.js
-// Convierte nombres de columnas de Google Sheets a lo que ya usan tus componentes (camelCase)
 
 const toBool = (v) =>
   v === true || v === 'true' || v === 1 || v === '1' || v === 'yes' || v === 'YES';
+
+const toArray = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    return v
+      .split(/[,;]+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
 
 /* -------------------- PURCHASE ORDERS -------------------- */
 export const mapPurchaseOrders = (rows = []) =>
@@ -51,20 +61,27 @@ export const mapImports = (rows = []) =>
   }));
 
 /* --------------------- COMMUNICATIONS -------------------- */
-export const mapCommunications = (rows = []) =>
-  rows.map((r) => ({
-    id: r.id ?? `${r.linked_type ?? 'none'}-${r.linked_id ?? 'none'}-${r.created_date ?? 'na'}`,
-    type: r.type ?? null,
-    subject: r.subject ?? '',
-    preview: r.preview ?? '',
-    content: r.content ?? '',
-    participants: r.participants ?? '',
-    linked_type: r.linked_type ?? null,
-    linked_id: r.linked_id ?? null,
-    unread: toBool(r.unread ?? false),
-    createdDate: r.created_date ?? null,
-  }));
+export const mapCommunications = (rows) =>
+  rows.map((r) => {
+    const participants = toArray(r.participants);
+    const subject = r.subject ?? '';
+    const content = r.content ?? '';
+    const preview = r.preview ?? '';
 
+    return {
+      // id estable si no viene
+      id: r.id ?? `${r.linked_type ?? 'none'}-${r.linked_id ?? 'none'}-${r.created_date ?? 'na'}`,
+      type: (r.type ?? '').toLowerCase(),               // email / phone / whatsapp...
+      subject,
+      preview,
+      content,
+      participants,                                      // AHORA SIEMPRE ES ARRAY
+      linked_type: r.linked_type ?? null,
+      linked_id: r.linked_id ?? null,
+      unread: toBool(r.unread ?? false),
+      createdDate: r.created_date ?? null,
+    };
+  });
 /* ------------------------- DEMAND ------------------------ */
 export const mapDemand = (rows = []) =>
   rows.map((r) => ({
