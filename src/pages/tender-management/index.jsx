@@ -1,222 +1,362 @@
-import React, { useState, useEffect } from 'react';
-import Header from '../../components/ui/Header';
-import Breadcrumb from '../../components/ui/Breadcrumb';
-import TenderFilters from './components/TenderFilters';
-import TenderToolbar from './components/TenderToolbar';
-import TenderTable from './components/TenderTable';
-import TenderCardView from './components/TenderCardView';
-import TenderDetailModal from './components/TenderDetailModal';
+// src/pages/tender-management/index.jsx
+import React, { useMemo, useState } from "react";
+import Icon from "../../components/AppIcon";
+import Button from "../../components/ui/Button";
+import { useSheet, writeRow } from "../../lib/sheetsApi";
+import { mapTenders } from "../../lib/adapters";
 
-// ✅ Añadido: usa tu API de Sheets + adaptador
-import { useSheet } from '../../lib/sheetsApi';
-import { mapTenders } from '../../lib/adapters';
+const STATUS_COLORS = {
+  Draft: "bg-gray-200 text-gray-800",
+  Submitted: "bg-blue-100 text-blue-700",
+  "In Delivery": "bg-amber-100 text-amber-700",
+  Awarded: "bg-emerald-100 text-emerald-700",
+  Rejected: "bg-red-100 text-red-700",
+};
 
-const TenderManagement = () => {
-  const [currentLanguage, setCurrentLanguage] = useState('en');
-  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(false);
-  const [viewMode, setViewMode] = useState('table');
-  const [selectedTenders, setSelectedTenders] = useState([]);
-  const [filters, setFilters] = useState({});
-  const [sortConfig, setSortConfig] = useState({ key: 'createdDate', direction: 'desc' });
-  const [selectedTender, setSelectedTender] = useState(null);
-  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+function StatusPill({ value }) {
+  const cls = STATUS_COLORS[value] || "bg-slate-100 text-slate-700";
+  return (
+    <span className={`px-2 py-1 rounded text-xs font-medium ${cls}`}>{value || "—"}</span>
+  );
+}
 
-  // ✅ Datos reales desde Google Sheets (hoja: "tenders")
-  const { rows: tenders, loading, error } = useSheet('tenders', mapTenders);
-  const data = tenders ?? [];
+function formatCLP(n) {
+  if (n == null || n === "") return "—";
+  return new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(
+    Number(n)
+  );
+}
 
-  useEffect(() => {
-    const savedLanguage = localStorage.getItem('language') || 'en';
-    setCurrentLanguage(savedLanguage);
-  }, []);
+function formatDate(d) {
+  if (!d) return "—";
+  const dd = new Date(d);
+  if (isNaN(dd.getTime())) return d; // ya viene bonito
+  return new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit" }).format(dd);
+}
 
-  const handleFiltersChange = (newFilters) => {
-    setFilters(newFilters);
+/* -------------------- MODAL CREATE/EDIT -------------------- */
+function TenderFormModal({ open, onClose, initial, onSaved }) {
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState(() => ({
+    tender_id: initial?.tenderId || "",
+    title: initial?.title || "",
+    status: initial?.status || "",
+    products_count: initial?.productsCount ?? "",
+    delivery_date: initial?.deliveryDate || "",
+    stock_coverage_days: initial?.stockCoverage ?? "",
+    total_value_clp: initial?.totalValue ?? "",
+  }));
+
+  if (!open) return null;
+
+  const isEdit = Boolean(initial);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setForm((p) => ({ ...p, [name]: value }));
   };
 
-  const handleTenderSelect = (tenderId) => {
-    setSelectedTenders(prev =>
-      prev?.includes(tenderId)
-        ? prev?.filter(id => id !== tenderId)
-        : [...prev, tenderId]
-    );
-  };
-
-  const handleTenderSelectAll = () => {
-    setSelectedTenders(
-      selectedTenders?.length === data?.length ? [] : data?.map(t => t?.id)
-    );
-  };
-
-  const handleSort = (key) => {
-    setSortConfig(prev => ({
-      key,
-      direction: prev?.key === key && prev?.direction === 'asc' ? 'desc' : 'asc'
-    }));
-  };
-
-  const handleTenderView = (tenderId) => {
-    const tender = data?.find(t => t?.id === tenderId);
-    setSelectedTender(tender);
-    setIsDetailModalOpen(true);
-  };
-
-  const handleTenderEdit = (tenderId) => {
-    console.log('Edit tender:', tenderId);
-  };
-
-  const handleNewTender = () => {
-    console.log('Create new tender');
-  };
-
-  const handleExport = (format) => {
-    console.log('Export to:', format);
-  };
-
-  const handleBulkAction = (action) => {
-    console.log('Bulk action:', action, 'on tenders:', selectedTenders);
-  };
-
-  // ✅ Filtrar y ordenar sobre datos reales
-  const filteredAndSortedTenders = (data ?? [])
-    ?.filter(tender => {
-      if (
-        filters?.search &&
-        !tender?.title?.toLowerCase()?.includes(filters?.search?.toLowerCase()) &&
-        !tender?.tenderId?.toLowerCase()?.includes(filters?.search?.toLowerCase())
-      ) {
-        return false;
-      }
-      if (filters?.status && tender?.status !== filters?.status) return false;
-
-      // Packaging units (si no hay products, no filtra)
-      if (filters?.packagingUnits) {
-        const hasMatchingPackagingUnits = tender?.products?.some(product =>
-          product?.packagingUnits?.toString() === filters?.packagingUnits
-        );
-        if (!hasMatchingPackagingUnits) return false;
-      }
-
-      if (filters?.stockCoverage) {
-        const coverage = tender?.stockCoverage ?? 0;
-        switch (filters?.stockCoverage) {
-          case 'critical':
-            if (coverage >= 15) return false;
-            break;
-          case 'low':
-            if (coverage < 15 || coverage > 30) return false;
-            break;
-          case 'medium':
-            if (coverage < 30 || coverage > 60) return false;
-            break;
-          case 'high':
-            if (coverage <= 60) return false;
-            break;
-          default:
-            break;
-        }
-      }
-      return true;
-    })
-    ?.sort((a, b) => {
-      const key = sortConfig?.key;
-      if (!key) return 0;
-
-      let aValue = a?.[key];
-      let bValue = b?.[key];
-
-      // Ordena fechas correctamente
-      if (key === 'createdDate' || key === 'deliveryDate') {
-        aValue = aValue ? new Date(aValue).getTime() : 0;
-        bValue = bValue ? new Date(bValue).getTime() : 0;
-      }
-
-      if (sortConfig?.direction === 'asc') {
-        return aValue > bValue ? 1 : -1;
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      if (isEdit) {
+        // Clave por tender_id (ajusta si tu clave es otra)
+        await writeRow("tenders", "update", {
+          keys: { tender_id: initial.tenderId },
+          values: form,
+        });
       } else {
-        return aValue < bValue ? 1 : -1;
+        await writeRow("tenders", "create", { values: form });
       }
-    });
-
-  // ✅ Estados de carga / error
-  if (loading) return <div style={{ padding: 16 }}>Loading tenders…</div>;
-  if (error)   return <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>;
+      onSaved?.();
+      onClose();
+    } catch (err) {
+      alert(`Error al guardar: ${err?.message || err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-background">
-      <Header />
-      <div className="pt-16">
-        <div className="flex">
-          {/* Filters Sidebar */}
-          <TenderFilters
-            onFiltersChange={handleFiltersChange}
-            isCollapsed={isFiltersCollapsed}
-            onToggleCollapse={() => setIsFiltersCollapsed(!isFiltersCollapsed)}
-          />
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
+      <div className="bg-white w-full max-w-2xl rounded-xl shadow-modal p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-foreground">
+            {isEdit ? "Edit Tender" : "New Tender"}
+          </h3>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            <Icon name="X" size={18} />
+          </Button>
+        </div>
 
-          {/* Main Content */}
-          <div className="flex-1 p-6">
-            {/* Breadcrumb */}
-            <div className="mb-6">
-              <Breadcrumb />
-            </div>
-
-            {/* Page Header */}
-            <div className="mb-6">
-              <h1 className="text-3xl font-bold text-foreground">
-                {currentLanguage === 'es' ? 'Gestión de Licitaciones' : 'Tender Management'}
-              </h1>
-              <p className="text-muted-foreground mt-2">
-                {currentLanguage === 'es'
-                  ? 'Administra y supervisa todas las licitaciones de CENABAST desde el registro hasta la entrega.'
-                  : 'Manage and oversee all CENABAST tenders from registration through delivery tracking.'}
-              </p>
-            </div>
-
-            {/* Toolbar */}
-            <TenderToolbar
-              selectedCount={selectedTenders?.length}
-              totalCount={filteredAndSortedTenders?.length}
-              viewMode={viewMode}
-              onViewModeChange={setViewMode}
-              onNewTender={handleNewTender}
-              onExport={handleExport}
-              onBulkAction={handleBulkAction}
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Tender ID (clave). En edición permitimos verlo pero no cambiarlo */}
+          <div className="col-span-1">
+            <label className="block text-sm text-muted-foreground mb-1">Tender ID</label>
+            <input
+              className="w-full border border-border rounded px-3 py-2"
+              name="tender_id"
+              value={form.tender_id}
+              onChange={handleChange}
+              placeholder="CENABAST-2024-001"
+              disabled={isEdit}
+              required
             />
-
-            {/* Content */}
-            {viewMode === 'table' ? (
-              <TenderTable
-                tenders={filteredAndSortedTenders}
-                selectedTenders={selectedTenders}
-                onTenderSelect={handleTenderSelect}
-                onTenderSelectAll={handleTenderSelectAll}
-                onTenderView={handleTenderView}
-                onTenderEdit={handleTenderEdit}
-                sortConfig={sortConfig}
-                onSort={handleSort}
-              />
-            ) : (
-              <TenderCardView
-                tenders={filteredAndSortedTenders}
-                selectedTenders={selectedTenders}
-                onTenderSelect={handleTenderSelect}
-                onTenderView={handleTenderView}
-                onTenderEdit={handleTenderEdit}
-              />
-            )}
           </div>
+
+          <div className="col-span-1">
+            <label className="block text-sm text-muted-foreground mb-1">Status</label>
+            <select
+              className="w-full border border-border rounded px-3 py-2"
+              name="status"
+              value={form.status}
+              onChange={handleChange}
+            >
+              <option value="">Select…</option>
+              <option>Draft</option>
+              <option>Submitted</option>
+              <option>In Delivery</option>
+              <option>Awarded</option>
+              <option>Rejected</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-sm text-muted-foreground mb-1">Title</label>
+            <input
+              className="w-full border border-border rounded px-3 py-2"
+              name="title"
+              value={form.title}
+              onChange={handleChange}
+              placeholder="Suministro de medicamentos…"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-muted-foreground mb-1">Products (count)</label>
+            <input
+              className="w-full border border-border rounded px-3 py-2"
+              name="products_count"
+              type="number"
+              value={form.products_count}
+              onChange={handleChange}
+              min="0"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-muted-foreground mb-1">Delivery date</label>
+            <input
+              className="w-full border border-border rounded px-3 py-2"
+              name="delivery_date"
+              type="date"
+              value={form.delivery_date}
+              onChange={handleChange}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-muted-foreground mb-1">Stock coverage (days)</label>
+            <input
+              className="w-full border border-border rounded px-3 py-2"
+              name="stock_coverage_days"
+              type="number"
+              value={form.stock_coverage_days}
+              onChange={handleChange}
+              min="0"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-muted-foreground mb-1">Total value (CLP)</label>
+            <input
+              className="w-full border border-border rounded px-3 py-2"
+              name="total_value_clp"
+              type="number"
+              value={form.total_value_clp}
+              onChange={handleChange}
+              min="0"
+            />
+          </div>
+
+          <div className="md:col-span-2 flex justify-end gap-3 pt-2">
+            <Button variant="outline" type="button" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- CONFIRM DELETE -------------------- */
+function ConfirmDelete({ open, onClose, onConfirm, tender }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
+      <div className="bg-white w-full max-w-md rounded-xl shadow-modal p-6">
+        <h3 className="text-lg font-semibold text-foreground mb-2">Delete tender</h3>
+        <p className="text-sm text-muted-foreground">
+          Are you sure you want to delete <b>{tender?.tenderId}</b>? This cannot be undone.
+        </p>
+        <div className="flex justify-end gap-3 mt-6">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="destructive" onClick={onConfirm}>Delete</Button>
         </div>
       </div>
-      {/* Detail Modal */}
-      <TenderDetailModal
-        tender={selectedTender}
-        isOpen={isDetailModalOpen}
-        onClose={() => setIsDetailModalOpen(false)}
-        onEdit={handleTenderEdit}
+    </div>
+  );
+}
+
+/* -------------------- PAGE -------------------- */
+export default function TenderManagement() {
+  const { rows, loading, error } = useSheet("tenders", mapTenders);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [toDelete, setToDelete] = useState(null);
+
+  const tenders = useMemo(() => rows ?? [], [rows]);
+
+  const openNew = () => {
+    setEditing(null);
+    setModalOpen(true);
+  };
+  const openEdit = (row) => {
+    setEditing(row);
+    setModalOpen(true);
+  };
+
+  const handleSaved = () => {
+    // forma simple de refrescar (si quieres algo más fino, cambia useSheet para exponer refresh)
+    window.location.reload();
+  };
+
+  const askDelete = (row) => {
+    setToDelete(row);
+    setConfirmOpen(true);
+  };
+
+  const doDelete = async () => {
+    try {
+      await writeRow("tenders", "delete", {
+        keys: { tender_id: toDelete.tenderId },
+      });
+      setConfirmOpen(false);
+      setToDelete(null);
+      window.location.reload();
+    } catch (err) {
+      alert(`Error deleting: ${err?.message || err}`);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">Tender Management</h1>
+          <p className="text-sm text-muted-foreground">
+            Manage and oversee all CENABAST tenders from registration through delivery tracking.
+          </p>
+        </div>
+        <Button onClick={openNew} iconName="Plus">
+          New Tender
+        </Button>
+      </div>
+
+      {/* Content */}
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted border-b border-border">
+              <tr>
+                <th className="px-4 py-3 text-left">Tender ID</th>
+                <th className="px-4 py-3 text-left">Title</th>
+                <th className="px-4 py-3 text-left">Products</th>
+                <th className="px-4 py-3 text-left">Status</th>
+                <th className="px-4 py-3 text-left">Delivery Date</th>
+                <th className="px-4 py-3 text-left">Stock Coverage</th>
+                <th className="px-4 py-3 text-left">Total Value</th>
+                <th className="px-4 py-3 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {loading && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                    Loading tenders…
+                  </td>
+                </tr>
+              )}
+              {error && !loading && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-red-600">
+                    Error: {error}
+                  </td>
+                </tr>
+              )}
+              {!loading && !error && tenders.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground">
+                    No tenders found.
+                  </td>
+                </tr>
+              )}
+              {!loading &&
+                !error &&
+                tenders.map((t) => (
+                  <tr key={t.id || t.tenderId} className="hover:bg-muted/40">
+                    <td className="px-4 py-3">{t.tenderId || "—"}</td>
+                    <td className="px-4 py-3">{t.title || "—"}</td>
+                    <td className="px-4 py-3">{t.productsCount ?? "—"}</td>
+                    <td className="px-4 py-3">
+                      <StatusPill value={t.status} />
+                    </td>
+                    <td className="px-4 py-3">{formatDate(t.deliveryDate)}</td>
+                    <td className="px-4 py-3">{t.stockCoverage != null ? `${t.stockCoverage} days` : "—"}</td>
+                    <td className="px-4 py-3">{formatCLP(t.totalValue)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="sm" iconName="Edit" onClick={() => openEdit(t)}>
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          iconName="Trash2"
+                          onClick={() => askDelete(t)}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modals */}
+      <TenderFormModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        initial={editing}
+        onSaved={handleSaved}
+      />
+      <ConfirmDelete
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={doDelete}
+        tender={toDelete}
       />
     </div>
   );
-};
-
-export default TenderManagement;
+}
