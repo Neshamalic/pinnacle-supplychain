@@ -4,22 +4,19 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import ScrollToTop from "./components/ScrollToTop";
 import NotFound from "./pages/NotFound.jsx";
 
-// Páginas que SÍ existen como index.jsx dentro de cada carpeta:
 const CommunicationsLog = lazy(() => import("./pages/communications-log/index.jsx"));
 const DemandForecasting = lazy(() => import("./pages/demand-forecasting/index.jsx"));
 const ImportManagement = lazy(() => import("./pages/import-management/index.jsx"));
 const PurchaseOrderTracking = lazy(() => import("./pages/purchase-order-tracking/index.jsx"));
 const TenderManagement = lazy(() => import("./pages/tender-management/index.jsx"));
 const Dashboard = lazy(() => import("./pages/dashboard/index.jsx"));
-// Si en el futuro creas una Home real: 
-// const Home = lazy(() => import("./pages/index.jsx"));
 
 export default function AppRoutes() {
   return (
     <Suspense fallback={<div style={{ padding: 16 }}>Loading…</div>}>
       <ScrollToTop />
       <Routes>
-        {/* Sin Home: redirigimos a /dashboard */}
+        {/* Redirige la raíz a /dashboard */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
         <Route path="/dashboard" element={<Dashboard />} />
@@ -29,7 +26,7 @@ export default function AppRoutes() {
         <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
         <Route path="/tender-management" element={<TenderManagement />} />
 
-        {/* Redirecciones por rutas antiguas, si las usaste */}
+        {/* Alias antiguos (si los usaste alguna vez) */}
         <Route path="/tenders" element={<Navigate to="/tender-management" replace />} />
         <Route path="/procurement" element={<Navigate to="/import-management" replace />} />
 
