@@ -13,7 +13,6 @@ export default function Button({
   children,
   ...rest
 }) {
-  // clases mínimas; mantén las tuyas si ya las tienes
   const base =
     'inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors focus:outline-none';
   const variants = {
@@ -30,10 +29,9 @@ export default function Button({
     className,
   ].join(' ');
 
-  // ✅ blindaje: si NO es submit, evitamos navegación/submit
   const handleClick = (e) => {
     try {
-      if (type !== 'submit') e.preventDefault?.();
+      if (type !== 'submit') e.preventDefault?.(); // ✅ corta submit/navegación
       e.stopPropagation?.();
     } catch {}
     onClick?.(e);
@@ -41,10 +39,10 @@ export default function Button({
 
   return (
     <button
-      type={type}           // ✅ se fija aquí; ningún spread lo pisa
+      type={type}               // ✅ fijado arriba
       className={classes}
       onClick={handleClick}
-      {...rest}             // ✅ el spread va DESPUÉS, pero ya fijamos type arriba
+      {...rest}
     >
       {iconName && iconPosition === 'left' && <Icon name={iconName} size={16} />}
       <span>{children}</span>
