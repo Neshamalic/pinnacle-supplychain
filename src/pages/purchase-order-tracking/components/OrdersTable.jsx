@@ -1,70 +1,92 @@
-import React, { useState } from 'react';
-import Icon from '@/components/AppIcon';
-import Button from '@/components/ui/Button';
-import OrderStatusBadge from './OrderStatusBadge';
-import OrderDetailsModal from './OrderDetailsModal';
+// src/pages/purchase-order-tracking/components/OrdersTable.jsx
+import React, { useState } from "react";
+import Icon from "@/components/AppIcon";
+import Button from "@/components/ui/Button";
+import OrderStatusBadge from "./OrderStatusBadge";
+import OrderDetailsModal from "./OrderDetailsModal";
 
 // ✅ IMPORTS desde src/lib usando alias '@'
-import { useSheet } from '@/lib/sheetsApi.js';
-import { mapPurchaseOrders } from '@/lib/adapters.js';
+import { useSheet } from "@/lib/sheetsApi.js";
+import { mapPurchaseOrders } from "@/lib/adapters.js";
 
-  const OrdersTable = ({ currentLanguage, filters }) => {
+const OrdersTable = ({ currentLanguage, filters }) => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
   // ✅ Datos reales desde Google Sheets (tabla: purchase_orders)
-  const { rows: orders, loading, error } = useSheet('purchase_orders', mapPurchaseOrders);
+  const { rows: orders, loading, error } = useSheet(
+    "purchase_orders",
+    mapPurchaseOrders
+  );
 
   const columns = [
-    { key: 'poNumber', labelEn: 'PO Number', labelEs: 'Número PO', sortable: true },
-    { key: 'tenderRef', labelEn: 'Tender Ref', labelEs: 'Ref. Licitación', sortable: true },
-    { key: 'manufacturingStatus', labelEn: 'Manufacturing', labelEs: 'Fabricación', sortable: true },
-    { key: 'qcStatus', labelEn: 'QC Status', labelEs: 'Estado QC', sortable: true },
-    { key: 'transportType', labelEn: 'Transport', labelEs: 'Transporte', sortable: true },
-    { key: 'eta', labelEn: 'ETA', labelEs: 'ETA', sortable: true },
-    { key: 'costUsd', labelEn: 'Cost (USD)', labelEs: 'Costo (USD)', sortable: true },
-    { key: 'actions', labelEn: 'Actions', labelEs: 'Acciones', sortable: false }
+    { key: "poNumber", labelEn: "PO Number", labelEs: "Número PO", sortable: true },
+    { key: "tenderRef", labelEn: "Tender Ref", labelEs: "Ref. Licitación", sortable: true },
+    { key: "manufacturingStatus", labelEn: "Manufacturing", labelEs: "Fabricación", sortable: true },
+    { key: "qcStatus", labelEn: "QC Status", labelEs: "Estado QC", sortable: true },
+    { key: "transportType", labelEn: "Transport", labelEs: "Transporte", sortable: true },
+    { key: "eta", labelEn: "ETA", labelEs: "ETA", sortable: true },
+    { key: "costUsd", labelEn: "Cost (USD)", labelEs: "Costo (USD)", sortable: true },
+    { key: "actions", labelEn: "Actions", labelEs: "Acciones", sortable: false },
   ];
 
   const getColumnLabel = (column) =>
-    currentLanguage === 'es' ? column?.labelEs : column?.labelEn;
+    currentLanguage === "es" ? column?.labelEs : column?.labelEn;
 
   const formatCurrency = (amount, currency) => {
-    return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      style: 'currency',
+    return new Intl.NumberFormat(currentLanguage === "es" ? "es-CL" : "en-US", {
+      style: "currency",
       currency,
       minimumFractionDigits: 0,
-      maximumFractionDigits: 0
+      maximumFractionDigits: 0,
     })?.format(amount ?? 0);
   };
 
   const formatDate = (date) => {
-    if (!date) return '—';
-    return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    })?.format(new Date(date));
+    if (!date) return "—";
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return "—";
+    return new Intl.DateTimeFormat(currentLanguage === "es" ? "es-CL" : "en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    })?.format(d);
   };
 
   const handleSort = (key) => {
-    let direction = 'asc';
-    if (sortConfig?.key === key && sortConfig?.direction === 'asc') direction = 'desc';
+    let direction = "asc";
+    if (sortConfig?.key === key && sortConfig?.direction === "asc") direction = "desc";
     setSortConfig({ key, direction });
   };
 
-  const handleViewDetails = (order) => {
+  const openModalWith = (order) => {
     setSelectedOrder(order);
     setIsModalOpen(true);
   };
 
+  const handleViewDetails = (order) => {
+    console.log("[VIEW] order:", order);
+    openModalWith(order);
+  };
+
+  const handleEdit = (order) => {
+    console.log("[EDIT] order:", order);
+    // Por ahora abrimos el mismo modal de detalles
+    // (si luego tienes un modal de edición, llama aquí ese componente)
+    openModalWith(order);
+  };
+
   // ✅ Filtrado sobre datos reales
-  const filteredOrders = (orders ?? []).filter(order => {
+  const filteredOrders = (orders ?? []).filter((order) => {
     if (
       filters?.search &&
-      !order?.poNumber?.toLowerCase()?.includes(filters?.search?.toLowerCase()) &&
-      !order?.tenderRef?.toLowerCase()?.includes(filters?.search?.toLowerCase())
+      !String(order?.poNumber ?? "")
+        .toLowerCase()
+        .includes(String(filters?.search ?? "").toLowerCase()) &&
+      !String(order?.tenderRef ?? "")
+        .toLowerCase()
+        .includes(String(filters?.search ?? "").toLowerCase())
     ) {
       return false;
     }
@@ -87,19 +109,25 @@ import { mapPurchaseOrders } from '@/lib/adapters.js';
     let aValue = a?.[sortConfig?.key];
     let bValue = b?.[sortConfig?.key];
 
-    if (sortConfig?.key === 'eta' || sortConfig?.key === 'createdDate') {
-      aValue = aValue ? new Date(aValue) : 0;
-      bValue = bValue ? new Date(bValue) : 0;
+    // Normaliza fechas
+    if (sortConfig?.key === "eta" || sortConfig?.key === "createdDate") {
+      aValue = aValue ? new Date(aValue).getTime() : 0;
+      bValue = bValue ? new Date(bValue).getTime() : 0;
     }
 
-    if (aValue < bValue) return sortConfig?.direction === 'asc' ? -1 : 1;
-    if (aValue > bValue) return sortConfig?.direction === 'asc' ? 1 : -1;
+    // Normaliza undefined para comparación estable
+    if (aValue == null && bValue == null) return 0;
+    if (aValue == null) return sortConfig?.direction === "asc" ? 1 : -1;
+    if (bValue == null) return sortConfig?.direction === "asc" ? -1 : 1;
+
+    if (aValue < bValue) return sortConfig?.direction === "asc" ? -1 : 1;
+    if (aValue > bValue) return sortConfig?.direction === "asc" ? 1 : -1;
     return 0;
   });
 
   // ✅ Loading / Error antes del JSX
   if (loading) return <div style={{ padding: 16 }}>Loading orders…</div>;
-  if (error)   return <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>;
+  if (error) return <div style={{ padding: 16, color: "red" }}>Error: {String(error)}</div>;
 
   return (
     <>
@@ -112,13 +140,14 @@ import { mapPurchaseOrders } from '@/lib/adapters.js';
                   <th key={column?.key} className="px-6 py-4 text-left">
                     {column?.sortable ? (
                       <button
+                        type="button"
                         onClick={() => handleSort(column?.key)}
                         className="flex items-center space-x-1 text-sm font-medium text-foreground hover:text-primary transition-colors duration-200"
                       >
                         <span>{getColumnLabel(column)}</span>
                         {sortConfig?.key === column?.key && (
                           <Icon
-                            name={sortConfig?.direction === 'asc' ? 'ChevronUp' : 'ChevronDown'}
+                            name={sortConfig?.direction === "asc" ? "ChevronUp" : "ChevronDown"}
                             size={16}
                           />
                         )}
@@ -134,17 +163,21 @@ import { mapPurchaseOrders } from '@/lib/adapters.js';
             </thead>
             <tbody className="divide-y divide-border">
               {sortedOrders?.map((order) => (
-                <tr key={order?.id ?? order?.poNumber} className="hover:bg-muted/50 transition-colors duration-200">
+                <tr
+                  key={order?.id ?? order?.poNumber}
+                  className="hover:bg-muted/50 transition-colors duration-200"
+                >
                   <td className="px-6 py-4">
                     <div className="font-medium text-foreground">{order?.poNumber}</div>
                     <div className="text-sm text-muted-foreground">
                       {formatDate(order?.createdDate)}
                     </div>
                   </td>
+
                   <td className="px-6 py-4">
                     <div className="font-medium text-foreground">{order?.tenderRef}</div>
-                    {/* línea del mock que contaba productos eliminada */}
                   </td>
+
                   <td className="px-6 py-4">
                     <OrderStatusBadge
                       status={order?.manufacturingStatus}
@@ -152,6 +185,7 @@ import { mapPurchaseOrders } from '@/lib/adapters.js';
                       currentLanguage={currentLanguage}
                     />
                   </td>
+
                   <td className="px-6 py-4">
                     <OrderStatusBadge
                       status={order?.qcStatus}
@@ -159,6 +193,7 @@ import { mapPurchaseOrders } from '@/lib/adapters.js';
                       currentLanguage={currentLanguage}
                     />
                   </td>
+
                   <td className="px-6 py-4">
                     <OrderStatusBadge
                       status={order?.transportType}
@@ -166,35 +201,41 @@ import { mapPurchaseOrders } from '@/lib/adapters.js';
                       currentLanguage={currentLanguage}
                     />
                   </td>
+
                   <td className="px-6 py-4">
                     <div className="font-medium text-foreground">{formatDate(order?.eta)}</div>
                   </td>
+
                   <td className="px-6 py-4">
                     <div className="font-medium text-foreground">
-                      {formatCurrency(order?.costUsd, 'USD')}
+                      {formatCurrency(order?.costUsd, "USD")}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      {formatCurrency(order?.costClp, 'CLP')}
+                      {formatCurrency(order?.costClp, "CLP")}
                     </div>
                   </td>
+
                   <td className="px-6 py-4">
                     <div className="flex items-center space-x-2">
                       <Button
+                        type="button"
                         variant="ghost"
                         size="sm"
                         onClick={() => handleViewDetails(order)}
                         iconName="Eye"
                         iconPosition="left"
                       >
-                        {currentLanguage === 'es' ? 'Ver' : 'View'}
+                        {currentLanguage === "es" ? "Ver" : "View"}
                       </Button>
                       <Button
+                        type="button"
                         variant="ghost"
                         size="sm"
+                        onClick={() => handleEdit(order)}
                         iconName="Edit"
                         iconPosition="left"
                       >
-                        {currentLanguage === 'es' ? 'Editar' : 'Edit'}
+                        {currentLanguage === "es" ? "Editar" : "Edit"}
                       </Button>
                     </div>
                   </td>
@@ -208,12 +249,12 @@ import { mapPurchaseOrders } from '@/lib/adapters.js';
           <div className="text-center py-12">
             <Icon name="Package" size={48} className="mx-auto text-muted-foreground mb-4" />
             <h3 className="text-lg font-medium text-foreground mb-2">
-              {currentLanguage === 'es' ? 'No se encontraron órdenes' : 'No orders found'}
+              {currentLanguage === "es" ? "No se encontraron órdenes" : "No orders found"}
             </h3>
             <p className="text-muted-foreground">
-              {currentLanguage === 'es'
-                ? 'Intenta ajustar los filtros para ver más resultados.'
-                : 'Try adjusting the filters to see more results.'}
+              {currentLanguage === "es"
+                ? "Intenta ajustar los filtros para ver más resultados."
+                : "Try adjusting the filters to see more results."}
             </p>
           </div>
         )}
@@ -230,4 +271,3 @@ import { mapPurchaseOrders } from '@/lib/adapters.js';
 };
 
 export default OrdersTable;
-
