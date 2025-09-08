@@ -8,18 +8,22 @@ import Button from '../../components/ui/Button';
 import Icon from '../../components/AppIcon';
 
 /* =========================================================
-   Modal local para crear una nueva orden (demo sin guardar)
+   Modal para crear una nueva orden (GUARDA en Google Sheets)
    ========================================================= */
+const API_URL = import.meta.env.VITE_SHEETS_API_URL; // debe estar en Vercel
+
 function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
   const [form, setForm] = useState({
     poNumber: '',
     tenderRef: '',
     eta: '',
   });
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
       setForm({ poNumber: '', tenderRef: '', eta: '' });
+      setSaving(false);
     }
   }, [isOpen]);
 
@@ -32,10 +36,58 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
     setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const onSubmit = (e) => {
+  // ⬇️ CREA una fila en la hoja "purchase_orders"
+  const onSubmit = async (e) => {
     e.preventDefault(); // evita recarga
-    console.log('Create Order (draft):', form);
-    onClose();
+
+    if (!API_URL) {
+      alert('Falta configurar VITE_SHEETS_API_URL');
+      return;
+    }
+    if (!form.poNumber.trim()) {
+      alert(t('PO Number is required', 'El Número PO es obligatorio'));
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      // payload con nombres de columnas EXACTOS de tu hoja
+      const payload = {
+        po_number: form.poNumber.trim(),
+        tender_ref: form.tenderRef?.trim() || '',
+        eta: form.eta || '',
+        created_date: new Date().toISOString(),
+
+        // defaults (puedes modificarlos)
+        manufacturing_status: 'Draft',
+        qc_status: 'Unknown',
+        transport_type: '',
+        cost_usd: 0,
+        cost_clp: 0,
+      };
+
+      const res = await fetch(
+        `${API_URL}?route=write&action=create&name=purchase_orders`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
+      const json = await res.json();
+      if (!json?.ok) throw new Error(json?.error || 'Unknown error');
+
+      // listo
+      onClose();
+      // refresca la tabla (si tu hook no expone refetch, recarga)
+      window.location.reload();
+    } catch (err) {
+      console.error(err);
+      alert(`${t('Error creating order:', 'Error al crear la orden:')} ${String(err)}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -100,8 +152,8 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
             <Button type="button" variant="outline" onClick={onClose}>
               {t('Cancel', 'Cancelar')}
             </Button>
-            <Button type="submit" variant="default">
-              {t('Create', 'Crear')}
+            <Button type="submit" variant="default" disabled={saving}>
+              {saving ? t('Saving…', 'Guardando…') : t('Create', 'Crear')}
             </Button>
           </div>
         </form>
