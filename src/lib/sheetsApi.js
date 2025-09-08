@@ -1,55 +1,73 @@
-import { useEffect, useState } from 'react';
+// src/lib/sheetsApi.js
+const BASE_URL = import.meta.env.VITE_SHEETS_API_URL?.trim();
 
-const BASE_RAW = import.meta.env.VITE_SHEETS_API_URL || '';
-const BASE = BASE_RAW.replace(/\/$/, '');
+/**
+ * Devuelve [{...}] de una hoja.
+ * mapper(row) -> adapta cada fila a la forma que usa la UI.
+ */
+export async function getSheet(name, mapper = (x) => x) {
+  if (!BASE_URL) throw new Error('Falta VITE_SHEETS_API_URL');
+  const url = `${BASE_URL}?name=${encodeURIComponent(name)}`; // doGet table por defecto
 
-async function asJson(res) {
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) {
-    const msg = data?.error || `API error (HTTP ${res.status})`;
-    throw new Error(msg);
-  }
+  const res = await fetch(url, { method: 'GET' });
+  if (!res.ok) throw new Error(`GET ${name} ${res.status}`);
+  const data = await res.json(); // {ok, rows}
+  if (!data?.ok) throw new Error(data?.error || 'GET failed');
+
+  return (data.rows || []).map(mapper);
+}
+
+/**
+ * Escribe en Apps Script evitando preflight CORS:
+ * - NO 'application/json'; usamos 'text/plain'.
+ * - name va en querystring; el body es JSON (string).
+ */
+async function writeRow(action, name, rowOrWhere) {
+  if (!BASE_URL) throw new Error('Falta VITE_SHEETS_API_URL');
+
+  const url =
+    `${BASE_URL}?route=write&action=${encodeURIComponent(action)}&name=${encodeURIComponent(name)}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    // request “simple” para evitar preflight:
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ row: rowOrWhere, where: rowOrWhere }),
+  });
+
+  // Si tuvieras que depurar CORS, mira Network: la fila debe quedar “(200) fetch”
+  if (!res.ok) throw new Error(`WRITE ${name} ${res.status}`);
+  const data = await res.json(); // {ok:true,...}
+  if (!data?.ok) throw new Error(data?.error || 'WRITE failed');
   return data;
 }
 
-export async function readTable(name) {
-  const url = `${BASE}?name=${encodeURIComponent(name)}`;
-  const res = await fetch(url, { method: 'GET', mode: 'cors', credentials: 'omit' });
-  return asJson(res);
-}
+export const sheetsApi = {
+  list: getSheet,
+  create: (name, row) => writeRow('create', name, row),
+  update: (name, row) => writeRow('update', name, row),
+  remove: (name, where) => writeRow('delete', name, where),
+};
 
-export async function writeRow(name, action, payload) {
-  const url = `${BASE}?route=write&name=${encodeURIComponent(name)}`;
-  const body = JSON.stringify({ action, ...payload });
-
-  // **text/plain** evita el preflight OPTIONS
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body,
-    mode: 'cors',
-    credentials: 'omit',
-  });
-  return asJson(res);
-}
-
-export function useSheet(name, mapFn = (x) => x) {
+/* -------- Hook de conveniencia (opcional) -------- */
+import { useEffect, useState } from 'react';
+export function useSheet(name, mapper) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    setError(null);
+    setError('');
+    getSheet(name, mapper)
+      .then((r) => alive && setRows(r))
+      .catch((e) => alive && setError(String(e?.message || e)))
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [name, mapper]);
 
-    readTable(name)
-      .then(({ rows }) => { if (alive) setRows(mapFn(rows)); })
-      .catch(err => { if (alive) setError(err.message || String(err)); })
-      .finally(() => { if (alive) setLoading(false); });
-
-    return () => { alive = false; };
-  }, [name, mapFn]);
-
-  return { rows, loading, error };
+  return { rows, loading, error, refetch: () => getSheet(name, mapper) };
 }
