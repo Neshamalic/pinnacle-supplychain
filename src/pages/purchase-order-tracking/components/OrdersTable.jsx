@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Icon from '@/components/AppIcon';
 import Button from '@/components/ui/Button';
 import OrderStatusBadge from './OrderStatusBadge';
 import OrderDetailsModal from './OrderDetailsModal';
 
-// ✅ IMPORTS desde src/lib usando alias '@'
+// Datos reales desde Google Sheets
 import { useSheet } from '@/lib/sheetsApi.js';
 import { mapPurchaseOrders } from '@/lib/adapters.js';
 
@@ -13,8 +13,17 @@ const OrdersTable = ({ currentLanguage, filters }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
 
-  // ✅ Datos reales desde Google Sheets (tabla: purchase_orders)
-  const { rows: orders, loading, error } = useSheet('purchase_orders', mapPurchaseOrders);
+  // GET real: purchase_orders
+  const {
+    rows: ordersRaw = [],
+    loading,
+    error,
+    // si tu hook expone refetch úsalo; si no, refrescamos con reload
+    refetch,
+  } = useSheet('purchase_orders', mapPurchaseOrders);
+
+  // defensivo: evita crashear si el mapeo falla
+  const orders = useMemo(() => Array.isArray(ordersRaw) ? ordersRaw : [], [ordersRaw]);
 
   const columns = [
     { key: 'poNumber', labelEn: 'PO Number', labelEs: 'Número PO', sortable: true },
@@ -31,21 +40,24 @@ const OrdersTable = ({ currentLanguage, filters }) => {
     currentLanguage === 'es' ? column?.labelEs : column?.labelEn;
 
   const formatCurrency = (amount, currency) => {
-    return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      style: 'currency',
-      currency,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    })?.format(amount ?? 0);
+    try {
+      return new Intl.NumberFormat(
+        currentLanguage === 'es' ? 'es-CL' : 'en-US',
+        { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }
+      ).format(amount ?? 0);
+    } catch {
+      return amount ?? 0;
+    }
   };
 
   const formatDate = (date) => {
     if (!date) return '—';
-    return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    })?.format(new Date(date));
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return '—';
+    return new Intl.DateTimeFormat(
+      currentLanguage === 'es' ? 'es-CL' : 'en-US',
+      { year: 'numeric', month: 'short', day: 'numeric' }
+    ).format(d);
   };
 
   const handleSort = (key) => {
@@ -54,51 +66,54 @@ const OrdersTable = ({ currentLanguage, filters }) => {
     setSortConfig({ key, direction });
   };
 
-  const handleViewDetails = (order) => {
-    setSelectedOrder(order);
+  const handleView = (order) => {
+    setSelectedOrder(order || null);
     setIsModalOpen(true);
   };
 
-  // ✅ Filtrado sobre datos reales
-  const filteredOrders = (orders ?? []).filter(order => {
-    if (
-      filters?.search &&
-      !order?.poNumber?.toLowerCase()?.includes(filters?.search?.toLowerCase()) &&
-      !order?.tenderRef?.toLowerCase()?.includes(filters?.search?.toLowerCase())
-    ) {
-      return false;
-    }
-    if (filters?.manufacturingStatus && order?.manufacturingStatus !== filters?.manufacturingStatus) {
-      return false;
-    }
-    if (filters?.qcStatus && order?.qcStatus !== filters?.qcStatus) {
-      return false;
-    }
-    if (filters?.transportType && order?.transportType !== filters?.transportType) {
-      return false;
-    }
-    return true;
-  });
+  const filteredOrders = useMemo(() => {
+    return (orders ?? []).filter((order) => {
+      if (
+        filters?.search &&
+        !order?.poNumber?.toLowerCase()?.includes(filters?.search?.toLowerCase()) &&
+        !order?.tenderRef?.toLowerCase()?.includes(filters?.search?.toLowerCase())
+      ) return false;
 
-  // ✅ Ordenamiento
-  const sortedOrders = [...filteredOrders].sort((a, b) => {
-    if (!sortConfig?.key) return 0;
+      if (filters?.manufacturingStatus && order?.manufacturingStatus !== filters?.manufacturingStatus) return false;
+      if (filters?.qcStatus && order?.qcStatus !== filters?.qcStatus) return false;
+      if (filters?.transportType && order?.transportType !== filters?.transportType) return false;
+      return true;
+    });
+  }, [orders, filters]);
 
-    let aValue = a?.[sortConfig?.key];
-    let bValue = b?.[sortConfig?.key];
+  const sortedOrders = useMemo(() => {
+    const arr = [...filteredOrders];
+    if (!sortConfig?.key) return arr;
+    const { key, direction } = sortConfig;
 
-    if (sortConfig?.key === 'eta' || sortConfig?.key === 'createdDate') {
-      aValue = aValue ? new Date(aValue) : 0;
-      bValue = bValue ? new Date(bValue) : 0;
-    }
+    return arr.sort((a, b) => {
+      let av = a?.[key];
+      let bv = b?.[key];
 
-    if (aValue < bValue) return sortConfig?.direction === 'asc' ? -1 : 1;
-    if (aValue > bValue) return sortConfig?.direction === 'asc' ? 1 : -1;
-    return 0;
-  });
+      if (key === 'eta' || key === 'createdDate') {
+        av = av ? new Date(av).getTime() : 0;
+        bv = bv ? new Date(bv).getTime() : 0;
+      }
+
+      if (av < bv) return direction === 'asc' ? -1 : 1;
+      if (av > bv) return direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredOrders, sortConfig]);
+
+  // 🔄 cuando el modal guarde cambios, refrescamos
+  const refreshAfterSave = () => {
+    if (typeof refetch === 'function') refetch();
+    else window.location.reload();
+  };
 
   if (loading) return <div style={{ padding: 16 }}>Loading orders…</div>;
-  if (error)   return <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>;
+  if (error)   return <div style={{ padding: 16, color: 'red' }}>Error: {String(error)}</div>;
 
   return (
     <>
@@ -137,9 +152,7 @@ const OrdersTable = ({ currentLanguage, filters }) => {
                 <tr key={order?.id ?? order?.poNumber} className="hover:bg-muted/50 transition-colors duration-200">
                   <td className="px-6 py-4">
                     <div className="font-medium text-foreground">{order?.poNumber}</div>
-                    <div className="text-sm text-muted-foreground">
-                      {formatDate(order?.createdDate)}
-                    </div>
+                    <div className="text-sm text-muted-foreground">{formatDate(order?.createdDate)}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="font-medium text-foreground">{order?.tenderRef}</div>
@@ -169,30 +182,26 @@ const OrdersTable = ({ currentLanguage, filters }) => {
                     <div className="font-medium text-foreground">{formatDate(order?.eta)}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">
-                      {formatCurrency(order?.costUsd, 'USD')}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {formatCurrency(order?.costClp, 'CLP')}
-                    </div>
+                    <div className="font-medium text-foreground">{formatCurrency(order?.costUsd, 'USD')}</div>
+                    <div className="text-sm text-muted-foreground">{formatCurrency(order?.costClp, 'CLP')}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center space-x-2">
                       <Button
-                        type="button"           // ✅ explícito
+                        type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleViewDetails(order)}
+                        onClick={() => handleView(order)}
                         iconName="Eye"
                         iconPosition="left"
                       >
                         {currentLanguage === 'es' ? 'Ver' : 'View'}
                       </Button>
                       <Button
-                        type="button"           // ✅ explícito
+                        type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleViewDetails(order)} // usa el mismo modal por ahora
+                        onClick={() => handleView(order)} // mismo modal permite editar
                         iconName="Edit"
                         iconPosition="left"
                       >
@@ -226,10 +235,10 @@ const OrdersTable = ({ currentLanguage, filters }) => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         currentLanguage={currentLanguage}
+        onUpdated={refreshAfterSave}
       />
     </>
   );
 };
 
 export default OrdersTable;
-
