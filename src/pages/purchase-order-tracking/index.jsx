@@ -8,8 +8,7 @@ import Button from '../../components/ui/Button';
 import Icon from '../../components/AppIcon';
 
 /* =========================================================
-   Modal local y liviano para crear una nueva orden
-   (no escribe a Sheets; solo demuestra apertura/cierre).
+   Modal local para crear una nueva orden (demo sin guardar)
    ========================================================= */
 function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
   const [form, setForm] = useState({
@@ -20,7 +19,6 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
 
   useEffect(() => {
     if (!isOpen) {
-      // limpia el formulario cada vez que se cierra
       setForm({ poNumber: '', tenderRef: '', eta: '' });
     }
   }, [isOpen]);
@@ -36,8 +34,6 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
 
   const onSubmit = (e) => {
     e.preventDefault(); // evita recarga
-    // Aquí iría el POST real a Google Apps Script (purchase_orders).
-    // Por ahora solo mostramos en consola.
     console.log('Create Order (draft):', form);
     onClose();
   };
@@ -45,7 +41,6 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
   return (
     <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/50">
       <div className="bg-card rounded-lg shadow-modal max-w-lg w-full mx-4 overflow-hidden border border-border">
-        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
           <h2 className="text-lg font-semibold text-foreground">
             {t('New Order', 'Nueva Orden')}
@@ -55,7 +50,6 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
           </Button>
         </div>
 
-        {/* Form */}
         <form onSubmit={onSubmit} className="p-4 space-y-4">
           <div>
             <label htmlFor="poNumber" className="text-sm font-medium text-muted-foreground">
@@ -102,7 +96,6 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
             />
           </div>
 
-          {/* Footer */}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={onClose}>
               {t('Cancel', 'Cancelar')}
@@ -151,12 +144,10 @@ const PurchaseOrderTracking = () => {
   };
 
   const handleExportData = () => {
-    // Mock export functionality
     console.log('Exporting order data...');
   };
 
   const handleCreateOrder = () => {
-    // Abre el modal (no recarga)
     setIsCreateOpen(true);
   };
 
@@ -182,7 +173,7 @@ const PurchaseOrderTracking = () => {
               </div>
               <div className="flex items-center space-x-3">
                 <Button
-                  type="button"                 // ✅ evita submit/recarga
+                  type="button"
                   variant="outline"
                   onClick={handleExportData}
                   iconName="Download"
@@ -191,7 +182,7 @@ const PurchaseOrderTracking = () => {
                   {currentLanguage === 'es' ? 'Exportar' : 'Export'}
                 </Button>
                 <Button
-                  type="button"                 // ✅ evita submit/recarga
+                  type="button"
                   variant="default"
                   onClick={handleCreateOrder}
                   iconName="Plus"
@@ -309,7 +300,7 @@ const PurchaseOrderTracking = () => {
         </div>
       </main>
 
-      {/* Modal de creación de orden */}
+      {/* Modal Crear Orden */}
       <NewOrderModal
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
@@ -320,4 +311,3 @@ const PurchaseOrderTracking = () => {
 };
 
 export default PurchaseOrderTracking;
-
