@@ -1,191 +1,156 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Icon from '@/components/AppIcon';
 import Button from '@/components/ui/Button';
 import OrderStatusBadge from './OrderStatusBadge';
 import OrderProgressBar from './OrderProgressBar';
 
-// opcional: comunicaciones (si lo tienes en tu adapters)
 import { useSheet } from '@/lib/sheetsApi.js';
 import { mapCommunications } from '@/lib/adapters.js';
 
 const API_URL = import.meta.env.VITE_SHEETS_API_URL;
 
-const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage, onUpdated }) => {
-  const [editing, setEditing] = useState(false);
+const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) => {
+  const [activeTab, setActiveTab] = useState('details');
+
+  // Campos editables
+  const [mfg, setMfg] = useState('');
+  const [qc, setQc] = useState('');
+  const [transport, setTransport] = useState('');
+  const [eta, setEta] = useState('');
+  const [costUsd, setCostUsd] = useState('');
+  const [costClp, setCostClp] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // campos editables
-  const [form, setForm] = useState({
-    manufacturingStatus: '',
-    qcStatus: '',
-    transportType: '',
-    eta: '',
-    costUsd: '',
-    costClp: '',
-  });
-
-  // sincroniza al abrir
-  React.useEffect(() => {
-    if (isOpen && order) {
-      setEditing(false);
-      setForm({
-        manufacturingStatus: order?.manufacturingStatus ?? '',
-        qcStatus: order?.qcStatus ?? '',
-        transportType: order?.transportType ?? '',
-        eta: order?.eta ? String(order.eta).slice(0, 10) : '',
-        costUsd: order?.costUsd ?? '',
-        costClp: order?.costClp ?? '',
-      });
-    }
+  useEffect(() => {
+    if (!isOpen || !order) return;
+    setActiveTab('details');
+    setMfg(String(order?.manufacturingStatus || ''));
+    setQc(String(order?.qcStatus || ''));
+    setTransport(String(order?.transportType || ''));
+    // normaliza fecha YYYY-MM-DD si viene con tiempo
+    const d = order?.eta ? new Date(order.eta) : null;
+    const ymd = d && !Number.isNaN(d.getTime())
+      ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+      : '';
+    setEta(ymd);
+    setCostUsd(order?.costUsd ?? '');
+    setCostClp(order?.costClp ?? '');
   }, [isOpen, order]);
 
   if (!isOpen || !order) return null;
 
   const t = (en, es) => (currentLanguage === 'es' ? es : en);
 
-  const formatCurrency = (amount, currency) => {
-    if (amount === undefined || amount === null || amount === '') return '—';
-    try {
-      return new Intl.NumberFormat(
-        currentLanguage === 'es' ? 'es-CL' : 'en-US',
-        { style: 'currency', currency }
-      ).format(amount);
-    } catch {
-      return amount;
-    }
+  /* ---------- Helpers de formato ---------- */
+  const fmtMoney = (val, curr) => {
+    const num = Number.isFinite(+val) ? +val : 0;
+    return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
+      style: 'currency', currency: curr, minimumFractionDigits: 0, maximumFractionDigits: 0
+    }).format(num);
   };
 
-  const formatDate = (date) => {
+  const fmtDateHuman = (date) => {
     if (!date) return '—';
     const d = new Date(date);
-    if (isNaN(d.getTime())) return '—';
-    return new Intl.DateTimeFormat(
-      currentLanguage === 'es' ? 'es-CL' : 'en-US',
-      { year: 'numeric', month: 'short', day: 'numeric' }
-    ).format(d);
+    if (Number.isNaN(d.getTime())) return '—';
+    return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric' }).format(d);
   };
 
-  // Comunicaciones (defensivo si no tuvieras el mapeo)
-  const { rows: commRows = [], loading: commLoading, error: commError } =
-    useSheet ? useSheet('communications', mapCommunications) : { rows: [] };
-
+  /* ---------- Communications desde Sheets ---------- */
+  const { rows: commRows = [], loading, error } = useSheet('communications', mapCommunications);
   const communications = useMemo(() => {
-    const rows = Array.isArray(commRows) ? commRows : [];
+    const rows = commRows || [];
     const po = order?.poNumber || order?.id || '';
     if (!po) return [];
-    const p = String(po).toLowerCase();
 
-    return rows
-      .filter((c) => {
-        // por linked o por texto
-        return (
-          (c.linked_type === 'order' && String(c.linked_id) === String(po)) ||
-          String(c.linked_id) === String(po) ||
-          c.subject?.toLowerCase().includes(p) ||
-          c.content?.toLowerCase().includes(p) ||
-          c.preview?.toLowerCase().includes(p)
-        );
-      })
-      .map((c) => {
-        let from = '';
-        if (c.participants) {
-          const first = String(c.participants).split(/[,;]+/)[0]?.trim();
-          from = first || '';
-        }
-        return {
-          id: c.id,
-          date: c.createdDate,
-          type: (c.type || '').toLowerCase(),
-          subject: c.subject || '',
-          from,
-          content: c.content || c.preview || '',
-        };
-      })
-      .sort((a, b) => {
-        const ta = a.date ? new Date(a.date).getTime() : 0;
-        const tb = b.date ? new Date(b.date).getTime() : 0;
-        return tb - ta;
-      });
+    let list = rows.filter((c) =>
+      (c.linked_type === 'order' && String(c.linked_id) === String(po)) ||
+      (String(c.linked_id) === String(po))
+    );
+
+    if (list.length === 0) {
+      const p = String(po).toLowerCase();
+      list = rows.filter((c) =>
+        c.subject?.toLowerCase().includes(p) ||
+        c.content?.toLowerCase().includes(p) ||
+        c.preview?.toLowerCase().includes(p)
+      );
+    }
+
+    return list.map((c) => {
+      let from = '';
+      if (c.participants) {
+        const first = String(c.participants).split(/[,;]+/)[0]?.trim();
+        from = first || '';
+      }
+      return {
+        id: c.id,
+        date: c.createdDate,
+        type: (c.type || '').toLowerCase(),
+        subject: c.subject || '',
+        from,
+        content: c.content || c.preview || ''
+      };
+    }).sort((a, b) => {
+      const ta = a.date ? new Date(a.date).getTime() : 0;
+      const tb = b.date ? new Date(b.date).getTime() : 0;
+      return tb - ta;
+    });
   }, [commRows, order]);
 
-  const timeline = useMemo(() => {
-    const items = [];
-    if (order?.createdDate) {
-      items.push({
-        id: 'created',
-        date: order.createdDate,
-        event: t('Order created', 'Orden creada'),
-        status: 'completed'
-      });
-    }
-    if (order?.manufacturingStatus) {
-      const ms = String(order.manufacturingStatus).toLowerCase();
-      let status = 'in-progress';
-      if (ms === 'ready' || ms === 'completed') status = 'completed';
-      if (ms === 'pending' || ms === 'not-started' || ms === 'unknown') status = 'pending';
-      items.push({ id: 'mfg', date: order?.manufacturingDate || order?.createdDate || null, event: t('Manufacturing', 'Producción'), status });
-    }
-    if (order?.qcStatus) {
-      const qc = String(order.qcStatus).toLowerCase();
-      let status = 'in-progress';
-      if (qc === 'approved' || qc === 'completed') status = 'completed';
-      if (qc === 'pending' || qc === 'unknown') status = 'pending';
-      items.push({ id: 'qc', date: order?.qcDate || null, event: t('Quality control', 'Control de calidad'), status });
-    }
-    if (order?.transportType) {
-      items.push({ id: 'transport', date: order?.shipmentDate || null, event: t(`Transport: ${order.transportType}`, `Transporte: ${order.transportType}`), status: 'in-progress' });
-    }
-    if (order?.eta) {
-      items.push({ id: 'eta', date: order.eta, event: 'ETA', status: 'pending' });
-    }
-    const cleaned = items.filter((i) => i.date);
-    cleaned.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    return cleaned.length ? cleaned : items;
-  }, [order, currentLanguage]);
-
-  const onChangeField = (e) => {
-    const { name, value } = e.target;
-    setForm((p) => ({ ...p, [name]: value }));
-  };
-
-  // 🔐 SAVE: update a purchase_orders usando po_number como llave
-  const saveUpdate = async () => {
+  /* ---------- Guardar cambios (UPDATE) ---------- */
+  const handleUpdate = async () => {
     if (!API_URL) {
-      alert('Falta VITE_SHEETS_API_URL');
+      alert(t('Missing VITE_SHEETS_API_URL', 'Falta VITE_SHEETS_API_URL'));
       return;
     }
+    if (!order?.poNumber) {
+      alert(t('Missing PO Number to update', 'Falta Número PO para actualizar'));
+      return;
+    }
+
     try {
       setSaving(true);
+
+      // Respetar tus columnas reales en la hoja purchase_orders:
       const payload = {
-        // LLAVE
-        po_number: order?.poNumber ?? '',
-        // Campos editables (en snake_case p/ tus headers)
-        manufacturing_status: form.manufacturingStatus ?? '',
-        qc_status: form.qcStatus ?? '',
-        transport_type: form.transportType ?? '',
-        eta: form.eta ?? '',
-        cost_usd: form.costUsd ?? '',
-        cost_clp: form.costClp ?? '',
+        po_number: order.poNumber,              // KEY para update
+        manufacturing_status: mfg || '',
+        qc_status: qc || '',
+        transport_type: transport || '',
+        eta: eta || '',
+        cost_usd: costUsd === '' ? '' : Number(costUsd),
+        cost_clp: costClp === '' ? '' : Number(costClp),
       };
 
       const res = await fetch(`${API_URL}?route=write&action=update&name=purchase_orders`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Importante: text/plain para evitar preflight CORS
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (!json?.ok) throw new Error(json?.error || 'Unknown error');
 
-      setEditing(false);
-      if (typeof onUpdated === 'function') onUpdated();
-      else window.location.reload();
+      // Recargar para ver cambios (simple)
+      onClose();
+      window.location.reload();
     } catch (err) {
       console.error(err);
-      alert(`Error updating: ${String(err)}`);
+      alert(`${t('Error updating order:', 'Error al actualizar:')} ${String(err)}`);
     } finally {
       setSaving(false);
     }
   };
+
+  /* ---------- UI ---------- */
+  const tabs = [
+    { id: 'details',        labelEn: 'Details',        labelEs: 'Detalles' },
+    { id: 'products',       labelEn: 'Products',       labelEs: 'Productos' },
+    { id: 'timeline',       labelEn: 'Timeline',       labelEs: 'Cronología' },
+    { id: 'communications', labelEn: 'Communications', labelEs: 'Comunicaciones' }
+  ];
+  const getTabLabel = (tab) => (currentLanguage === 'es' ? tab.labelEs : tab.labelEn);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -197,211 +162,198 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage, onUpdated 
               {t('Order Details', 'Detalles de la Orden')}
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
-              {order?.poNumber} {order?.tenderRef ? `- ${order.tenderRef}` : ''}
+              {(order?.poNumber || '—')} {order?.tenderRef ? `- ${order.tenderRef}` : ''}
             </p>
           </div>
-          <Button type="button" variant="ghost" size="icon" onClick={onClose}>
+          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
             <Icon name="X" size={20} />
           </Button>
         </div>
 
-        {/* Tabs simplificadas: Details / Timeline / Communications */}
-        <div className="p-6 overflow-y-auto max-h-[62vh]">
-          {/* DETAILS */}
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">
-                    {t('Manufacturing Status', 'Estado de Fabricación')}
-                  </label>
-                  {editing ? (
-                    <input
-                      name="manufacturingStatus"
-                      value={form.manufacturingStatus}
-                      onChange={onChangeField}
-                      className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                      placeholder={t('e.g. Draft/Ready/Completed', 'ej: Draft/Ready/Completed')}
-                    />
-                  ) : (
-                    <div className="mt-1">
-                      <OrderStatusBadge status={order?.manufacturingStatus} type="manufacturing" currentLanguage={currentLanguage} />
+        {/* Tabs */}
+        <div className="flex border-b border-border">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-6 py-3 text-sm font-medium transition-colors duration-200 ${
+                activeTab === tab.id
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {getTabLabel(tab)}
+            </button>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div className="p-6 overflow-y-auto max-h-[60vh]">
+          {/* DETAILS (editables) */}
+          {activeTab === 'details' && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm font-medium text-muted-foreground">
+                      {t('Manufacturing Status', 'Estado de Fabricación')}
+                    </label>
+                    <div className="mt-1 flex items-center gap-3">
+                      <select
+                        value={mfg}
+                        onChange={(e) => setMfg(e.target.value)}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
+                      >
+                        <option value="">{t('— Select —', '— Selecciona —')}</option>
+                        <option value="pending">Pending</option>
+                        <option value="in-progress">In-Progress</option>
+                        <option value="ready">Ready</option>
+                        <option value="completed">Completed</option>
+                      </select>
+                      <OrderStatusBadge status={mfg} type="manufacturing" currentLanguage={currentLanguage} />
                     </div>
-                  )}
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-muted-foreground">
+                      {t('QC Status', 'Estado QC')}
+                    </label>
+                    <div className="mt-1 flex items-center gap-3">
+                      <select
+                        value={qc}
+                        onChange={(e) => setQc(e.target.value)}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
+                      >
+                        <option value="">{t('— Select —', '— Selecciona —')}</option>
+                        <option value="pending">Pending</option>
+                        <option value="in-progress">In-Progress</option>
+                        <option value="approved">Approved</option>
+                        <option value="completed">Completed</option>
+                      </select>
+                      <OrderStatusBadge status={qc} type="qc" currentLanguage={currentLanguage} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-muted-foreground">
+                      {t('Transport Type', 'Tipo de Transporte')}
+                    </label>
+                    <div className="mt-1 flex items-center gap-3">
+                      <select
+                        value={transport}
+                        onChange={(e) => setTransport(e.target.value)}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
+                      >
+                        <option value="">{t('— Select —', '— Selecciona —')}</option>
+                        <option value="sea">Sea</option>
+                        <option value="air">Air</option>
+                        <option value="land">Land</option>
+                      </select>
+                      <OrderStatusBadge status={transport} type="transport" currentLanguage={currentLanguage} />
+                    </div>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">
-                    {t('QC Status', 'Estado QC')}
-                  </label>
-                  {editing ? (
-                    <input
-                      name="qcStatus"
-                      value={form.qcStatus}
-                      onChange={onChangeField}
-                      className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                      placeholder={t('e.g. Pending/Approved', 'ej: Pending/Approved')}
-                    />
-                  ) : (
-                    <div className="mt-1">
-                      <OrderStatusBadge status={order?.qcStatus} type="qc" currentLanguage={currentLanguage} />
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">
-                    {t('Transport Type', 'Tipo de Transporte')}
-                  </label>
-                  {editing ? (
-                    <input
-                      name="transportType"
-                      value={form.transportType}
-                      onChange={onChangeField}
-                      className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                      placeholder={t('e.g. Air/Sea', 'ej: Air/Sea')}
-                    />
-                  ) : (
-                    <div className="mt-1">
-                      <OrderStatusBadge status={order?.transportType} type="transport" currentLanguage={currentLanguage} />
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">ETA</label>
-                  {editing ? (
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm font-medium text-muted-foreground">ETA</label>
                     <input
                       type="date"
-                      name="eta"
-                      value={form.eta}
-                      onChange={onChangeField}
+                      value={eta}
+                      onChange={(e) => setEta(e.target.value)}
                       className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
                     />
-                  ) : (
-                    <p className="text-foreground font-medium">{formatDate(order?.eta)}</p>
-                  )}
-                </div>
+                    <p className="text-xs text-muted-foreground mt-1">{fmtDateHuman(eta)}</p>
+                  </div>
 
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">{t('Cost USD', 'Costo USD')}</label>
-                  {editing ? (
+                  <div>
+                    <label className="text-sm font-medium text-muted-foreground">
+                      {t('Cost USD', 'Costo USD')}
+                    </label>
                     <input
-                      name="costUsd"
-                      value={form.costUsd}
-                      onChange={onChangeField}
+                      type="number"
+                      value={costUsd}
+                      onChange={(e) => setCostUsd(e.target.value)}
                       className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                      placeholder="0"
                     />
-                  ) : (
-                    <p className="text-foreground font-medium">{formatCurrency(order?.costUsd, 'USD')}</p>
-                  )}
-                </div>
+                    <p className="text-xs text-muted-foreground mt-1">{fmtMoney(costUsd, 'USD')}</p>
+                  </div>
 
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">{t('Cost CLP', 'Costo CLP')}</label>
-                  {editing ? (
+                  <div>
+                    <label className="text-sm font-medium text-muted-foreground">
+                      {t('Cost CLP', 'Costo CLP')}
+                    </label>
                     <input
-                      name="costClp"
-                      value={form.costClp}
-                      onChange={onChangeField}
+                      type="number"
+                      value={costClp}
+                      onChange={(e) => setCostClp(e.target.value)}
                       className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                      placeholder="0"
                     />
-                  ) : (
-                    <p className="text-foreground font-medium">{formatCurrency(order?.costClp, 'CLP')}</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                {t('Production Progress', 'Progreso de Producción')}
-              </label>
-              <OrderProgressBar status={order?.manufacturingStatus} currentLanguage={currentLanguage} />
-            </div>
-          </div>
-
-          {/* TIMELINE */}
-          <div className="mt-8 space-y-4">
-            <h3 className="text-base font-semibold text-foreground">{t('Timeline', 'Cronología')}</h3>
-            {timeline.length === 0 ? (
-              <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground text-center">
-                {t('No events recorded for this order.', 'No hay eventos registrados para esta orden.')}
-              </div>
-            ) : (
-              timeline.map((item, i) => (
-                <div key={item.id} className="flex items-start space-x-4">
-                  <div className={`w-3 h-3 rounded-full mt-2 ${
-                    item.status === 'completed' ? 'bg-green-500' :
-                    item.status === 'in-progress' ? 'bg-amber-500' : 'bg-gray-300'
-                  }`} />
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-medium text-foreground">{item.event}</h4>
-                      <span className="text-sm text-muted-foreground">{formatDate(item.date)}</span>
-                    </div>
-                    {i < timeline.length - 1 && <div className="w-px h-8 bg-border ml-1.5 mt-2" />}
+                    <p className="text-xs text-muted-foreground mt-1">{fmtMoney(costClp, 'CLP')}</p>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-muted-foreground mb-2 block">
+                  {t('Production Progress', 'Progreso de Producción')}
+                </label>
+                <OrderProgressBar status={mfg} currentLanguage={currentLanguage} />
+              </div>
+            </div>
+          )}
+
+          {/* PRODUCTS (placeholder) */}
+          {activeTab === 'products' && (
+            <div className="space-y-4">
+              <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground text-center">
+                {t('No product breakdown available for this order.', 'No hay desglose de productos disponible para esta orden.')}
+              </div>
+            </div>
+          )}
+
+          {/* TIMELINE (derivada) */}
+          {activeTab === 'timeline' && (
+            <div className="space-y-4">
+              <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground">
+                {t('Timeline info will be derived from order fields.', 'La cronología se deriva de los campos de la orden.')}
+              </div>
+            </div>
+          )}
 
           {/* COMMUNICATIONS */}
-          <div className="mt-8 space-y-4">
-            <h3 className="text-base font-semibold text-foreground">{t('Communications', 'Comunicaciones')}</h3>
-            {commLoading && <div className="text-sm text-muted-foreground">Loading communications…</div>}
-            {commError && <div className="text-sm text-red-600">Error: {String(commError)}</div>}
-            {!commLoading && !commError && communications.length === 0 && (
-              <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground text-center">
-                {t('No communications linked to this order.', 'No hay comunicaciones vinculadas a esta orden.')}
-              </div>
-            )}
-            {!commLoading && !commError && communications.map((comm) => (
-              <div key={comm.id} className="bg-muted rounded-lg p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center space-x-2">
-                    <Icon name={comm.type === 'email' ? 'Mail' : comm.type === 'phone' ? 'Phone' : 'MessageSquare'} size={16} />
-                    <h4 className="font-medium text-foreground">{comm.subject || t('No subject', 'Sin asunto')}</h4>
-                  </div>
-                  <span className="text-sm text-muted-foreground">{formatDate(comm.date)}</span>
+          {activeTab === 'communications' && (
+            <div className="space-y-4">
+              {loading && <div className="text-sm text-muted-foreground">Loading communications…</div>}
+              {error && <div className="text-sm text-red-600">Error: {String(error)}</div>}
+              {!loading && !error && communications.length === 0 && (
+                <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground text-center">
+                  {t('No communications linked to this order.', 'No hay comunicaciones vinculadas a esta orden.')}
                 </div>
-                {comm.from && (
-                  <p className="text-sm text-muted-foreground mb-2">
-                    {t('From', 'De')}: {comm.from}
-                  </p>
-                )}
-                {comm.content && <p className="text-sm text-foreground whitespace-pre-line">{comm.content}</p>}
-              </div>
-            ))}
-          </div>
+              )}
+              {!loading && !error && communications.map((c) => (
+                <div key={c.id} className="bg-muted rounded-lg p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center space-x-2">
+                      <Icon name={c.type === 'email' ? 'Mail' : c.type === 'phone' ? 'Phone' : 'MessageSquare'} size={16} />
+                      <h4 className="font-medium text-foreground">{c.subject || t('No subject', 'Sin asunto')}</h4>
+                    </div>
+                    <span className="text-sm text-muted-foreground">{fmtDateHuman(c.date)}</span>
+                  </div>
+                  {c.from && <p className="text-sm text-muted-foreground mb-2">{t('From', 'De')}: {c.from}</p>}
+                  {c.content && <p className="text-sm text-foreground whitespace-pre-line">{c.content}</p>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="flex justify-end gap-2 p-6 border-t border-border">
-          {!editing ? (
-            <>
-              <Button type="button" variant="outline" onClick={onClose}>
-                {t('Close', 'Cerrar')}
-              </Button>
-              <Button type="button" variant="default" onClick={() => setEditing(true)}>
-                {t('Update Status', 'Actualizar Estado')}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button type="button" variant="outline" onClick={() => setEditing(false)}>
-                {t('Cancel', 'Cancelar')}
-              </Button>
-              <Button type="button" variant="default" onClick={saveUpdate} disabled={saving}>
-                {saving ? t('Saving…', 'Guardando…') : t('Save', 'Guardar')}
-              </Button>
-            </>
-          )}
+          <Button variant="outline" onClick={onClose}>{t('Close', 'Cerrar')}</Button>
+          <Button variant="default" onClick={handleUpdate} disabled={saving}>
+            {saving ? t('Saving…', 'Guardando…') : t('Update Status', 'Actualizar Estado')}
+          </Button>
         </div>
       </div>
     </div>
