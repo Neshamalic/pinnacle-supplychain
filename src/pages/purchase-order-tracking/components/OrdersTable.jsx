@@ -1,11 +1,10 @@
-// src/pages/purchase-order-tracking/components/OrdersTable.jsx
 import React, { useState } from "react";
 import Icon from "@/components/AppIcon";
 import Button from "@/components/ui/Button";
 import OrderStatusBadge from "./OrderStatusBadge";
 import OrderDetailsModal from "./OrderDetailsModal";
 
-// ✅ IMPORTS desde src/lib usando alias '@'
+// ✅ Datos reales desde Google Sheets (tabla: purchase_orders)
 import { useSheet } from "@/lib/sheetsApi.js";
 import { mapPurchaseOrders } from "@/lib/adapters.js";
 
@@ -14,11 +13,7 @@ const OrdersTable = ({ currentLanguage, filters }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
-  // ✅ Datos reales desde Google Sheets (tabla: purchase_orders)
-  const { rows: orders, loading, error } = useSheet(
-    "purchase_orders",
-    mapPurchaseOrders
-  );
+  const { rows: orders, loading, error } = useSheet("purchase_orders", mapPurchaseOrders);
 
   const columns = [
     { key: "poNumber", labelEn: "PO Number", labelEs: "Número PO", sortable: true },
@@ -31,8 +26,7 @@ const OrdersTable = ({ currentLanguage, filters }) => {
     { key: "actions", labelEn: "Actions", labelEs: "Acciones", sortable: false },
   ];
 
-  const getColumnLabel = (column) =>
-    currentLanguage === "es" ? column?.labelEs : column?.labelEn;
+  const getColumnLabel = (column) => (currentLanguage === "es" ? column?.labelEs : column?.labelEn);
 
   const formatCurrency = (amount, currency) => {
     return new Intl.NumberFormat(currentLanguage === "es" ? "es-CL" : "en-US", {
@@ -45,13 +39,11 @@ const OrdersTable = ({ currentLanguage, filters }) => {
 
   const formatDate = (date) => {
     if (!date) return "—";
-    const d = new Date(date);
-    if (isNaN(d.getTime())) return "—";
     return new Intl.DateTimeFormat(currentLanguage === "es" ? "es-CL" : "en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
-    })?.format(d);
+    })?.format(new Date(date));
   };
 
   const handleSort = (key) => {
@@ -60,33 +52,23 @@ const OrdersTable = ({ currentLanguage, filters }) => {
     setSortConfig({ key, direction });
   };
 
-  const openModalWith = (order) => {
+  const handleViewDetails = (order) => {
     setSelectedOrder(order);
     setIsModalOpen(true);
   };
 
-  const handleViewDetails = (order) => {
-    console.log("[VIEW] order:", order);
-    openModalWith(order);
-  };
-
   const handleEdit = (order) => {
-    console.log("[EDIT] order:", order);
-    // Por ahora abrimos el mismo modal de detalles
-    // (si luego tienes un modal de edición, llama aquí ese componente)
-    openModalWith(order);
+    // Por ahora, reusamos el mismo modal (podemos crear uno de edición luego)
+    setSelectedOrder(order);
+    setIsModalOpen(true);
   };
 
   // ✅ Filtrado sobre datos reales
   const filteredOrders = (orders ?? []).filter((order) => {
     if (
       filters?.search &&
-      !String(order?.poNumber ?? "")
-        .toLowerCase()
-        .includes(String(filters?.search ?? "").toLowerCase()) &&
-      !String(order?.tenderRef ?? "")
-        .toLowerCase()
-        .includes(String(filters?.search ?? "").toLowerCase())
+      !order?.poNumber?.toLowerCase()?.includes(filters?.search?.toLowerCase()) &&
+      !order?.tenderRef?.toLowerCase()?.includes(filters?.search?.toLowerCase())
     ) {
       return false;
     }
@@ -109,16 +91,10 @@ const OrdersTable = ({ currentLanguage, filters }) => {
     let aValue = a?.[sortConfig?.key];
     let bValue = b?.[sortConfig?.key];
 
-    // Normaliza fechas
     if (sortConfig?.key === "eta" || sortConfig?.key === "createdDate") {
-      aValue = aValue ? new Date(aValue).getTime() : 0;
-      bValue = bValue ? new Date(bValue).getTime() : 0;
+      aValue = aValue ? new Date(aValue) : 0;
+      bValue = bValue ? new Date(bValue) : 0;
     }
-
-    // Normaliza undefined para comparación estable
-    if (aValue == null && bValue == null) return 0;
-    if (aValue == null) return sortConfig?.direction === "asc" ? 1 : -1;
-    if (bValue == null) return sortConfig?.direction === "asc" ? -1 : 1;
 
     if (aValue < bValue) return sortConfig?.direction === "asc" ? -1 : 1;
     if (aValue > bValue) return sortConfig?.direction === "asc" ? 1 : -1;
@@ -127,7 +103,7 @@ const OrdersTable = ({ currentLanguage, filters }) => {
 
   // ✅ Loading / Error antes del JSX
   if (loading) return <div style={{ padding: 16 }}>Loading orders…</div>;
-  if (error) return <div style={{ padding: 16, color: "red" }}>Error: {String(error)}</div>;
+  if (error) return <div style={{ padding: 16, color: "red" }}>Error: {error}</div>;
 
   return (
     <>
@@ -140,22 +116,16 @@ const OrdersTable = ({ currentLanguage, filters }) => {
                   <th key={column?.key} className="px-6 py-4 text-left">
                     {column?.sortable ? (
                       <button
-                        type="button"
                         onClick={() => handleSort(column?.key)}
                         className="flex items-center space-x-1 text-sm font-medium text-foreground hover:text-primary transition-colors duration-200"
                       >
                         <span>{getColumnLabel(column)}</span>
                         {sortConfig?.key === column?.key && (
-                          <Icon
-                            name={sortConfig?.direction === "asc" ? "ChevronUp" : "ChevronDown"}
-                            size={16}
-                          />
+                          <Icon name={sortConfig?.direction === "asc" ? "ChevronUp" : "ChevronDown"} size={16} />
                         )}
                       </button>
                     ) : (
-                      <span className="text-sm font-medium text-foreground">
-                        {getColumnLabel(column)}
-                      </span>
+                      <span className="text-sm font-medium text-foreground">{getColumnLabel(column)}</span>
                     )}
                   </th>
                 ))}
@@ -163,15 +133,10 @@ const OrdersTable = ({ currentLanguage, filters }) => {
             </thead>
             <tbody className="divide-y divide-border">
               {sortedOrders?.map((order) => (
-                <tr
-                  key={order?.id ?? order?.poNumber}
-                  className="hover:bg-muted/50 transition-colors duration-200"
-                >
+                <tr key={order?.id ?? order?.poNumber} className="hover:bg-muted/50 transition-colors duration-200">
                   <td className="px-6 py-4">
                     <div className="font-medium text-foreground">{order?.poNumber}</div>
-                    <div className="text-sm text-muted-foreground">
-                      {formatDate(order?.createdDate)}
-                    </div>
+                    <div className="text-sm text-muted-foreground">{formatDate(order?.createdDate)}</div>
                   </td>
 
                   <td className="px-6 py-4">
@@ -179,27 +144,15 @@ const OrdersTable = ({ currentLanguage, filters }) => {
                   </td>
 
                   <td className="px-6 py-4">
-                    <OrderStatusBadge
-                      status={order?.manufacturingStatus}
-                      type="manufacturing"
-                      currentLanguage={currentLanguage}
-                    />
+                    <OrderStatusBadge status={order?.manufacturingStatus} type="manufacturing" currentLanguage={currentLanguage} />
                   </td>
 
                   <td className="px-6 py-4">
-                    <OrderStatusBadge
-                      status={order?.qcStatus}
-                      type="qc"
-                      currentLanguage={currentLanguage}
-                    />
+                    <OrderStatusBadge status={order?.qcStatus} type="qc" currentLanguage={currentLanguage} />
                   </td>
 
                   <td className="px-6 py-4">
-                    <OrderStatusBadge
-                      status={order?.transportType}
-                      type="transport"
-                      currentLanguage={currentLanguage}
-                    />
+                    <OrderStatusBadge status={order?.transportType} type="transport" currentLanguage={currentLanguage} />
                   </td>
 
                   <td className="px-6 py-4">
@@ -207,12 +160,8 @@ const OrdersTable = ({ currentLanguage, filters }) => {
                   </td>
 
                   <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">
-                      {formatCurrency(order?.costUsd, "USD")}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {formatCurrency(order?.costClp, "CLP")}
-                    </div>
+                    <div className="font-medium text-foreground">{formatCurrency(order?.costUsd, "USD")}</div>
+                    <div className="text-sm text-muted-foreground">{formatCurrency(order?.costClp, "CLP")}</div>
                   </td>
 
                   <td className="px-6 py-4">
@@ -221,17 +170,26 @@ const OrdersTable = ({ currentLanguage, filters }) => {
                         type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleViewDetails(order)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleViewDetails(order);
+                        }}
                         iconName="Eye"
                         iconPosition="left"
                       >
                         {currentLanguage === "es" ? "Ver" : "View"}
                       </Button>
+
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleEdit(order)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleEdit(order);
+                        }}
                         iconName="Edit"
                         iconPosition="left"
                       >
@@ -252,9 +210,7 @@ const OrdersTable = ({ currentLanguage, filters }) => {
               {currentLanguage === "es" ? "No se encontraron órdenes" : "No orders found"}
             </h3>
             <p className="text-muted-foreground">
-              {currentLanguage === "es"
-                ? "Intenta ajustar los filtros para ver más resultados."
-                : "Try adjusting the filters to see more results."}
+              {currentLanguage === "es" ? "Intenta ajustar los filtros para ver más resultados." : "Try adjusting the filters to see more results."}
             </p>
           </div>
         )}
