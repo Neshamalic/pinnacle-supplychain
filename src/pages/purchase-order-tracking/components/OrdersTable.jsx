@@ -4,7 +4,7 @@ import Button from '@/components/ui/Button';
 import OrderStatusBadge from './OrderStatusBadge';
 import OrderDetailsModal from './OrderDetailsModal';
 
-// ✅ IMPORTS desde src/lib usando alias '@'
+// Datos reales
 import { useSheet } from '@/lib/sheetsApi.js';
 import { mapPurchaseOrders } from '@/lib/adapters.js';
 
@@ -13,7 +13,6 @@ const OrdersTable = ({ currentLanguage, filters }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
 
-  // ✅ Datos reales desde Google Sheets (tabla: purchase_orders)
   const { rows: orders, loading, error } = useSheet('purchase_orders', mapPurchaseOrders);
 
   const columns = [
@@ -27,34 +26,32 @@ const OrdersTable = ({ currentLanguage, filters }) => {
     { key: 'actions', labelEn: 'Actions', labelEs: 'Acciones', sortable: false }
   ];
 
-  const getColumnLabel = (column) =>
-    currentLanguage === 'es' ? column?.labelEs : column?.labelEn;
+  const getColumnLabel = (c) => (currentLanguage === 'es' ? c.labelEs : c.labelEn);
 
-  const formatCurrency = (amount, currency) => {
-    return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
+  const formatCurrency = (amount, currency) =>
+    new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
       style: 'currency',
       currency,
       minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    })?.format(amount ?? 0);
-  };
+      maximumFractionDigits: 0,
+    }).format(amount ?? 0);
 
   const formatDate = (date) => {
     if (!date) return '—';
     return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
       year: 'numeric',
       month: 'short',
-      day: 'numeric'
-    })?.format(new Date(date));
+      day: 'numeric',
+    }).format(new Date(date));
   };
 
   const handleSort = (key) => {
     let direction = 'asc';
-    if (sortConfig?.key === key && sortConfig?.direction === 'asc') direction = 'desc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
     setSortConfig({ key, direction });
   };
 
-  // 👇 importante: prevenimos navegación por defecto de cualquier <a> o button sin type
+  // Abrir modal evitando cualquier navegación por defecto
   const openDetails = (e, order) => {
     e?.preventDefault?.();
     e?.stopPropagation?.();
@@ -62,45 +59,33 @@ const OrdersTable = ({ currentLanguage, filters }) => {
     setIsModalOpen(true);
   };
 
-  // ✅ Filtrado sobre datos reales
-  const filteredOrders = (orders ?? []).filter(order => {
+  // Filtro
+  const filteredOrders = (orders ?? []).filter((o) => {
     if (
       filters?.search &&
-      !order?.poNumber?.toLowerCase()?.includes(filters?.search?.toLowerCase()) &&
-      !order?.tenderRef?.toLowerCase()?.includes(filters?.search?.toLowerCase())
-    ) {
-      return false;
-    }
-    if (filters?.manufacturingStatus && order?.manufacturingStatus !== filters?.manufacturingStatus) {
-      return false;
-    }
-    if (filters?.qcStatus && order?.qcStatus !== filters?.qcStatus) {
-      return false;
-    }
-    if (filters?.transportType && order?.transportType !== filters?.transportType) {
-      return false;
-    }
+      !o?.poNumber?.toLowerCase()?.includes(filters.search.toLowerCase()) &&
+      !o?.tenderRef?.toLowerCase()?.includes(filters.search.toLowerCase())
+    ) return false;
+    if (filters?.manufacturingStatus && o?.manufacturingStatus !== filters.manufacturingStatus) return false;
+    if (filters?.qcStatus && o?.qcStatus !== filters.qcStatus) return false;
+    if (filters?.transportType && o?.transportType !== filters.transportType) return false;
     return true;
   });
 
-  // ✅ Ordenamiento
+  // Orden
   const sortedOrders = [...filteredOrders].sort((a, b) => {
-    if (!sortConfig?.key) return 0;
-
-    let aValue = a?.[sortConfig?.key];
-    let bValue = b?.[sortConfig?.key];
-
-    if (sortConfig?.key === 'eta' || sortConfig?.key === 'createdDate') {
-      aValue = aValue ? new Date(aValue) : 0;
-      bValue = bValue ? new Date(bValue) : 0;
+    if (!sortConfig.key) return 0;
+    let aVal = a?.[sortConfig.key];
+    let bVal = b?.[sortConfig.key];
+    if (sortConfig.key === 'eta' || sortConfig.key === 'createdDate') {
+      aVal = aVal ? new Date(aVal) : 0;
+      bVal = bVal ? new Date(bVal) : 0;
     }
-
-    if (aValue < bValue) return sortConfig?.direction === 'asc' ? -1 : 1;
-    if (aValue > bValue) return sortConfig?.direction === 'asc' ? 1 : -1;
+    if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+    if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
     return 0;
   });
 
-  // ✅ Loading / Error antes del JSX
   if (loading) return <div style={{ padding: 16 }}>Loading orders…</div>;
   if (error)   return <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>;
 
@@ -111,94 +96,71 @@ const OrdersTable = ({ currentLanguage, filters }) => {
           <table className="w-full">
             <thead className="bg-muted border-b border-border">
               <tr>
-                {columns?.map((column) => (
-                  <th key={column?.key} className="px-6 py-4 text-left">
-                    {column?.sortable ? (
+                {columns.map((col) => (
+                  <th key={col.key} className="px-6 py-4 text-left">
+                    {col.sortable ? (
                       <button
-                        onClick={() => handleSort(column?.key)}
-                        className="flex items-center space-x-1 text-sm font-medium text-foreground hover:text-primary transition-colors duration-200"
                         type="button"
+                        onClick={() => handleSort(col.key)}
+                        className="flex items-center space-x-1 text-sm font-medium text-foreground hover:text-primary transition-colors duration-200"
                       >
-                        <span>{getColumnLabel(column)}</span>
-                        {sortConfig?.key === column?.key && (
-                          <Icon
-                            name={sortConfig?.direction === 'asc' ? 'ChevronUp' : 'ChevronDown'}
-                            size={16}
-                          />
+                        <span>{getColumnLabel(col)}</span>
+                        {sortConfig.key === col.key && (
+                          <Icon name={sortConfig.direction === 'asc' ? 'ChevronUp' : 'ChevronDown'} size={16} />
                         )}
                       </button>
                     ) : (
-                      <span className="text-sm font-medium text-foreground">
-                        {getColumnLabel(column)}
-                      </span>
+                      <span className="text-sm font-medium text-foreground">{getColumnLabel(col)}</span>
                     )}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {sortedOrders?.map((order) => (
-                <tr key={order?.id ?? order?.poNumber} className="hover:bg-muted/50 transition-colors duration-200">
+              {sortedOrders.map((o) => (
+                <tr key={o?.id ?? o?.poNumber} className="hover:bg-muted/50 transition-colors duration-200">
                   <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">{order?.poNumber}</div>
-                    <div className="text-sm text-muted-foreground">
-                      {formatDate(order?.createdDate)}
-                    </div>
+                    <div className="font-medium text-foreground">{o?.poNumber}</div>
+                    <div className="text-sm text-muted-foreground">{formatDate(o?.createdDate)}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">{order?.tenderRef}</div>
+                    <div className="font-medium text-foreground">{o?.tenderRef}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <OrderStatusBadge
-                      status={order?.manufacturingStatus}
-                      type="manufacturing"
-                      currentLanguage={currentLanguage}
-                    />
+                    <OrderStatusBadge status={o?.manufacturingStatus} type="manufacturing" currentLanguage={currentLanguage} />
                   </td>
                   <td className="px-6 py-4">
-                    <OrderStatusBadge
-                      status={order?.qcStatus}
-                      type="qc"
-                      currentLanguage={currentLanguage}
-                    />
+                    <OrderStatusBadge status={o?.qcStatus} type="qc" currentLanguage={currentLanguage} />
                   </td>
                   <td className="px-6 py-4">
-                    <OrderStatusBadge
-                      status={order?.transportType}
-                      type="transport"
-                      currentLanguage={currentLanguage}
-                    />
+                    <OrderStatusBadge status={o?.transportType} type="transport" currentLanguage={currentLanguage} />
                   </td>
                   <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">{formatDate(order?.eta)}</div>
+                    <div className="font-medium text-foreground">{formatDate(o?.eta)}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">
-                      {formatCurrency(order?.costUsd, 'USD')}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {formatCurrency(order?.costClp, 'CLP')}
-                    </div>
+                    <div className="font-medium text-foreground">{formatCurrency(o?.costUsd, 'USD')}</div>
+                    <div className="text-sm text-muted-foreground">{formatCurrency(o?.costClp, 'CLP')}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center space-x-2">
                       <Button
+                        type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={(e) => openDetails(e, order)}
+                        onClick={(e) => openDetails(e, o)}
                         iconName="Eye"
                         iconPosition="left"
-                        type="button"
                       >
                         {currentLanguage === 'es' ? 'Ver' : 'View'}
                       </Button>
                       <Button
+                        type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={(e) => openDetails(e, order)}
+                        onClick={(e) => openDetails(e, o)}
                         iconName="Edit"
                         iconPosition="left"
-                        type="button"
                       >
                         {currentLanguage === 'es' ? 'Editar' : 'Edit'}
                       </Button>
@@ -210,7 +172,7 @@ const OrdersTable = ({ currentLanguage, filters }) => {
           </table>
         </div>
 
-        {sortedOrders?.length === 0 && (
+        {sortedOrders.length === 0 && (
           <div className="text-center py-12">
             <Icon name="Package" size={48} className="mx-auto text-muted-foreground mb-4" />
             <h3 className="text-lg font-medium text-foreground mb-2">
@@ -225,14 +187,18 @@ const OrdersTable = ({ currentLanguage, filters }) => {
         )}
       </div>
 
-      <OrderDetailsModal
-        order={selectedOrder}
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        currentLanguage={currentLanguage}
-      />
+      {/* 👉 Ahora el modal SÓLO se monta cuando está abierto y hay orden */}
+      {isModalOpen && selectedOrder && (
+        <OrderDetailsModal
+          order={selectedOrder}
+          isOpen={true}
+          onClose={() => setIsModalOpen(false)}
+          currentLanguage={currentLanguage}
+        />
+      )}
     </>
   );
 };
 
 export default OrdersTable;
+
