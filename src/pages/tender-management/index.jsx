@@ -1,6 +1,6 @@
 // src/pages/tender-management/index.jsx
 import React, { useMemo, useState } from "react";
-import { useSheet, writeRow } from "../../lib/sheetsApi";
+import { useSheet} from "../../lib/sheetsApi";
 import { mapTenders } from "../../lib/adapters";
 
 // === Config ===
