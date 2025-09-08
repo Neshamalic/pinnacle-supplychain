@@ -1,3 +1,4 @@
+// src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import React, { useState, useEffect, useMemo } from 'react';
 import Icon from '@/components/AppIcon';
 import Button from '@/components/ui/Button';
@@ -16,23 +17,29 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
   const [mfg, setMfg] = useState('');
   const [qc, setQc] = useState('');
   const [transport, setTransport] = useState('');
-  const [eta, setEta] = useState('');
+  const [eta, setEta] = useState(''); // YYYY-MM-DD
   const [costUsd, setCostUsd] = useState('');
   const [costClp, setCostClp] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !order) return;
+
     setActiveTab('details');
     setMfg(String(order?.manufacturingStatus || ''));
     setQc(String(order?.qcStatus || ''));
     setTransport(String(order?.transportType || ''));
-    // normaliza fecha YYYY-MM-DD si viene con tiempo
+
+    // normaliza fecha a YYYY-MM-DD si viene con tiempo
     const d = order?.eta ? new Date(order.eta) : null;
-    const ymd = d && !Number.isNaN(d.getTime())
-      ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      : '';
+    const ymd =
+      d && !Number.isNaN(d.getTime())
+        ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+            d.getDate()
+          ).padStart(2, '0')}`
+        : '';
     setEta(ymd);
+
     setCostUsd(order?.costUsd ?? '');
     setCostClp(order?.costClp ?? '');
   }, [isOpen, order]);
@@ -45,7 +52,10 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
   const fmtMoney = (val, curr) => {
     const num = Number.isFinite(+val) ? +val : 0;
     return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      style: 'currency', currency: curr, minimumFractionDigits: 0, maximumFractionDigits: 0
+      style: 'currency',
+      currency: curr,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
     }).format(num);
   };
 
@@ -53,7 +63,11 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
     if (!date) return '—';
     const d = new Date(date);
     if (Number.isNaN(d.getTime())) return '—';
-    return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric' }).format(d);
+    return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    }).format(d);
   };
 
   /* ---------- Communications desde Sheets ---------- */
@@ -63,39 +77,45 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
     const po = order?.poNumber || order?.id || '';
     if (!po) return [];
 
-    let list = rows.filter((c) =>
-      (c.linked_type === 'order' && String(c.linked_id) === String(po)) ||
-      (String(c.linked_id) === String(po))
+    // 1) match explícito
+    let list = rows.filter(
+      (c) =>
+        (c.linked_type === 'order' && String(c.linked_id) === String(po)) ||
+        String(c.linked_id) === String(po)
     );
 
+    // 2) fallback por texto
     if (list.length === 0) {
       const p = String(po).toLowerCase();
-      list = rows.filter((c) =>
-        c.subject?.toLowerCase().includes(p) ||
-        c.content?.toLowerCase().includes(p) ||
-        c.preview?.toLowerCase().includes(p)
+      list = rows.filter(
+        (c) =>
+          c.subject?.toLowerCase().includes(p) ||
+          c.content?.toLowerCase().includes(p) ||
+          c.preview?.toLowerCase().includes(p)
       );
     }
 
-    return list.map((c) => {
-      let from = '';
-      if (c.participants) {
-        const first = String(c.participants).split(/[,;]+/)[0]?.trim();
-        from = first || '';
-      }
-      return {
-        id: c.id,
-        date: c.createdDate,
-        type: (c.type || '').toLowerCase(),
-        subject: c.subject || '',
-        from,
-        content: c.content || c.preview || ''
-      };
-    }).sort((a, b) => {
-      const ta = a.date ? new Date(a.date).getTime() : 0;
-      const tb = b.date ? new Date(b.date).getTime() : 0;
-      return tb - ta;
-    });
+    return list
+      .map((c) => {
+        let from = '';
+        if (c.participants) {
+          const first = String(c.participants).split(/[,;]+/)[0]?.trim();
+          from = first || '';
+        }
+        return {
+          id: c.id,
+          date: c.createdDate,
+          type: (c.type || '').toLowerCase(),
+          subject: c.subject || '',
+          from,
+          content: c.content || c.preview || ''
+        };
+      })
+      .sort((a, b) => {
+        const ta = a.date ? new Date(a.date).getTime() : 0;
+        const tb = b.date ? new Date(b.date).getTime() : 0;
+        return tb - ta;
+      });
   }, [commRows, order]);
 
   /* ---------- Guardar cambios (UPDATE) ---------- */
@@ -112,27 +132,39 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
     try {
       setSaving(true);
 
-      // Respetar tus columnas reales en la hoja purchase_orders:
+      // Respetar nombres de columnas en la hoja purchase_orders
       const payload = {
-        po_number: order.poNumber,              // KEY para update
+        po_number: order.poNumber, // clave para update
         manufacturing_status: mfg || '',
         qc_status: qc || '',
         transport_type: transport || '',
         eta: eta || '',
         cost_usd: costUsd === '' ? '' : Number(costUsd),
-        cost_clp: costClp === '' ? '' : Number(costClp),
+        cost_clp: costClp === '' ? '' : Number(costClp)
       };
 
-      const res = await fetch(`${API_URL}?route=write&action=update&name=purchase_orders`, {
-        method: 'POST',
-        // Importante: text/plain para evitar preflight CORS
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (!json?.ok) throw new Error(json?.error || 'Unknown error');
+      const res = await fetch(
+        `${API_URL}?route=write&action=update&name=purchase_orders`,
+        {
+          method: 'POST',
+          // text/plain evita preflight y se parsea igual en tu Apps Script
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload)
+        }
+      );
 
-      // Recargar para ver cambios (simple)
+      // Manejo explícito por si la respuesta es "opaque" (CORS)
+      let json;
+      try {
+        json = await res.json();
+      } catch (_e) {
+        throw new Error('Opaque/invalid response from Apps Script (CORS)');
+      }
+
+      if (!json?.ok) {
+        throw new Error(json?.error || 'Unknown error');
+      }
+
       onClose();
       window.location.reload();
     } catch (err) {
@@ -145,9 +177,9 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
 
   /* ---------- UI ---------- */
   const tabs = [
-    { id: 'details',        labelEn: 'Details',        labelEs: 'Detalles' },
-    { id: 'products',       labelEn: 'Products',       labelEs: 'Productos' },
-    { id: 'timeline',       labelEn: 'Timeline',       labelEs: 'Cronología' },
+    { id: 'details', labelEn: 'Details', labelEs: 'Detalles' },
+    { id: 'products', labelEn: 'Products', labelEs: 'Productos' },
+    { id: 'timeline', labelEn: 'Timeline', labelEs: 'Cronología' },
     { id: 'communications', labelEn: 'Communications', labelEs: 'Comunicaciones' }
   ];
   const getTabLabel = (tab) => (currentLanguage === 'es' ? tab.labelEs : tab.labelEn);
@@ -210,7 +242,11 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
                         <option value="ready">Ready</option>
                         <option value="completed">Completed</option>
                       </select>
-                      <OrderStatusBadge status={mfg} type="manufacturing" currentLanguage={currentLanguage} />
+                      <OrderStatusBadge
+                        status={mfg}
+                        type="manufacturing"
+                        currentLanguage={currentLanguage}
+                      />
                     </div>
                   </div>
 
@@ -249,7 +285,11 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
                         <option value="air">Air</option>
                         <option value="land">Land</option>
                       </select>
-                      <OrderStatusBadge status={transport} type="transport" currentLanguage={currentLanguage} />
+                      <OrderStatusBadge
+                        status={transport}
+                        type="transport"
+                        currentLanguage={currentLanguage}
+                      />
                     </div>
                   </div>
                 </div>
@@ -307,16 +347,22 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
           {activeTab === 'products' && (
             <div className="space-y-4">
               <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground text-center">
-                {t('No product breakdown available for this order.', 'No hay desglose de productos disponible para esta orden.')}
+                {t(
+                  'No product breakdown available for this order.',
+                  'No hay desglose de productos disponible para esta orden.'
+                )}
               </div>
             </div>
           )}
 
-          {/* TIMELINE (derivada) */}
+          {/* TIMELINE (derivada simple) */}
           {activeTab === 'timeline' && (
             <div className="space-y-4">
               <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground">
-                {t('Timeline info will be derived from order fields.', 'La cronología se deriva de los campos de la orden.')}
+                {t(
+                  'Timeline info will be derived from order fields.',
+                  'La cronología se deriva de los campos de la orden.'
+                )}
               </div>
             </div>
           )}
@@ -324,33 +370,63 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
           {/* COMMUNICATIONS */}
           {activeTab === 'communications' && (
             <div className="space-y-4">
-              {loading && <div className="text-sm text-muted-foreground">Loading communications…</div>}
+              {loading && (
+                <div className="text-sm text-muted-foreground">Loading communications…</div>
+              )}
               {error && <div className="text-sm text-red-600">Error: {String(error)}</div>}
+
               {!loading && !error && communications.length === 0 && (
                 <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground text-center">
-                  {t('No communications linked to this order.', 'No hay comunicaciones vinculadas a esta orden.')}
+                  {t(
+                    'No communications linked to this order.',
+                    'No hay comunicaciones vinculadas a esta orden.'
+                  )}
                 </div>
               )}
-              {!loading && !error && communications.map((c) => (
-                <div key={c.id} className="bg-muted rounded-lg p-4">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center space-x-2">
-                      <Icon name={c.type === 'email' ? 'Mail' : c.type === 'phone' ? 'Phone' : 'MessageSquare'} size={16} />
-                      <h4 className="font-medium text-foreground">{c.subject || t('No subject', 'Sin asunto')}</h4>
+
+              {!loading &&
+                !error &&
+                communications.map((c) => (
+                  <div key={c.id} className="bg-muted rounded-lg p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center space-x-2">
+                        <Icon
+                          name={
+                            c.type === 'email'
+                              ? 'Mail'
+                              : c.type === 'phone'
+                              ? 'Phone'
+                              : 'MessageSquare'
+                          }
+                          size={16}
+                        />
+                        <h4 className="font-medium text-foreground">
+                          {c.subject || t('No subject', 'Sin asunto')}
+                        </h4>
+                      </div>
+                      <span className="text-sm text-muted-foreground">
+                        {fmtDateHuman(c.date)}
+                      </span>
                     </div>
-                    <span className="text-sm text-muted-foreground">{fmtDateHuman(c.date)}</span>
+                    {c.from && (
+                      <p className="text-sm text-muted-foreground mb-2">
+                        {t('From', 'De')}: {c.from}
+                      </p>
+                    )}
+                    {c.content && (
+                      <p className="text-sm text-foreground whitespace-pre-line">{c.content}</p>
+                    )}
                   </div>
-                  {c.from && <p className="text-sm text-muted-foreground mb-2">{t('From', 'De')}: {c.from}</p>}
-                  {c.content && <p className="text-sm text-foreground whitespace-pre-line">{c.content}</p>}
-                </div>
-              ))}
+                ))}
             </div>
           )}
         </div>
 
         {/* Footer */}
         <div className="flex justify-end gap-2 p-6 border-t border-border">
-          <Button variant="outline" onClick={onClose}>{t('Close', 'Cerrar')}</Button>
+          <Button variant="outline" onClick={onClose}>
+            {t('Close', 'Cerrar')}
+          </Button>
           <Button variant="default" onClick={handleUpdate} disabled={saving}>
             {saving ? t('Saving…', 'Guardando…') : t('Update Status', 'Actualizar Estado')}
           </Button>
@@ -361,4 +437,3 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
 };
 
 export default OrderDetailsModal;
-
