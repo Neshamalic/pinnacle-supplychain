@@ -1,3 +1,4 @@
+// src/pages/purchase-order-tracking/index.jsx
 import React, { useState, useEffect } from 'react';
 import Header from '../../components/ui/Header';
 import Breadcrumb from '../../components/ui/Breadcrumb';
@@ -6,85 +7,45 @@ import OrderFilters from './components/OrderFilters';
 import OrdersTable from './components/OrdersTable';
 import Button from '../../components/ui/Button';
 import Icon from '../../components/AppIcon';
+import { sheetsApi } from '@/lib/sheetsApi.js';
 
-/* =========================================================
-   Modal para crear una nueva orden (GUARDA en Google Sheets)
-   ========================================================= */
-const API_URL = import.meta.env.VITE_SHEETS_API_URL; // debe estar en Vercel
-
+/* ========== Modal: Crear Orden (guarda realmente) ========== */
 function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
-  const [form, setForm] = useState({
-    poNumber: '',
-    tenderRef: '',
-    eta: '',
-  });
+  const [form, setForm] = useState({ poNumber: '', tenderRef: '', eta: '' });
   const [saving, setSaving] = useState(false);
+  const t = (en, es) => (currentLanguage === 'es' ? es : en);
 
   useEffect(() => {
-    if (!isOpen) {
-      setForm({ poNumber: '', tenderRef: '', eta: '' });
-      setSaving(false);
-    }
+    if (!isOpen) setForm({ poNumber: '', tenderRef: '', eta: '' });
   }, [isOpen]);
 
   if (!isOpen) return null;
-
-  const t = (en, es) => (currentLanguage === 'es' ? es : en);
 
   const onChange = (e) => {
     const { name, value } = e.target;
     setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  // ⬇️ CREA una fila en la hoja "purchase_orders"
   const onSubmit = async (e) => {
-    e.preventDefault(); // evita recarga
-
-    if (!API_URL) {
-      alert('Falta configurar VITE_SHEETS_API_URL');
-      return;
-    }
-    if (!form.poNumber.trim()) {
-      alert(t('PO Number is required', 'El Número PO es obligatorio'));
-      return;
-    }
-
+    e.preventDefault();
     try {
       setSaving(true);
-
-      // payload con nombres de columnas EXACTOS de tu hoja
-      const payload = {
-        po_number: form.poNumber.trim(),
-        tender_ref: form.tenderRef?.trim() || '',
-        eta: form.eta || '',
+      // Mapea a nombres REALES de la hoja "purchase_orders"
+      const row = {
+        po_number: form.poNumber,
+        tender_ref: form.tenderRef,
+        eta: form.eta || '', // YYYY-MM-DD
         created_date: new Date().toISOString(),
-
-        // defaults (puedes modificarlos)
-        manufacturing_status: 'Draft',
+        manufacturing_status: 'Unknown',
         qc_status: 'Unknown',
-        transport_type: '',
+        transport_type: 'Unknown',
         cost_usd: 0,
         cost_clp: 0,
       };
-
-      const res = await fetch(
-        `${API_URL}?route=write&action=create&name=purchase_orders`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      );
-      const json = await res.json();
-      if (!json?.ok) throw new Error(json?.error || 'Unknown error');
-
-      // listo
+      await sheetsApi.create('purchase_orders', row);
       onClose();
-      // refresca la tabla (si tu hook no expone refetch, recarga)
-      window.location.reload();
     } catch (err) {
-      console.error(err);
-      alert(`${t('Error creating order:', 'Error al crear la orden:')} ${String(err)}`);
+      alert(`Error creating order: ${String(err?.message || err)}`);
     } finally {
       setSaving(false);
     }
@@ -113,9 +74,9 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
               type="text"
               value={form.poNumber}
               onChange={onChange}
-              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-              placeholder={t('e.g. PO-109', 'ej: PO-109')}
               required
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+              placeholder={t('e.g. PO-109', 'ej: PO-109')}
             />
           </div>
 
@@ -129,7 +90,7 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
               type="text"
               value={form.tenderRef}
               onChange={onChange}
-              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
               placeholder={t('e.g. 621-29-LR25', 'ej: 621-29-LR25')}
             />
           </div>
@@ -144,12 +105,12 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
               type="date"
               value={form.eta}
               onChange={onChange}
-              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
             />
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
               {t('Cancel', 'Cancelar')}
             </Button>
             <Button type="submit" variant="default" disabled={saving}>
@@ -162,9 +123,7 @@ function NewOrderModal({ isOpen, onClose, currentLanguage = 'en' }) {
   );
 }
 
-/* =========================================================
-   Página principal: Purchase Order Tracking
-   ========================================================= */
+/* ========== Página principal ========== */
 const PurchaseOrderTracking = () => {
   const [currentLanguage, setCurrentLanguage] = useState('en');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -175,41 +134,23 @@ const PurchaseOrderTracking = () => {
     qcStatus: '',
     transportType: '',
     dateRange: '',
-    productCategory: ''
+    productCategory: '',
   });
 
   useEffect(() => {
     const savedLanguage = localStorage.getItem('language') || 'en';
     setCurrentLanguage(savedLanguage);
-
-    const handleStorageChange = () => {
-      const newLanguage = localStorage.getItem('language') || 'en';
-      setCurrentLanguage(newLanguage);
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    const onStorage = () => setCurrentLanguage(localStorage.getItem('language') || 'en');
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, []);
-
-  const handleFiltersChange = (newFilters) => {
-    setFilters(newFilters);
-  };
-
-  const handleExportData = () => {
-    console.log('Exporting order data...');
-  };
-
-  const handleCreateOrder = () => {
-    setIsCreateOpen(true);
-  };
 
   return (
     <div className="min-h-screen bg-background">
       <Header />
-
       <main className="pt-16">
         <div className="max-w-7xl mx-auto px-6 py-8">
-          {/* Page Header */}
+          {/* Header */}
           <div className="mb-8">
             <Breadcrumb />
             <div className="flex items-center justify-between mt-4">
@@ -224,19 +165,13 @@ const PurchaseOrderTracking = () => {
                 </p>
               </div>
               <div className="flex items-center space-x-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleExportData}
-                  iconName="Download"
-                  iconPosition="left"
-                >
+                <Button type="button" variant="outline" iconName="Download" iconPosition="left">
                   {currentLanguage === 'es' ? 'Exportar' : 'Export'}
                 </Button>
                 <Button
                   type="button"
                   variant="default"
-                  onClick={handleCreateOrder}
+                  onClick={() => setIsCreateOpen(true)}
                   iconName="Plus"
                   iconPosition="left"
                 >
@@ -250,105 +185,10 @@ const PurchaseOrderTracking = () => {
           <OrderSummaryCards currentLanguage={currentLanguage} />
 
           {/* Filters */}
-          <OrderFilters
-            currentLanguage={currentLanguage}
-            onFiltersChange={handleFiltersChange}
-          />
+          <OrderFilters currentLanguage={currentLanguage} onFiltersChange={setFilters} />
 
-          {/* Orders Table */}
-          <div className="mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold text-foreground">
-                {currentLanguage === 'es' ? 'Órdenes de Compra' : 'Purchase Orders'}
-              </h2>
-              <div className="flex items-center space-x-2 text-sm text-muted-foreground">
-                <Icon name="Clock" size={16} />
-                <span>
-                  {currentLanguage === 'es' ? 'Última actualización: hace 5 minutos' : 'Last updated: 5 minutes ago'}
-                </span>
-              </div>
-            </div>
-            <OrdersTable
-              currentLanguage={currentLanguage}
-              filters={filters}
-            />
-          </div>
-
-          {/* Quick Actions */}
-          <div className="bg-card rounded-lg border border-border p-6 shadow-soft">
-            <h3 className="text-lg font-semibold text-foreground mb-4">
-              {currentLanguage === 'es' ? 'Acciones Rápidas' : 'Quick Actions'}
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <Button
-                type="button"
-                variant="outline"
-                className="justify-start h-auto p-4"
-                iconName="FileText"
-                iconPosition="left"
-              >
-                <div className="text-left">
-                  <div className="font-medium">
-                    {currentLanguage === 'es' ? 'Generar Reporte' : 'Generate Report'}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {currentLanguage === 'es' ? 'Estado de órdenes' : 'Order status report'}
-                  </div>
-                </div>
-              </Button>
-
-              <Button
-                type="button"
-                variant="outline"
-                className="justify-start h-auto p-4"
-                iconName="Bell"
-                iconPosition="left"
-              >
-                <div className="text-left">
-                  <div className="font-medium">
-                    {currentLanguage === 'es' ? 'Configurar Alertas' : 'Setup Alerts'}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {currentLanguage === 'es' ? 'Notificaciones ETA' : 'ETA notifications'}
-                  </div>
-                </div>
-              </Button>
-
-              <Button
-                type="button"
-                variant="outline"
-                className="justify-start h-auto p-4"
-                iconName="MessageSquare"
-                iconPosition="left"
-              >
-                <div className="text-left">
-                  <div className="font-medium">
-                    {currentLanguage === 'es' ? 'Comunicaciones' : 'Communications'}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {currentLanguage === 'es' ? 'Con proveedores India' : 'With India suppliers'}
-                  </div>
-                </div>
-              </Button>
-
-              <Button
-                type="button"
-                variant="outline"
-                className="justify-start h-auto p-4"
-                iconName="Settings"
-                iconPosition="left"
-              >
-                <div className="text-left">
-                  <div className="font-medium">
-                    {currentLanguage === 'es' ? 'Configuración' : 'Settings'}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {currentLanguage === 'es' ? 'Preferencias sistema' : 'System preferences'}
-                  </div>
-                </div>
-              </Button>
-            </div>
-          </div>
+          {/* Table */}
+          <OrdersTable currentLanguage={currentLanguage} filters={filters} />
         </div>
       </main>
 
