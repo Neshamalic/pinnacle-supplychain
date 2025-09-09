@@ -9,11 +9,17 @@ import Icon from "../../components/AppIcon";
 
 // Datos desde Google Sheets
 import { useSheet } from "../../lib/sheetsApi";
-import { mapTenders, mapTenderItems } from "../../lib/adapters";
+import { mapTenders } from "../../lib/adapters";
 
-// -------------------------------
-// Utilidades de formato
-// -------------------------------
+// ---------------------------------------------
+// Helpers formato / números
+// ---------------------------------------------
+const toNumber = (v) => {
+  if (v === null || v === undefined || v === "") return 0;
+  const n = Number(String(v).replace(/[^\d.-]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+};
+
 const fmtDate = (value, locale = "en-US") => {
   if (!value) return "—";
   const d = new Date(value);
@@ -31,15 +37,41 @@ const fmtMoney = (num, locale = "en-US", currency = "CLP") => {
   }).format(n);
 };
 
-// -------------------------------
+// ---------------------------------------------
+// Mapeador local para tender_items
+// (como no existe mapTenderItems en adapters.js)
+// ---------------------------------------------
+const mapTenderItemsLocal = (row) => {
+  // Acepta distintos nombres de columnas por seguridad
+  const tenderId =
+    row?.tender_id ??
+    row?.tenderId ??
+    row?.TenderId ??
+    row?.tenderID ??
+    "";
+
+  const valueClp =
+    row?.total_value_clp ??
+    row?.total_value ??
+    row?.value_clp ??
+    row?.TotalValueCLP ??
+    "";
+
+  return {
+    tender_id: String(tenderId || ""),
+    total_value_clp: toNumber(valueClp),
+  };
+};
+
+// ---------------------------------------------
 // Página
-// -------------------------------
+// ---------------------------------------------
 const TenderManagement = () => {
   const [language, setLanguage] = useState(() => localStorage.getItem("language") || "en");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
 
-  // Carga de datos (defensas contra respuestas que no son array)
+  // Carga de datos
   const {
     rows: rawTenders = [],
     loading: loadingTenders,
@@ -50,35 +82,32 @@ const TenderManagement = () => {
     rows: rawItems = [],
     loading: loadingItems,
     error: errorItems
-  } = useSheet("tender_items", mapTenderItems);
+  } = useSheet("tender_items", mapTenderItemsLocal);
 
   const locale = language === "es" ? "es-CL" : "en-US";
   const t = (en, es) => (language === "es" ? es : en);
 
-  // Agrupar items por tender_id para contar productos y (si existiera) sumar valor
+  // Agrupar items por tender_id para contar productos y sumar valor
   const itemsByTender = useMemo(() => {
     const map = new Map();
     (Array.isArray(rawItems) ? rawItems : []).forEach((it) => {
-      const key = it?.tender_id || it?.tenderId || "";
+      const key = it?.tender_id || "";
       if (!key) return;
       if (!map.has(key)) map.set(key, { count: 0, valueClp: 0 });
       const agg = map.get(key);
       agg.count += 1;
-      // si el item trae monto, lo sumamos (si no, queda 0)
-      const itemValue = Number.isFinite(+it?.total_value_clp) ? +it.total_value_clp : 0;
-      agg.valueClp += itemValue;
+      agg.valueClp += toNumber(it?.total_value_clp);
     });
     return map;
   }, [rawItems]);
 
-  // Normalizamos los tenders y les inyectamos productos y total
+  // Inyectar productos y total a cada tender
   const tenders = useMemo(() => {
     const src = Array.isArray(rawTenders) ? rawTenders : [];
     return src.map((tender) => {
       const id = tender?.tender_id || tender?.id || "";
       const agg = itemsByTender.get(id) || { count: 0, valueClp: 0 };
 
-      // preferimos el total que venga en el tender; si no, usamos la suma por items
       const tenderTotal = Number.isFinite(+tender?.total_value_clp) ? +tender.total_value_clp : null;
       const totalClp = tenderTotal != null ? tenderTotal : agg.valueClp;
 
@@ -90,7 +119,7 @@ const TenderManagement = () => {
     });
   }, [rawTenders, itemsByTender]);
 
-  // Métricas superiores (tarjetas)
+  // Métricas
   const summary = useMemo(() => {
     const src = Array.isArray(tenders) ? tenders : [];
     const active = src.filter((t) => (t?.status || "").toLowerCase() !== "awarded").length;
@@ -103,7 +132,7 @@ const TenderManagement = () => {
     return { active, awarded, inDelivery, critical };
   }, [tenders]);
 
-  // Filtros + búsqueda
+  // Filtros
   const filtered = useMemo(() => {
     const src = Array.isArray(tenders) ? tenders : [];
     const s = (search || "").toLowerCase();
@@ -119,7 +148,7 @@ const TenderManagement = () => {
     });
   }, [tenders, search, statusFilter]);
 
-  // Errores / Loading
+  // Loading / Error
   if (loadingTenders || loadingItems) {
     return (
       <div className="min-h-screen bg-background">
@@ -229,7 +258,7 @@ const TenderManagement = () => {
                 </select>
               </div>
 
-              {/* Marcos listos para más filtros (categoría, packaging, etc.) */}
+              {/* Marcos listos para más filtros */}
               <div className="bg-card rounded-lg border border-border p-4">
                 <h3 className="text-sm font-semibold text-foreground mb-2">{t("Product Category", "Product Category")}</h3>
                 <p className="text-xs text-muted-foreground">
@@ -331,3 +360,4 @@ const TenderManagement = () => {
 };
 
 export default TenderManagement;
+
