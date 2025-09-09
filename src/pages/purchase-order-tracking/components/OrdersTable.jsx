@@ -39,8 +39,8 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
       return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
         style: 'currency',
         currency,
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0,
+        minimumFractionDigits: 0,00
+        maximumFractionDigits: 0,00
       }).format(num);
     } catch {
       return `${currency} ${num.toLocaleString()}`;
