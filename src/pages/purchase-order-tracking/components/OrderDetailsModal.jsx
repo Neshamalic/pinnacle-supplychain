@@ -99,8 +99,8 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
     return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
       style: 'currency',
       currency: curr,
-      minimumFractionDigits: 0,00
-      maximumFractionDigits: 0,00
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
     }).format(num);
   };
 
