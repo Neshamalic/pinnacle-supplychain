@@ -141,27 +141,42 @@ export const mapPurchaseOrderItems = (row = {}) => {
 
 /** ---------------------------------------------------------
  *  IMPORTS (Hoja: "imports") / IMPORT ITEMS
+ *  👇 Incluye arrivalDate + alias eta, qcStatus y customs (y customsStatus)
+ *  para compatibilidad con distintas vistas/tablas.
  * --------------------------------------------------------- */
 export const mapImports = (row = {}) => {
   const oci = str(pick(row, ["oci_number", "oci", "shipment_id", "id"]));
+
+  const arrivalISO = toDateISO(pick(row, ["arrival_date", "eta", "arrival"]));
+  const transport = str(pick(row, ["transport_type", "transport", "mode"]) || "").toLowerCase();
+  const qc = str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase();
+  const customsVal = str(
+    pick(row, ["customs_status", "customs", "aduana_status", "in_customs"]) || ""
+  ).toLowerCase();
+
   return {
     id: str(pick(row, ["id", "import_id"]) || oci),
     ociNumber: oci,
 
-    // básicos
-    transportType: str(pick(row, ["transport_type", "transport", "mode"]) || "").toLowerCase(),
-    eta: toDateISO(pick(row, ["eta", "arrival_date", "arrival"])),
-    origin: str(pick(row, ["origin", "from"]) || ""),
-    destination: str(pick(row, ["destination", "to"]) || ""),
-    location: str(pick(row, ["location", "warehouse", "site"]) || ""),
+    // fechas
+    arrivalDate: arrivalISO,
+    eta: arrivalISO, // alias por compatibilidad
 
-    // estados para badges/filtros
-    qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
-    customsStatus: str(pick(row, ["customs_status", "customs", "aduana_status"]) || "").toLowerCase(),
+    // estado/transporte
+    transportType: transport,
+    qcStatus: qc,               // ⬅️ la tabla lo usa
+    customs: customsVal,        // ⬅️ alias simple para badges/filtros
+    customsStatus: customsVal,  // ⬅️ alias extendido por compatibilidad
 
-    // costos (si no vienen, la vista los calculará con import_items)
+    // costos y ubicación
     totalCostClp: toNumber(pick(row, ["total_cost_clp", "cost_clp", "amount_clp"])),
     totalCostUsd: toNumber(pick(row, ["total_cost_usd", "cost_usd", "amount_usd"])),
+    location: str(pick(row, ["location", "warehouse", "site", "port"]) || ""),
+
+    // opcionales
+    origin: str(pick(row, ["origin", "from"]) || ""),
+    destination: str(pick(row, ["destination", "to"]) || ""),
+    status: str(pick(row, ["status", "import_status"]) || "").toLowerCase(),
 
     _raw: row,
   };
@@ -169,12 +184,12 @@ export const mapImports = (row = {}) => {
 
 export const mapImportItems = (row = {}) => {
   return {
-    ociNumber: str(pick(row, ["oci_number", "oci"])),
+    ociNumber: str(pick(row, ["oci_number", "oci", "shipment_id"]) || ""),
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
     lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
-    qty: toNumber(pick(row, ["qty", "quantity"])),
+    qty: toNumber(pick(row, ["qty", "quantity", "units"])),
     unitPrice: toNumber(pick(row, ["unit_price", "price"])),
-    currency: str(pick(row, ["currency", "curr"]) || "").toUpperCase(),
+    currency: str(pick(row, ["currency", "curr"]) || "CLP").toUpperCase(),
     _raw: row,
   };
 };
