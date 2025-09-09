@@ -1,4 +1,3 @@
-// src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import React, { useState, useEffect, useMemo } from 'react';
 import Icon from '@/components/AppIcon';
 import Button from '@/components/ui/Button';
@@ -17,20 +16,19 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
   const [mfg, setMfg] = useState('');
   const [qc, setQc] = useState('');
   const [transport, setTransport] = useState('');
-  const [eta, setEta] = useState(''); // YYYY-MM-DD
+  const [eta, setEta] = useState('');
   const [costUsd, setCostUsd] = useState('');
   const [costClp, setCostClp] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // 1) Hooks SIEMPRE se ejecutan, independiente de isOpen/order
   useEffect(() => {
     if (!isOpen || !order) return;
-
     setActiveTab('details');
     setMfg(String(order?.manufacturingStatus || ''));
     setQc(String(order?.qcStatus || ''));
     setTransport(String(order?.transportType || ''));
-
-    // normaliza fecha a YYYY-MM-DD si viene con tiempo
+    // normaliza fecha YYYY-MM-DD si viene con tiempo
     const d = order?.eta ? new Date(order.eta) : null;
     const ymd =
       d && !Number.isNaN(d.getTime())
@@ -39,52 +37,24 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
           ).padStart(2, '0')}`
         : '';
     setEta(ymd);
-
     setCostUsd(order?.costUsd ?? '');
     setCostClp(order?.costClp ?? '');
   }, [isOpen, order]);
 
-  if (!isOpen || !order) return null;
-
-  const t = (en, es) => (currentLanguage === 'es' ? es : en);
-
-  /* ---------- Helpers de formato ---------- */
-  const fmtMoney = (val, curr) => {
-    const num = Number.isFinite(+val) ? +val : 0;
-    return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      style: 'currency',
-      currency: curr,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    }).format(num);
-  };
-
-  const fmtDateHuman = (date) => {
-    if (!date) return '—';
-    const d = new Date(date);
-    if (Number.isNaN(d.getTime())) return '—';
-    return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    }).format(d);
-  };
-
-  /* ---------- Communications desde Sheets ---------- */
+  // Communications SIEMPRE se suscribe (hook no condicional)
   const { rows: commRows = [], loading, error } = useSheet('communications', mapCommunications);
+
   const communications = useMemo(() => {
     const rows = commRows || [];
     const po = order?.poNumber || order?.id || '';
     if (!po) return [];
 
-    // 1) match explícito
     let list = rows.filter(
       (c) =>
         (c.linked_type === 'order' && String(c.linked_id) === String(po)) ||
         String(c.linked_id) === String(po)
     );
 
-    // 2) fallback por texto
     if (list.length === 0) {
       const p = String(po).toLowerCase();
       list = rows.filter(
@@ -108,7 +78,7 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
           type: (c.type || '').toLowerCase(),
           subject: c.subject || '',
           from,
-          content: c.content || c.preview || ''
+          content: c.content || c.preview || '',
         };
       })
       .sort((a, b) => {
@@ -117,6 +87,33 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
         return tb - ta;
       });
   }, [commRows, order]);
+
+  // 2) AHORA sí podemos salir si no está abierto o no hay orden
+  if (!isOpen || !order) return null;
+
+  const t = (en, es) => (currentLanguage === 'es' ? es : en);
+
+  /* ---------- Helpers de formato ---------- */
+  const fmtMoney = (val, curr) => {
+    const num = Number.isFinite(+val) ? +val : 0;
+    return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
+      style: 'currency',
+      currency: curr,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(num);
+  };
+
+  const fmtDateHuman = (date) => {
+    if (!date) return '—';
+    const d = new Date(date);
+    if (Number.isNaN(d.getTime())) return '—';
+    return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    }).format(d);
+  };
 
   /* ---------- Guardar cambios (UPDATE) ---------- */
   const handleUpdate = async () => {
@@ -132,38 +129,25 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
     try {
       setSaving(true);
 
-      // Respetar nombres de columnas en la hoja purchase_orders
+      // Respetar tus columnas reales en la hoja purchase_orders:
       const payload = {
-        po_number: order.poNumber, // clave para update
+        po_number: order.poNumber, // KEY para update
         manufacturing_status: mfg || '',
         qc_status: qc || '',
         transport_type: transport || '',
         eta: eta || '',
         cost_usd: costUsd === '' ? '' : Number(costUsd),
-        cost_clp: costClp === '' ? '' : Number(costClp)
+        cost_clp: costClp === '' ? '' : Number(costClp),
       };
 
-      const res = await fetch(
-        `${API_URL}?route=write&action=update&name=purchase_orders`,
-        {
-          method: 'POST',
-          // text/plain evita preflight y se parsea igual en tu Apps Script
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload)
-        }
-      );
-
-      // Manejo explícito por si la respuesta es "opaque" (CORS)
-      let json;
-      try {
-        json = await res.json();
-      } catch (_e) {
-        throw new Error('Opaque/invalid response from Apps Script (CORS)');
-      }
-
-      if (!json?.ok) {
-        throw new Error(json?.error || 'Unknown error');
-      }
+      const res = await fetch(`${API_URL}?route=write&action=update&name=purchase_orders`, {
+        method: 'POST',
+        // text/plain para evitar preflight CORS
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!json?.ok) throw new Error(json?.error || 'Unknown error');
 
       onClose();
       window.location.reload();
@@ -180,7 +164,7 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
     { id: 'details', labelEn: 'Details', labelEs: 'Detalles' },
     { id: 'products', labelEn: 'Products', labelEs: 'Productos' },
     { id: 'timeline', labelEn: 'Timeline', labelEs: 'Cronología' },
-    { id: 'communications', labelEn: 'Communications', labelEs: 'Comunicaciones' }
+    { id: 'communications', labelEn: 'Communications', labelEs: 'Comunicaciones' },
   ];
   const getTabLabel = (tab) => (currentLanguage === 'es' ? tab.labelEs : tab.labelEn);
 
@@ -242,11 +226,7 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
                         <option value="ready">Ready</option>
                         <option value="completed">Completed</option>
                       </select>
-                      <OrderStatusBadge
-                        status={mfg}
-                        type="manufacturing"
-                        currentLanguage={currentLanguage}
-                      />
+                      <OrderStatusBadge status={mfg} type="manufacturing" currentLanguage={currentLanguage} />
                     </div>
                   </div>
 
@@ -285,11 +265,7 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
                         <option value="air">Air</option>
                         <option value="land">Land</option>
                       </select>
-                      <OrderStatusBadge
-                        status={transport}
-                        type="transport"
-                        currentLanguage={currentLanguage}
-                      />
+                      <OrderStatusBadge status={transport} type="transport" currentLanguage={currentLanguage} />
                     </div>
                   </div>
                 </div>
@@ -355,7 +331,7 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
             </div>
           )}
 
-          {/* TIMELINE (derivada simple) */}
+          {/* TIMELINE (derivada) */}
           {activeTab === 'timeline' && (
             <div className="space-y-4">
               <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground">
@@ -370,20 +346,13 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
           {/* COMMUNICATIONS */}
           {activeTab === 'communications' && (
             <div className="space-y-4">
-              {loading && (
-                <div className="text-sm text-muted-foreground">Loading communications…</div>
-              )}
+              {loading && <div className="text-sm text-muted-foreground">Loading communications…</div>}
               {error && <div className="text-sm text-red-600">Error: {String(error)}</div>}
-
               {!loading && !error && communications.length === 0 && (
                 <div className="bg-muted rounded-lg p-6 text-sm text-muted-foreground text-center">
-                  {t(
-                    'No communications linked to this order.',
-                    'No hay comunicaciones vinculadas a esta orden.'
-                  )}
+                  {t('No communications linked to this order.', 'No hay comunicaciones vinculadas a esta orden.')}
                 </div>
               )}
-
               {!loading &&
                 !error &&
                 communications.map((c) => (
@@ -391,31 +360,21 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center space-x-2">
                         <Icon
-                          name={
-                            c.type === 'email'
-                              ? 'Mail'
-                              : c.type === 'phone'
-                              ? 'Phone'
-                              : 'MessageSquare'
-                          }
+                          name={c.type === 'email' ? 'Mail' : c.type === 'phone' ? 'Phone' : 'MessageSquare'}
                           size={16}
                         />
                         <h4 className="font-medium text-foreground">
                           {c.subject || t('No subject', 'Sin asunto')}
                         </h4>
                       </div>
-                      <span className="text-sm text-muted-foreground">
-                        {fmtDateHuman(c.date)}
-                      </span>
+                      <span className="text-sm text-muted-foreground">{fmtDateHuman(c.date)}</span>
                     </div>
                     {c.from && (
                       <p className="text-sm text-muted-foreground mb-2">
                         {t('From', 'De')}: {c.from}
                       </p>
                     )}
-                    {c.content && (
-                      <p className="text-sm text-foreground whitespace-pre-line">{c.content}</p>
-                    )}
+                    {c.content && <p className="text-sm text-foreground whitespace-pre-line">{c.content}</p>}
                   </div>
                 ))}
             </div>
@@ -437,3 +396,4 @@ const OrderDetailsModal = ({ order, isOpen, onClose, currentLanguage = 'en' }) =
 };
 
 export default OrderDetailsModal;
+
