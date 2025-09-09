@@ -40,14 +40,14 @@ export const mapTenders = (row = {}) => {
     id: tenderId || str(row.id || ""),
     tenderId,
     title: str(pick(row, ["title", "tender_title", "name", "description"]) || ""),
-    status: str(pick(row, ["status", "tender_status"]) || ""),
+    status: str(pick(row, ["status", "tender_status"]) || "").toLowerCase(), // ⬅️ normalizado
     buyer: str(pick(row, ["buyer", "organization", "org", "customer"]) || ""),
     deliveryDate: toDateISO(pick(row, ["delivery_date", "delivery", "eta", "due_date"])),
 
     // Métricas opcionales que pueden venir precargadas
     productsCount: toNumber(pick(row, ["products_count", "items_count", "n_items"])),
     totalValue: toNumber(pick(row, ["total_value", "total_usd"])),
-    stockCoverage: str(pick(row, ["stock_coverage", "coverage"]) || ""),
+    stockCoverage: toNumber(pick(row, ["stock_coverage", "coverage"])), // ⬅️ numérico
     _raw: row,
   };
 };
@@ -114,7 +114,7 @@ export const mapPurchaseOrders = (row = {}) => {
       .toLowerCase(),
     qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
     transportType: str(pick(row, ["transport_type", "transport", "shipping"]) || "").toLowerCase(),
-    eta: toDateISO(pick(row, ["eta", "arrival_date", "delivery_date"])),
+    eta: toDateISO(pick(row, ["eta", "arrival_date", "delivery_date"]))),
     costUsd: toNumber(pick(row, ["cost_usd", "usd", "amount_usd"])),
     costClp: toNumber(pick(row, ["cost_clp", "clp", "amount_clp"])),
     createdDate: toDateISO(pick(row, ["created_date", "created", "date_created"])),
@@ -202,4 +202,3 @@ export const mapCommunications = (row = {}) => {
  *  Export utils
  * --------------------------------------------------------- */
 export const _utils = { str, toNumber, toDateISO, pick };
-
