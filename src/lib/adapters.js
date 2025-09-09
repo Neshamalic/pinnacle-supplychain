@@ -1,4 +1,4 @@
-// src/lib/adapters.js 
+// src/lib/adapters.js
 
 /** Utils -------------------------------------------------- */
 const str = (v) => (v == null ? "" : String(v).trim());
@@ -32,37 +32,20 @@ const pick = (row, keys) => {
 
 /** ---------------------------------------------------------
  *  TENDERS (Hoja: "tenders")
- *  Campos esperados por la UI (mínimo):
- *    - id (tenderId)
- *    - tenderId
- *    - title
- *    - status
- *    - buyer / organization (opcional)
- *    - deliveryDate (ISO)
  * --------------------------------------------------------- */
 export const mapTenders = (row = {}) => {
-  const tenderId =
-    str(pick(row, ["tender_id", "tender_number", "id", "tender"]));
+  const tenderId = str(pick(row, ["tender_id", "tender_number", "id", "tender"]));
 
   return {
     id: tenderId || str(row.id || ""),
     tenderId,
-    title: str(
-      pick(row, ["title", "tender_title", "name", "description"]) || ""
-    ),
+    title: str(pick(row, ["title", "tender_title", "name", "description"]) || ""),
     status: str(pick(row, ["status", "tender_status"]) || ""),
-    buyer: str(
-      pick(row, ["buyer", "organization", "org", "customer"]) || ""
-    ),
-    deliveryDate: toDateISO(
-      pick(row, ["delivery_date", "delivery", "eta", "due_date"])
-    ),
+    buyer: str(pick(row, ["buyer", "organization", "org", "customer"]) || ""),
+    deliveryDate: toDateISO(pick(row, ["delivery_date", "delivery", "eta", "due_date"])),
 
-    // Por si quieres mostrar totales/metricas precargadas desde Sheets
-    // (si no existen, se calcularán en el front con tender_items)
-    productsCount: toNumber(
-      pick(row, ["products_count", "items_count", "n_items"])
-    ),
+    // Métricas opcionales que pueden venir precargadas
+    productsCount: toNumber(pick(row, ["products_count", "items_count", "n_items"])),
     totalValue: toNumber(pick(row, ["total_value", "total_usd"])),
     stockCoverage: str(pick(row, ["stock_coverage", "coverage"]) || ""),
     _raw: row,
@@ -71,57 +54,46 @@ export const mapTenders = (row = {}) => {
 
 /** ---------------------------------------------------------
  *  TENDER ITEMS (Hoja: "tender_items")
- *  Útil para calcular productsCount y totalValue por tender.
  *  Columnas típicas: tender_number|tender_id, presentation_code,
  *  awarded_qty, unit_price, currency, (opcional) stock_coverage_days
  * --------------------------------------------------------- */
 export const mapTenderItems = (row = {}) => {
-  const tenderId =
-    str(pick(row, ["tender_number", "tender_id", "tender"]));
-
-  const qty = toNumber(
-    pick(row, ["awarded_qty", "awarded_quantity", "qty", "quantity"])
-  );
+  const tenderId = str(pick(row, ["tender_number", "tender_id", "tender"]));
+  const qty = toNumber(pick(row, ["awarded_qty", "awarded_quantity", "qty", "quantity"]));
   const price = toNumber(pick(row, ["unit_price", "price"]));
   const currency = str(pick(row, ["currency", "curr"]) || "USD");
 
   // opcional: días de cobertura si existe en la hoja
-  const stockCoverageDays = toNumber(
-    pick(row, [
-      "stock_coverage_days",
-      "stock_coverage",
-      "coverage_days",
-      "days_coverage",
-      "coverage",
-    ])
-  );
+  const sc = pick(row, [
+    "stock_coverage_days",
+    "stock_coverage",
+    "coverage_days",
+    "days_coverage",
+    "coverage",
+  ]);
+  const stockCoverageDays = sc === undefined ? undefined : toNumber(sc);
 
   return {
     tenderId,
-    presentationCode: str(
-      pick(row, ["presentation_code", "sku", "code"]) || ""
-    ),
+    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
     awardedQty: qty,
     unitPrice: price,
     currency,
-    stockCoverageDays: Number.isFinite(stockCoverageDays) ? stockCoverageDays : undefined,
+    stockCoverageDays,
     lineTotal: qty * price,
     _raw: row,
   };
 };
 
 /** ---------------------------------------------------------
- *  MASTER DE PRESENTACIONES (Hoja: "product_presentation_master")
- *  Necesario para multiplicar por package_units en Total Value:
- *  awarded_qty × (unit_price × package_units)
+ *  PRESENTATION MASTER (Hoja: "product_presentation_master")
+ *  Para multiplicar por package_units en Total Value
  * --------------------------------------------------------- */
 export const mapPresentationMaster = (row = {}) => {
   return {
-    presentationCode:
-      str(
-        pick(row, ["presentation_code", "presentationCode", "presentation", "sku", "code"]) ||
-          ""
-      ),
+    presentationCode: str(
+      pick(row, ["presentation_code", "presentationCode", "presentation", "sku", "code"]) || ""
+    ),
     productName: str(pick(row, ["product_name", "productName", "name"]) || ""),
     packageUnits:
       toNumber(pick(row, ["package_units", "packageUnits", "units_per_package", "units"])) || 1,
@@ -131,52 +103,37 @@ export const mapPresentationMaster = (row = {}) => {
 
 /** ---------------------------------------------------------
  *  PURCHASE ORDERS (Hoja: "purchase_orders")
- *  Campos usados por la UI:
- *   poNumber, tenderRef, manufacturingStatus, qcStatus,
- *   transportType, eta, costUsd, costClp, createdDate, id
  * --------------------------------------------------------- */
 export const mapPurchaseOrders = (row = {}) => {
   const poNumber = str(pick(row, ["po_number", "po", "id", "poNumber"]));
   return {
     id: str(pick(row, ["id", "po_id"]) || poNumber),
     poNumber,
-    tenderRef: str(
-      pick(row, ["tender_ref", "tender_id", "tender_number", "tenderRef"]) ||
-        ""
-    ),
-    manufacturingStatus: str(
-      pick(row, ["manufacturing_status", "mfg_status", "manufacturing"]) || ""
-    ).toLowerCase(),
-    qcStatus: str(
-      pick(row, ["qc_status", "quality_status", "qc"]) || ""
-    ).toLowerCase(),
-    transportType: str(
-      pick(row, ["transport_type", "transport", "shipping"]) || ""
-    ).toLowerCase(),
+    tenderRef: str(pick(row, ["tender_ref", "tender_id", "tender_number", "tenderRef"]) || ""),
+    manufacturingStatus: str(pick(row, ["manufacturing_status", "mfg_status", "manufacturing"]) || "")
+      .toLowerCase(),
+    qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
+    transportType: str(pick(row, ["transport_type", "transport", "shipping"]) || "").toLowerCase(),
     eta: toDateISO(pick(row, ["eta", "arrival_date", "delivery_date"])),
     costUsd: toNumber(pick(row, ["cost_usd", "usd", "amount_usd"])),
     costClp: toNumber(pick(row, ["cost_clp", "clp", "amount_clp"])),
-    createdDate: toDateISO(
-      pick(row, ["created_date", "created", "date_created"])
-    ),
+    createdDate: toDateISO(pick(row, ["created_date", "created", "date_created"])),
     _raw: row,
   };
 };
 
 /** ---------------------------------------------------------
- *  PURCHASE ORDER ITEMS (opcional si lo usas en otros componentes)
+ *  PURCHASE ORDER ITEMS (opcional)
  * --------------------------------------------------------- */
 export const mapPurchaseOrderItems = (row = {}) => {
+  const qty = toNumber(pick(row, ["qty", "quantity"]));
+  const price = toNumber(pick(row, ["unit_price", "price"]));
   return {
     poNumber: str(pick(row, ["po_number", "po", "poNumber"])),
-    presentationCode: str(
-      pick(row, ["presentation_code", "sku", "code"]) || ""
-    ),
-    qty: toNumber(pick(row, ["qty", "quantity"]))),
-    unitPrice: toNumber(pick(row, ["unit_price", "price"])),
-    lineTotal:
-      toNumber(pick(row, ["qty", "quantity"])) *
-      toNumber(pick(row, ["unit_price", "price"])),
+    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
+    qty,
+    unitPrice: price,
+    lineTotal: qty * price,
     _raw: row,
   };
 };
@@ -190,9 +147,7 @@ export const mapImports = (row = {}) => {
     id: str(pick(row, ["id", "import_id"]) || oci),
     ociNumber: oci,
     status: str(pick(row, ["status", "import_status"]) || "").toLowerCase(),
-    transportType: str(
-      pick(row, ["transport_type", "transport", "shipping"]) || ""
-    ).toLowerCase(),
+    transportType: str(pick(row, ["transport_type", "transport", "shipping"]) || "").toLowerCase(),
     eta: toDateISO(pick(row, ["eta", "arrival_date"])),
     origin: str(pick(row, ["origin", "from"]) || ""),
     destination: str(pick(row, ["destination", "to"]) || ""),
@@ -203,9 +158,7 @@ export const mapImports = (row = {}) => {
 export const mapImportItems = (row = {}) => {
   return {
     ociNumber: str(pick(row, ["oci_number", "oci"])),
-    presentationCode: str(
-      pick(row, ["presentation_code", "sku", "code"]) || ""
-    ),
+    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
     lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
     qty: toNumber(pick(row, ["qty", "quantity"])),
     _raw: row,
@@ -214,27 +167,19 @@ export const mapImportItems = (row = {}) => {
 
 /** ---------------------------------------------------------
  *  DEMAND (Hoja: "demand")
- *  Suficiente para tablas/diagramas simples
  * --------------------------------------------------------- */
 export const mapDemand = (row = {}) => {
   return {
     monthOfSupply: str(pick(row, ["month_of_supply", "month"]) || ""),
-    presentationCode: str(
-      pick(row, ["presentation_code", "sku", "code"]) || ""
-    ),
-    forecastUnits: toNumber(
-      pick(row, ["forecast_units", "forecast", "units"])
-    ),
-    historicalUnits: toNumber(
-      pick(row, ["historical_units", "history_units", "hist_units"])
-    ),
+    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
+    forecastUnits: toNumber(pick(row, ["forecast_units", "forecast", "units"])),
+    historicalUnits: toNumber(pick(row, ["historical_units", "history_units", "hist_units"])),
     _raw: row,
   };
 };
 
 /** ---------------------------------------------------------
  *  COMMUNICATIONS (Hoja: "communications")
- *  Usado en OrderDetailsModal para vincular por linked_type/linked_id
  * --------------------------------------------------------- */
 export const mapCommunications = (row = {}) => {
   return {
@@ -242,24 +187,19 @@ export const mapCommunications = (row = {}) => {
     createdDate: toDateISO(pick(row, ["created_date", "date", "created"])),
     type: str(pick(row, ["type", "channel"]) || "").toLowerCase(), // email/phone/whatsapp/etc
     subject: str(pick(row, ["subject", "title"]) || ""),
-    participants: str(
-      pick(row, ["participants", "from_to", "people"]) || ""
-    ),
+    participants: str(pick(row, ["participants", "from_to", "people"]) || ""),
     content: str(pick(row, ["content", "body", "text"]) || ""),
     preview: str(pick(row, ["preview", "snippet"]) || ""),
 
-    linked_type: str(
-      pick(row, ["linked_type", "entity_type", "link_type"]) || ""
-    ).toLowerCase(), // ej: 'order', 'tender'
-    linked_id: str(
-      pick(row, ["linked_id", "entity_id", "link_id"]) || ""
-    ),
+    linked_type: str(pick(row, ["linked_type", "entity_type", "link_type"]) || "").toLowerCase(),
+    linked_id: str(pick(row, ["linked_id", "entity_id", "link_id"]) || ""),
 
     _raw: row,
   };
 };
 
 /** ---------------------------------------------------------
- *  Export utils (por si te sirven en otras partes)
+ *  Export utils
  * --------------------------------------------------------- */
 export const _utils = { str, toNumber, toDateISO, pick };
+
