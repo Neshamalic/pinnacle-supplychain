@@ -40,14 +40,14 @@ export const mapTenders = (row = {}) => {
     id: tenderId || str(row.id || ""),
     tenderId,
     title: str(pick(row, ["title", "tender_title", "name", "description"]) || ""),
-    status: str(pick(row, ["status", "tender_status"]) || "").toLowerCase(), // ⬅️ normalizado
+    status: str(pick(row, ["status", "tender_status"]) || "").toLowerCase(), // normalizado
     buyer: str(pick(row, ["buyer", "organization", "org", "customer"]) || ""),
     deliveryDate: toDateISO(pick(row, ["delivery_date", "delivery", "eta", "due_date"])),
 
     // Métricas opcionales que pueden venir precargadas
     productsCount: toNumber(pick(row, ["products_count", "items_count", "n_items"])),
     totalValue: toNumber(pick(row, ["total_value", "total_usd"])),
-    stockCoverage: toNumber(pick(row, ["stock_coverage", "coverage"])), // ⬅️ numérico
+    stockCoverage: toNumber(pick(row, ["stock_coverage", "coverage"])),
     _raw: row,
   };
 };
@@ -110,11 +110,12 @@ export const mapPurchaseOrders = (row = {}) => {
     id: str(pick(row, ["id", "po_id"]) || poNumber),
     poNumber,
     tenderRef: str(pick(row, ["tender_ref", "tender_id", "tender_number", "tenderRef"]) || ""),
-    manufacturingStatus: str(pick(row, ["manufacturing_status", "mfg_status", "manufacturing"]) || "")
-      .toLowerCase(),
+    manufacturingStatus: str(
+      pick(row, ["manufacturing_status", "mfg_status", "manufacturing"]) || ""
+    ).toLowerCase(),
     qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
     transportType: str(pick(row, ["transport_type", "transport", "shipping"]) || "").toLowerCase(),
-    eta: toDateISO(pick(row, ["eta", "arrival_date", "delivery_date"]))),
+    eta: toDateISO(pick(row, ["eta", "arrival_date", "delivery_date"])),
     costUsd: toNumber(pick(row, ["cost_usd", "usd", "amount_usd"])),
     costClp: toNumber(pick(row, ["cost_clp", "clp", "amount_clp"])),
     createdDate: toDateISO(pick(row, ["created_date", "created", "date_created"])),
@@ -142,15 +143,26 @@ export const mapPurchaseOrderItems = (row = {}) => {
  *  IMPORTS (Hoja: "imports") / IMPORT ITEMS
  * --------------------------------------------------------- */
 export const mapImports = (row = {}) => {
-  const oci = str(pick(row, ["oci_number", "oci", "id"]));
+  const oci = str(pick(row, ["oci_number", "oci", "shipment_id", "id"]));
   return {
     id: str(pick(row, ["id", "import_id"]) || oci),
     ociNumber: oci,
-    status: str(pick(row, ["status", "import_status"]) || "").toLowerCase(),
-    transportType: str(pick(row, ["transport_type", "transport", "shipping"]) || "").toLowerCase(),
-    eta: toDateISO(pick(row, ["eta", "arrival_date"])),
+
+    // básicos
+    transportType: str(pick(row, ["transport_type", "transport", "mode"]) || "").toLowerCase(),
+    eta: toDateISO(pick(row, ["eta", "arrival_date", "arrival"])),
     origin: str(pick(row, ["origin", "from"]) || ""),
     destination: str(pick(row, ["destination", "to"]) || ""),
+    location: str(pick(row, ["location", "warehouse", "site"]) || ""),
+
+    // estados para badges/filtros
+    qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
+    customsStatus: str(pick(row, ["customs_status", "customs", "aduana_status"]) || "").toLowerCase(),
+
+    // costos (si no vienen, la vista los calculará con import_items)
+    totalCostClp: toNumber(pick(row, ["total_cost_clp", "cost_clp", "amount_clp"])),
+    totalCostUsd: toNumber(pick(row, ["total_cost_usd", "cost_usd", "amount_usd"])),
+
     _raw: row,
   };
 };
@@ -161,6 +173,8 @@ export const mapImportItems = (row = {}) => {
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
     lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
     qty: toNumber(pick(row, ["qty", "quantity"])),
+    unitPrice: toNumber(pick(row, ["unit_price", "price"])),
+    currency: str(pick(row, ["currency", "curr"]) || "").toUpperCase(),
     _raw: row,
   };
 };
