@@ -34,7 +34,7 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
   const getColumnLabel = (c) => (currentLanguage === 'es' ? c.labelEs : c.labelEn);
 
   const formatCurrency = (amount, currency) => {
-    const num = Number.isFinite(+amount) ? +amount : 0,0;
+    const num = Number.isFinite(+amount) ? +amount : 0;
     try {
       return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
         style: 'currency',
