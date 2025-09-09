@@ -1,592 +1,541 @@
 // src/pages/tender-management/index.jsx
-import React, { useMemo, useState, useEffect } from "react";
-
-import Header from "../../components/ui/Header";
-import Breadcrumb from "../../components/ui/Breadcrumb";
-import Button from "../../components/ui/Button";
-import Icon from "../../components/AppIcon";
+import React, { useMemo, useState } from "react";
+import Icon from "@/components/AppIcon";
+import Button from "@/components/ui/Button";
+import Breadcrumb from "@/components/ui/Breadcrumb";
+import Header from "@/components/ui/Header";
 
 import { useSheet } from "@/lib/sheetsApi";
 import {
   mapTenders,
   mapTenderItems,
-  mapPresentationMaster,
+  mapPresentations, // <- asegura que exista en src/lib/adapters.js (ya te lo pasé)
 } from "@/lib/adapters";
 
 const API_URL = import.meta.env.VITE_SHEETS_API_URL;
 
-/* ============ Utils UI ============ */
-const fmtCLP = (n, lang = "es-CL") =>
-  new Intl.NumberFormat(lang, {
-    style: "currency",
-    currency: "CLP",
-    maximumFractionDigits: 0,
-  }).format(Number.isFinite(+n) ? +n : 0);
-
-const fmtDate = (v, lang = "es-CL") => {
-  if (!v) return "—";
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat(lang, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-};
-
-const toYMD = (v) => {
+/* ========== utils ========== */
+const str = (v) => (v == null ? "" : String(v).trim());
+const toISO = (v) => {
   if (!v) return "";
   const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return "";
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+};
+const fmtCLP = (n) =>
+  new Intl.NumberFormat("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    minimumFractionDigits: 0,
+  }).format(Number.isFinite(+n) ? +n : 0);
+
+/* ========== small UI bits ========== */
+const StatusBadge = ({ value }) => {
+  const v = String(value || "").toLowerCase();
+  const color =
+    v === "awarded"
+      ? "bg-green-100 text-green-700"
+      : v === "submitted"
+      ? "bg-blue-100 text-blue-700"
+      : v === "rejected"
+      ? "bg-red-100 text-red-700"
+      : v === "in delivery" || v === "in-delivery"
+      ? "bg-amber-100 text-amber-700"
+      : "bg-muted text-foreground";
+  return (
+    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs ${color}`}>
+      {value || "—"}
+    </span>
+  );
 };
 
-/* ============ Modal reusado (view / edit / create) ============ */
-function TenderModal({
-  open,
-  mode, // "view" | "edit" | "create"
-  tender, // {tenderId,title,status,deliveryDate}
-  onClose,
-  onSaved, // callback tras create/update
-}) {
-  const isView = mode === "view";
-  const isEdit = mode === "edit";
-  const isCreate = mode === "create";
+const CoverageBadge = ({ days }) => {
+  const d = Number.isFinite(+days) ? +days : 0;
+  const color = d < 10 ? "bg-red-100 text-red-700" : d < 30 ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700";
+  return (
+    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs ${color}`}>
+      {d} days
+    </span>
+  );
+};
 
-  const [form, setForm] = useState({
-    tenderId: "",
-    title: "",
-    status: "",
-    deliveryDate: "",
-  });
-  const [saving, setSaving] = useState(false);
+/* ========== modal para crear/editar (también sirve de "View" con readOnly) ========== */
+function TenderModal({ open, onClose, onSave, tender, readOnly = false }) {
+  const [form, setForm] = useState(() => ({
+    tender_id: tender?.tenderId || "",
+    title: tender?.title || "",
+    status: tender?.status || "",
+    delivery_date: tender?.deliveryDate ? str(tender.deliveryDate).slice(0, 10) : "",
+  }));
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
-    if (isCreate) {
-      setForm({ tenderId: "", title: "", status: "", deliveryDate: "" });
-    } else {
-      setForm({
-        tenderId: tender?.tenderId || "",
-        title: tender?.title || "",
-        status: tender?.status || "",
-        deliveryDate: toYMD(tender?.deliveryDate) || "",
-      });
-    }
-  }, [open, isCreate, tender]);
+    setForm({
+      tender_id: tender?.tenderId || "",
+      title: tender?.title || "",
+      status: tender?.status || "",
+      delivery_date: tender?.deliveryDate ? str(tender.deliveryDate).slice(0, 10) : "",
+    });
+  }, [open, tender]);
 
   if (!open) return null;
 
-  const disabled = isView;
-
   const onChange = (e) => {
     const { name, value } = e.target;
-    setForm((p) => ({ ...p, [name]: value }));
+    setForm((s) => ({ ...s, [name]: value }));
   };
 
-  const handleSubmit = async (e) => {
-    e?.preventDefault?.();
-    if (!API_URL) {
-      alert("Falta VITE_SHEETS_API_URL");
-      return;
-    }
-
-    try {
-      setSaving(true);
-
-      const payload = {
-        tender_id: form.tenderId, // clave para update
-        title: form.title,
-        status: form.status,
-        delivery_date: form.deliveryDate,
-      };
-
-      const action = isCreate ? "create" : "update";
-
-      const res = await fetch(
-        `${API_URL}?route=write&action=${action}&name=tenders`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify(payload),
-        }
-      );
-      const json = await res.json();
-      if (!json?.ok) throw new Error(json?.error || "Error");
-
-      onClose();
-      onSaved?.();
-    } catch (err) {
-      console.error(err);
-      alert(`Error al guardar: ${String(err)}`);
-    } finally {
-      setSaving(false);
-    }
+  const submit = (e) => {
+    e.preventDefault();
+    if (readOnly) return;
+    onSave?.(form);
   };
 
   return (
     <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/50">
-      <div className="bg-card rounded-lg border border-border shadow-modal w-full max-w-xl mx-4 overflow-hidden">
-        {/* Header */}
+      <div className="bg-card w-full max-w-lg rounded-lg border border-border shadow-modal overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <h2 className="text-lg font-semibold text-foreground">
-            {isView && "Ver Licitación"}
-            {isEdit && "Editar Licitación"}
-            {isCreate && "Nueva Licitación"}
-          </h2>
+          <h3 className="text-lg font-semibold text-foreground">
+            {readOnly ? "View Tender" : tender ? "Edit Tender" : "New Tender"}
+          </h3>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
             <Icon name="X" size={18} />
           </Button>
         </div>
 
-        {/* Body */}
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form className="p-4 space-y-4" onSubmit={submit}>
           <div>
-            <label className="text-sm font-medium text-muted-foreground">
-              Tender ID
-            </label>
+            <label className="text-sm text-muted-foreground">Tender ID</label>
             <input
-              name="tenderId"
-              type="text"
-              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-              value={form.tenderId}
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 outline-none focus:ring-2 ring-ring"
+              name="tender_id"
+              value={form.tender_id}
               onChange={onChange}
-              placeholder="e.g. 621-29-LR25"
+              disabled={!!tender || readOnly}
+              placeholder="CENABAST-2024-001"
               required
-              disabled={isEdit || isView} // no cambiar clave al editar/ver
             />
           </div>
-
           <div>
-            <label className="text-sm font-medium text-muted-foreground">
-              Title
-            </label>
+            <label className="text-sm text-muted-foreground">Title</label>
             <input
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 outline-none focus:ring-2 ring-ring"
               name="title"
-              type="text"
-              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
               value={form.title}
               onChange={onChange}
-              placeholder="Tender title"
-              disabled={disabled}
+              disabled={readOnly}
+              placeholder="Medicamentos…"
+              required
             />
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium text-muted-foreground">
-                Status
-              </label>
+              <label className="text-sm text-muted-foreground">Status</label>
               <select
+                className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 outline-none focus:ring-2 ring-ring"
                 name="status"
-                className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
                 value={form.status}
                 onChange={onChange}
-                disabled={disabled}
+                disabled={readOnly}
               >
                 <option value="">—</option>
-                <option value="draft">draft</option>
-                <option value="open">open</option>
-                <option value="awarded">awarded</option>
-                <option value="in-progress">in-progress</option>
-                <option value="delivered">delivered</option>
-                <option value="closed">closed</option>
+                <option value="Draft">Draft</option>
+                <option value="Submitted">Submitted</option>
+                <option value="Rejected">Rejected</option>
+                <option value="In Delivery">In Delivery</option>
+                <option value="Awarded">Awarded</option>
               </select>
             </div>
             <div>
-              <label className="text-sm font-medium text-muted-foreground">
-                Delivery Date
-              </label>
+              <label className="text-sm text-muted-foreground">Delivery Date</label>
               <input
-                name="deliveryDate"
                 type="date"
-                className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                value={form.deliveryDate}
+                className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 outline-none focus:ring-2 ring-ring"
+                name="delivery_date"
+                value={form.delivery_date}
                 onChange={onChange}
-                disabled={disabled}
+                disabled={readOnly}
               />
             </div>
           </div>
-        </form>
 
-        {/* Footer */}
-        <div className="flex justify-end gap-2 p-4 border-t border-border">
-          <Button variant="outline" onClick={onClose}>
-            Cerrar
-          </Button>
-          {!isView && (
-            <Button variant="default" onClick={handleSubmit} disabled={saving}>
-              {saving ? "Guardando…" : "Guardar"}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Close
             </Button>
-          )}
-        </div>
+            {!readOnly && (
+              <Button type="submit" variant="default">
+                Save
+              </Button>
+            )}
+          </div>
+        </form>
       </div>
     </div>
   );
 }
 
-/* ============ Página Tender Management ============ */
+/* ========== Página ========== */
 const TenderManagement = () => {
-  const [currentLanguage, setCurrentLanguage] = useState("en");
-  const [filters, setFilters] = useState({ search: "", status: "" });
+  // datos base
+  const { rows: tenders = [], loading: loadingT } = useSheet("tenders", mapTenders);
+  const { rows: items = [], loading: loadingI } = useSheet("tender_items", mapTenderItems);
+  const { rows: pres = [], loading: loadingP } = useSheet("product_presentation_master", mapPresentations);
 
+  // filtros
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+
+  // modales / acciones
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState("view"); // "view" | "edit" | "create"
-  const [selected, setSelected] = useState(null);
+  const [modalTender, setModalTender] = useState(null);
+  const [readOnly, setReadOnly] = useState(false);
 
-  useEffect(() => {
-    const lang = localStorage.getItem("language") || "en";
-    setCurrentLanguage(lang);
-  }, []);
-
-  // Datos base
-  const {
-    rows: tenders = [],
-    loading: l1,
-    error: e1,
-    refetch: refetchTenders,
-  } = useSheet("tenders", mapTenders);
-
-  const {
-    rows: items = [],
-    loading: l2,
-    error: e2,
-  } = useSheet("tender_items", mapTenderItems);
-
-  const {
-    rows: master = [],
-    loading: l3,
-    error: e3,
-  } = useSheet("product_presentation_master", mapPresentationMaster);
-
-  const loading = l1 || l2 || l3;
-  const error = e1 || e2 || e3;
-
-  // Mapa presentation_code -> package_units
-  const packageUnitsMap = useMemo(() => {
+  const presMap = useMemo(() => {
     const m = new Map();
-    (master || []).forEach((r) => {
-      if (r.presentationCode) m.set(r.presentationCode, r.packageUnits || 1);
-    });
+    for (const p of pres) m.set(p.presentationCode, p);
     return m;
-  }, [master]);
+  }, [pres]);
 
-  // Agregados por tender
-  const tenderAgg = useMemo(() => {
-    const acc = new Map();
-    (items || []).forEach((it) => {
-      const pu = packageUnitsMap.get(it.presentationCode) ?? 1;
-      // CLP = qty × (unit_price × package_units)
-      const lineCLP =
-        (it.awardedQty || 0) * (it.unitPrice || 0) * pu;
-
-      const cur = acc.get(it.tenderId) || {
-        productsCount: 0,
-        totalValueClp: 0,
-        stockCoverageDays: null,
-      };
-
-      cur.productsCount += 1;
-      cur.totalValueClp += lineCLP;
-
-      if (
-        typeof it.stockCoverageDays === "number" &&
-        !Number.isNaN(it.stockCoverageDays)
-      ) {
-        cur.stockCoverageDays =
-          cur.stockCoverageDays == null
-            ? it.stockCoverageDays
-            : Math.min(cur.stockCoverageDays, it.stockCoverageDays);
-      }
-
-      acc.set(it.tenderId, cur);
-    });
-    return acc;
-  }, [items, packageUnitsMap]);
-
-  // Merge + filtros
+  // agrupa por tenderId y calcula métricas
   const rows = useMemo(() => {
-    const merged = (tenders || []).map((t) => {
-      const ag = tenderAgg.get(t.tenderId) || {};
-      return {
-        ...t,
-        productsCount: ag.productsCount ?? t.productsCount ?? 0,
-        totalValueClp: ag.totalValueClp ?? t.totalValue ?? 0,
-        stockCoverageDays: ag.stockCoverageDays ?? t.stockCoverage ?? null,
-      };
+    const byId = new Map();
+
+    // base desde tenders
+    for (const t of tenders) {
+      const id = t.tenderId || t.id || "";
+      if (!id) continue;
+      byId.set(id, {
+        tenderId: id,
+        title: t.title || "",
+        status: t.status || "",
+        deliveryDate: t.deliveryDate || "",
+        rawStockCoverage: t.stockCoverage || "", // si lo traes precalculado
+        products: new Set(),
+        totalCLP: 0,
+      });
+    }
+
+    // acumula items -> products + valor
+    for (const it of items) {
+      const id = it.tenderId || "";
+      if (!id || !byId.has(id)) continue;
+      const agg = byId.get(id);
+
+      if (it.presentationCode) agg.products.add(it.presentationCode);
+
+      const pkgUnits = presMap.get(it.presentationCode)?.packageUnits || 1;
+      const line = (Number(it.awardedQty) || 0) * (Number(it.unitPrice) || 0) * pkgUnits;
+      agg.totalCLP += line;
+    }
+
+    // arma arreglo final + filtros
+    let arr = Array.from(byId.values()).map((r) => ({
+      tenderId: r.tenderId,
+      title: r.title,
+      status: r.status,
+      deliveryDate: r.deliveryDate,
+      productsCount: r.products.size,
+      // Stock Coverage “demo”: si no viene de la hoja, lo dejo en 0
+      stockDays: Number.parseInt(String(r.rawStockCoverage).replace(/\D/g, ""), 10) || 0,
+      totalValueCLP: r.totalCLP,
+    }));
+
+    // filtros
+    const s = search.toLowerCase().trim();
+    if (s) {
+      arr = arr.filter(
+        (r) =>
+          r.tenderId.toLowerCase().includes(s) ||
+          r.title.toLowerCase().includes(s)
+      );
+    }
+    if (statusFilter) {
+      arr = arr.filter((r) => String(r.status).toLowerCase() === statusFilter.toLowerCase());
+    }
+
+    // orden por deliveryDate
+    arr.sort((a, b) => {
+      const ta = a.deliveryDate ? new Date(a.deliveryDate).getTime() : 0;
+      const tb = b.deliveryDate ? new Date(b.deliveryDate).getTime() : 0;
+      return ta - tb;
     });
 
-    const s = (filters.search || "").toLowerCase();
-    const st = (filters.status || "").toLowerCase();
+    return arr;
+  }, [tenders, items, presMap, search, statusFilter]);
 
-    return merged.filter((r) => {
-      const matchS =
-        !s ||
-        (r.tenderId || "").toLowerCase().includes(s) ||
-        (r.title || "").toLowerCase().includes(s);
-      const matchSt = !st || (r.status || "").toLowerCase() === st;
-      return matchS && matchSt;
-    });
-  }, [tenders, tenderAgg, filters]);
+  const loading = loadingT || loadingI || loadingP;
 
-  const openModal = (mode, tender = null) => {
-    setModalMode(mode);
-    setSelected(tender);
-    setModalOpen(true);
-  };
-
-  const onSaved = () => {
-    setModalOpen(false);
-    refetchTenders?.(); // si tu hook lo soporta; si no, recarga
-    if (!refetchTenders) window.location.reload();
-  };
-
-  const handleDelete = async (tender) => {
+  /* ===== acciones CRUD contra App Script ===== */
+  const saveTender = async (form) => {
     if (!API_URL) {
       alert("Falta VITE_SHEETS_API_URL");
       return;
     }
-    if (!tender?.tenderId) {
-      alert("No hay Tender ID para borrar");
-      return;
-    }
-    if (!confirm(`¿Eliminar tender ${tender.tenderId}?`)) return;
+    const isEdit = !!modalTender;
+    const payload = {
+      name: "tenders",
+      row: {
+        tender_id: form.tender_id,
+        title: form.title,
+        status: form.status,
+        delivery_date: form.delivery_date,
+      },
+      route: "write",
+      action: isEdit ? "update" : "create",
+    };
 
     try {
-      const res = await fetch(
-        `${API_URL}?route=write&action=delete&name=tenders`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ tender_id: tender.tenderId }),
-        }
-      );
-      const json = await res.json();
-      if (!json?.ok) throw new Error(json?.error || "Error");
-      onSaved();
-    } catch (err) {
-      console.error(err);
-      alert(`Error al eliminar: ${String(err)}`);
+      await fetch(`${API_URL}?route=write&action=${isEdit ? "update" : "create"}&name=tenders`, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload),
+      }).then((r) => r.json());
+
+      setModalOpen(false);
+      setModalTender(null);
+      setReadOnly(false);
+      // recarga simple para refrescar useSheet
+      window.location.reload();
+    } catch (e) {
+      console.error(e);
+      alert("Error saving tender: " + e);
     }
   };
 
-  /* ===================== UI ===================== */
+  const deleteTender = async (t) => {
+    if (!API_URL) {
+      alert("Falta VITE_SHEETS_API_URL");
+      return;
+    }
+    if (!window.confirm(`Delete tender ${t.tenderId}?`)) return;
+
+    const payload = {
+      name: "tenders",
+      where: { tender_id: t.tenderId },
+      route: "write",
+      action: "delete",
+    };
+
+    try {
+      await fetch(`${API_URL}?route=write&action=delete&name=tenders`, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload),
+      }).then((r) => r.json());
+      window.location.reload();
+    } catch (e) {
+      console.error(e);
+      alert("Error deleting tender: " + e);
+    }
+  };
+
+  /* ===== eventos de UI ===== */
+  const openView = (t) => {
+    setModalTender(t);
+    setReadOnly(true);
+    setModalOpen(true);
+  };
+  const openEdit = (t) => {
+    setModalTender(t);
+    setReadOnly(false);
+    setModalOpen(true);
+  };
+  const openNew = () => {
+    setModalTender(null);
+    setReadOnly(false);
+    setModalOpen(true);
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
-
       <main className="pt-16">
         <div className="max-w-7xl mx-auto px-6 py-8">
-          {/* Encabezado + acciones */}
-          <div className="mb-6">
-            <Breadcrumb />
-            <div className="flex items-center justify-between mt-4">
-              <div>
-                <h1 className="text-3xl font-bold text-foreground">
-                  Tender Management
-                </h1>
-                <p className="text-muted-foreground mt-2">
-                  Administra y monitorea licitaciones; totales calculados con
-                  awarded_qty × (unit_price × package_units).
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <Button variant="outline" iconName="Download" iconPosition="left">
-                  Export
-                </Button>
-                <Button
-                  variant="default"
-                  iconName="Plus"
-                  iconPosition="left"
-                  onClick={() => openModal("create")}
-                >
-                  + New Tender
-                </Button>
-              </div>
+          <Breadcrumb />
+          <div className="flex items-center justify-between mt-4 mb-6">
+            <div>
+              <h1 className="text-3xl font-bold text-foreground">Tender Management</h1>
+              <p className="text-muted-foreground mt-2">
+                Manage and oversee all CENABAST tenders from registration through delivery tracking.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" iconName="Download" iconPosition="left" type="button">
+                Export
+              </Button>
+              <Button variant="default" iconName="Plus" iconPosition="left" type="button" onClick={openNew}>
+                New Tender
+              </Button>
             </div>
           </div>
 
-          {/* Filtros (barra superior simple) */}
-          <div className="bg-card rounded-lg border border-border p-4 mb-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-sm text-muted-foreground">Search</label>
-                <input
-                  type="text"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                  placeholder="Tender ID o Título"
-                  value={filters.search}
-                  onChange={(e) =>
-                    setFilters((p) => ({ ...p, search: e.target.value }))
-                  }
-                />
-              </div>
-              <div>
-                <label className="text-sm text-muted-foreground">Status</label>
-                <select
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                  value={filters.status}
-                  onChange={(e) =>
-                    setFilters((p) => ({ ...p, status: e.target.value }))
-                  }
-                >
-                  <option value="">All</option>
-                  <option value="draft">draft</option>
-                  <option value="open">open</option>
-                  <option value="awarded">awarded</option>
-                  <option value="in-progress">in-progress</option>
-                  <option value="delivered">delivered</option>
-                  <option value="closed">closed</option>
-                </select>
-              </div>
-              <div className="flex items-end">
-                <Button
-                  variant="outline"
-                  onClick={() => setFilters({ search: "", status: "" })}
-                  className="w-full"
-                >
+          {/* layout con filtros a la izquierda */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Filtros */}
+            <aside className="lg:col-span-3">
+              <div className="bg-card rounded-lg border border-border p-4">
+                <h3 className="text-sm font-semibold text-foreground mb-3">Filters</h3>
+
+                <div className="mb-4">
+                  <label className="text-xs text-muted-foreground">Search</label>
+                  <input
+                    className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 outline-none focus:ring-2 ring-ring"
+                    placeholder="Tender ID or Title…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <label className="text-xs text-muted-foreground">Status</label>
+                  <select
+                    className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 outline-none focus:ring-2 ring-ring"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                  >
+                    <option value="">All</option>
+                    <option value="Draft">Draft</option>
+                    <option value="Submitted">Submitted</option>
+                    <option value="Rejected">Rejected</option>
+                    <option value="In Delivery">In Delivery</option>
+                    <option value="Awarded">Awarded</option>
+                  </select>
+                </div>
+
+                <Button variant="outline" type="button" onClick={() => { setSearch(""); setStatusFilter(""); }}>
                   Clear Filters
                 </Button>
               </div>
-            </div>
-          </div>
+            </aside>
 
-          {/* Tabla */}
-          <div className="bg-card rounded-lg border border-border shadow-soft overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-muted border-b border-border">
-                  <tr>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-foreground">
-                      Tender ID
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-foreground">
-                      Title
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-foreground">
-                      Products
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-foreground">
-                      Status
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-foreground">
-                      Delivery Date
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-foreground">
-                      Stock Coverage
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-foreground">
-                      Total Value (CLP)
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-foreground">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y divide-border">
-                  {loading && (
-                    <tr>
-                      <td colSpan={8} className="px-6 py-10 text-center">
-                        Loading…
-                      </td>
-                    </tr>
-                  )}
-
-                  {error && !loading && (
-                    <tr>
-                      <td colSpan={8} className="px-6 py-10 text-center text-red-600">
-                        {String(error)}
-                      </td>
-                    </tr>
-                  )}
-
-                  {!loading &&
-                    !error &&
-                    rows.map((t) => (
-                      <tr key={t.tenderId} className="hover:bg-muted/50">
-                        <td className="px-6 py-4">
-                          <div className="font-medium text-foreground">
-                            {t.tenderId || "—"}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="text-foreground">{t.title || "—"}</div>
-                        </td>
-                        <td className="px-6 py-4">{t.productsCount ?? 0}</td>
-                        <td className="px-6 py-4 capitalize">{t.status || "—"}</td>
-                        <td className="px-6 py-4">{fmtDate(t.deliveryDate)}</td>
-                        <td className="px-6 py-4">
-                          {t.stockCoverageDays == null || t.stockCoverageDays === ""
-                            ? "—"
-                            : `${t.stockCoverageDays} ${currentLanguage === "es" ? "días" : "days"}`}
-                        </td>
-                        <td className="px-6 py-4 font-medium text-foreground">
-                          {fmtCLP(t.totalValueClp)}
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              iconName="Eye"
-                              iconPosition="left"
-                              onClick={() => openModal("view", t)}
-                            >
-                              View
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              iconName="Edit"
-                              iconPosition="left"
-                              onClick={() => openModal("edit", t)}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              iconName="Trash2"
-                              iconPosition="left"
-                              onClick={() => handleDelete(t)}
-                            >
-                              Delete
-                            </Button>
-                          </div>
-                        </td>
+            {/* Tabla */}
+            <section className="lg:col-span-9">
+              <div className="bg-card rounded-lg border border-border shadow-soft overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-muted border-b border-border">
+                      <tr>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Tender ID</th>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Title</th>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Products</th>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Status</th>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Delivery Date</th>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Stock Coverage</th>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Total Value</th>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Actions</th>
                       </tr>
-                    ))}
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {loading && (
+                        <tr>
+                          <td className="px-6 py-8 text-sm text-muted-foreground" colSpan={8}>
+                            Loading tenders…
+                          </td>
+                        </tr>
+                      )}
 
-                  {!loading && !error && rows.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className="px-6 py-10 text-center">
-                        <div className="text-muted-foreground">
-                          No tenders found.
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                      {!loading && rows.length === 0 && (
+                        <tr>
+                          <td className="px-6 py-8 text-center text-muted-foreground" colSpan={8}>
+                            No tenders found.
+                          </td>
+                        </tr>
+                      )}
+
+                      {!loading &&
+                        rows.map((r) => (
+                          <tr key={r.tenderId} className="hover:bg-muted/50 transition-colors">
+                            <td className="px-6 py-4">
+                              <div className="text-sm font-medium text-foreground">{r.tenderId}</div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="text-sm text-foreground">{r.title || "—"}</div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="text-sm text-foreground">{r.productsCount}</div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <StatusBadge value={r.status} />
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="text-sm text-foreground">
+                                {r.deliveryDate ? new Date(r.deliveryDate).toLocaleDateString("en-GB") : "—"}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <CoverageBadge days={r.stockDays} />
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="text-sm font-medium text-foreground">{fmtCLP(r.totalValueCLP)}</div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  iconName="Eye"
+                                  iconPosition="left"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openView(r);
+                                  }}
+                                >
+                                  View
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  iconName="Edit"
+                                  iconPosition="left"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openEdit(r);
+                                  }}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  iconName="Trash"
+                                  iconPosition="left"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteTender(r);
+                                  }}
+                                >
+                                  Delete
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
           </div>
-
-          {/* Modal */}
-          <TenderModal
-            open={modalOpen}
-            mode={modalMode}
-            tender={selected}
-            onClose={() => setModalOpen(false)}
-            onSaved={onSaved}
-          />
         </div>
       </main>
+
+      <TenderModal
+        open={modalOpen}
+        onClose={() => {
+          setModalOpen(false);
+          setReadOnly(false);
+          setModalTender(null);
+        }}
+        onSave={saveTender}
+        tender={modalTender}
+        readOnly={readOnly}
+      />
     </div>
   );
 };
 
 export default TenderManagement;
+
