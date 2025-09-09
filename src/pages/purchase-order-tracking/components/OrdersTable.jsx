@@ -13,18 +13,21 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
 
-  // Carga de órdenes
-  const { rows: orders = [], loading, error } = useSheet('purchase_orders', mapPurchaseOrders);
+  // Carga de órdenes (forzamos array para evitar .map sobre algo no-array)
+  const sheetResp = useSheet('purchase_orders', mapPurchaseOrders);
+  const orders = Array.isArray(sheetResp?.rows) ? sheetResp.rows : [];
+  const loading = !!sheetResp?.loading;
+  const error = sheetResp?.error;
 
   const columns = [
-    { key: 'poNumber', labelEn: 'PO Number', labelEs: 'Número PO', sortable: true },
-    { key: 'tenderRef', labelEn: 'Tender Ref', labelEs: 'Ref. Licitación', sortable: true },
-    { key: 'manufacturingStatus', labelEn: 'Manufacturing', labelEs: 'Fabricación', sortable: true },
-    { key: 'qcStatus', labelEn: 'QC Status', labelEs: 'Estado QC', sortable: true },
-    { key: 'transportType', labelEn: 'Transport', labelEs: 'Transporte', sortable: true },
-    { key: 'eta', labelEn: 'ETA', labelEs: 'ETA', sortable: true },
-    { key: 'costUsd', labelEn: 'Cost (USD)', labelEs: 'Costo (USD)', sortable: true },
-    { key: 'actions', labelEn: 'Actions', labelEs: 'Acciones', sortable: false }
+    { key: 'poNumber',             labelEn: 'PO Number',   labelEs: 'Número PO',       sortable: true },
+    { key: 'tenderRef',            labelEn: 'Tender Ref',  labelEs: 'Ref. Licitación', sortable: true },
+    { key: 'manufacturingStatus',  labelEn: 'Manufacturing', labelEs: 'Fabricación',   sortable: true },
+    { key: 'qcStatus',             labelEn: 'QC Status',   labelEs: 'Estado QC',       sortable: true },
+    { key: 'transportType',        labelEn: 'Transport',   labelEs: 'Transporte',      sortable: true },
+    { key: 'eta',                  labelEn: 'ETA',         labelEs: 'ETA',             sortable: true },
+    { key: 'costUsd',              labelEn: 'Cost (USD)',  labelEs: 'Costo (USD)',     sortable: true },
+    { key: 'actions',              labelEn: 'Actions',     labelEs: 'Acciones',        sortable: false }
   ];
 
   const t = (en, es) => (currentLanguage === 'es' ? es : en);
@@ -32,9 +35,16 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
 
   const formatCurrency = (amount, currency) => {
     const num = Number.isFinite(+amount) ? +amount : 0;
-    return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0
-    }).format(num);
+    try {
+      return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
+        style: 'currency',
+        currency,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(num);
+    } catch {
+      return `${currency} ${num.toLocaleString()}`;
+    }
   };
 
   const formatDate = (date) => {
@@ -42,7 +52,9 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
     const d = new Date(date);
     if (Number.isNaN(d.getTime())) return '—';
     return new Intl.DateTimeFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      year: 'numeric', month: 'short', day: 'numeric'
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
     }).format(d);
   };
 
@@ -60,23 +72,27 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
 
   // Filtrado + orden
   const sortedOrders = useMemo(() => {
-    const f = (orders || []).filter((o) => {
+    const list = (Array.isArray(orders) ? orders : []).filter((o) => {
       if (!o) return false;
-      const s = (filters.search || '').toLowerCase();
+
+      // search por PO o Tender
+      const s = (filters?.search || '').toLowerCase().trim();
       if (s) {
-        const po = (o.poNumber || '').toLowerCase();
-        const tr = (o.tenderRef || '').toLowerCase();
+        const po = String(o.poNumber || '').toLowerCase();
+        const tr = String(o.tenderRef || '').toLowerCase();
         if (!po.includes(s) && !tr.includes(s)) return false;
       }
-      if (filters.manufacturingStatus && o.manufacturingStatus !== filters.manufacturingStatus) return false;
-      if (filters.qcStatus && o.qcStatus !== filters.qcStatus) return false;
-      if (filters.transportType && o.transportType !== filters.transportType) return false;
+
+      if (filters?.manufacturingStatus && o.manufacturingStatus !== filters.manufacturingStatus) return false;
+      if (filters?.qcStatus && o.qcStatus !== filters.qcStatus) return false;
+      if (filters?.transportType && o.transportType !== filters.transportType) return false;
+
       return true;
     });
 
-    if (!sortConfig.key) return f;
+    if (!sortConfig?.key) return list;
 
-    return [...f].sort((a, b) => {
+    return [...list].sort((a, b) => {
       let av = a?.[sortConfig.key];
       let bv = b?.[sortConfig.key];
 
@@ -84,6 +100,7 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
         av = av ? new Date(av).getTime() : 0;
         bv = bv ? new Date(bv).getTime() : 0;
       }
+
       if (av < bv) return sortConfig.direction === 'asc' ? -1 : 1;
       if (av > bv) return sortConfig.direction === 'asc' ? 1 : -1;
       return 0;
@@ -109,7 +126,10 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
                       >
                         <span>{getColumnLabel(col)}</span>
                         {sortConfig.key === col.key && (
-                          <Icon name={sortConfig.direction === 'asc' ? 'ChevronUp' : 'ChevronDown'} size={16} />
+                          <Icon
+                            name={sortConfig.direction === 'asc' ? 'ChevronUp' : 'ChevronDown'}
+                            size={16}
+                          />
                         )}
                       </button>
                     ) : (
@@ -121,48 +141,90 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
             </thead>
 
             <tbody className="divide-y divide-border">
-              {sortedOrders.map((order) => (
-                <tr key={order?.id || order?.poNumber || crypto.randomUUID()} className="hover:bg-muted/50 transition-colors duration-200">
-                  <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">{order?.poNumber || '—'}</div>
-                    <div className="text-sm text-muted-foreground">{formatDate(order?.createdDate)}</div>
-                  </td>
+              {sortedOrders.map((order, idx) => {
+                // key estable sin crypto.randomUUID (mejor para SSR y navegadores antiguos)
+                const rowKey =
+                  order?.id ??
+                  (order?.poNumber ? `po:${order.poNumber}` : `row-${idx}`);
 
-                  <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">{order?.tenderRef || '—'}</div>
-                  </td>
+                return (
+                  <tr
+                    key={rowKey}
+                    className="hover:bg-muted/50 transition-colors duration-200"
+                  >
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-foreground">{order?.poNumber || '—'}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {formatDate(order?.createdDate)}
+                      </div>
+                    </td>
 
-                  <td className="px-6 py-4">
-                    <OrderStatusBadge status={order?.manufacturingStatus || ''} type="manufacturing" currentLanguage={currentLanguage} />
-                  </td>
-                  <td className="px-6 py-4">
-                    <OrderStatusBadge status={order?.qcStatus || ''} type="qc" currentLanguage={currentLanguage} />
-                  </td>
-                  <td className="px-6 py-4">
-                    <OrderStatusBadge status={order?.transportType || ''} type="transport" currentLanguage={currentLanguage} />
-                  </td>
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-foreground">{order?.tenderRef || '—'}</div>
+                    </td>
 
-                  <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">{formatDate(order?.eta)}</div>
-                  </td>
+                    <td className="px-6 py-4">
+                      <OrderStatusBadge
+                        status={order?.manufacturingStatus || ''}
+                        type="manufacturing"
+                        currentLanguage={currentLanguage}
+                      />
+                    </td>
 
-                  <td className="px-6 py-4">
-                    <div className="font-medium text-foreground">{formatCurrency(order?.costUsd, 'USD')}</div>
-                    <div className="text-sm text-muted-foreground">{formatCurrency(order?.costClp, 'CLP')}</div>
-                  </td>
+                    <td className="px-6 py-4">
+                      <OrderStatusBadge
+                        status={order?.qcStatus || ''}
+                        type="qc"
+                        currentLanguage={currentLanguage}
+                      />
+                    </td>
 
-                  <td className="px-6 py-4">
-                    <div className="flex items-center space-x-2">
-                      <Button variant="ghost" size="sm" onClick={() => openDetails(order)} iconName="Eye" iconPosition="left">
-                        {t('View', 'Ver')}
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => openDetails(order)} iconName="Edit" iconPosition="left">
-                        {t('Edit', 'Editar')}
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    <td className="px-6 py-4">
+                      <OrderStatusBadge
+                        status={order?.transportType || ''}
+                        type="transport"
+                        currentLanguage={currentLanguage}
+                      />
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-foreground">{formatDate(order?.eta)}</div>
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-foreground">
+                        {formatCurrency(order?.costUsd, 'USD')}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {formatCurrency(order?.costClp, 'CLP')}
+                      </div>
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <div className="flex items-center space-x-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openDetails(order)}
+                          iconName="Eye"
+                          iconPosition="left"
+                        >
+                          {t('View', 'Ver')}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openDetails(order)} // Edit usa el mismo modal
+                          iconName="Edit"
+                          iconPosition="left"
+                        >
+                          {t('Edit', 'Editar')}
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -170,9 +232,14 @@ const OrdersTable = ({ currentLanguage = 'en', filters = {} }) => {
         {sortedOrders.length === 0 && (
           <div className="text-center py-12">
             <Icon name="Package" size={48} className="mx-auto text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium text-foreground mb-2">{t('No orders found', 'No se encontraron órdenes')}</h3>
+            <h3 className="text-lg font-medium text-foreground mb-2">
+              {t('No orders found', 'No se encontraron órdenes')}
+            </h3>
             <p className="text-muted-foreground">
-              {t('Try adjusting the filters to see more results.', 'Intenta ajustar los filtros para ver más resultados.')}
+              {t(
+                'Try adjusting the filters to see more results.',
+                'Intenta ajustar los filtros para ver más resultados.'
+              )}
             </p>
           </div>
         )}
