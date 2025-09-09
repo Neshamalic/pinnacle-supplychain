@@ -1,4 +1,4 @@
-// src/lib/adapters.js
+// src/lib/adapters.js 
 
 /** Utils -------------------------------------------------- */
 const str = (v) => (v == null ? "" : String(v).trim());
@@ -73,7 +73,7 @@ export const mapTenders = (row = {}) => {
  *  TENDER ITEMS (Hoja: "tender_items")
  *  Útil para calcular productsCount y totalValue por tender.
  *  Columnas típicas: tender_number|tender_id, presentation_code,
- *  awarded_qty, unit_price, currency
+ *  awarded_qty, unit_price, currency, (opcional) stock_coverage_days
  * --------------------------------------------------------- */
 export const mapTenderItems = (row = {}) => {
   const tenderId =
@@ -85,6 +85,17 @@ export const mapTenderItems = (row = {}) => {
   const price = toNumber(pick(row, ["unit_price", "price"]));
   const currency = str(pick(row, ["currency", "curr"]) || "USD");
 
+  // opcional: días de cobertura si existe en la hoja
+  const stockCoverageDays = toNumber(
+    pick(row, [
+      "stock_coverage_days",
+      "stock_coverage",
+      "coverage_days",
+      "days_coverage",
+      "coverage",
+    ])
+  );
+
   return {
     tenderId,
     presentationCode: str(
@@ -93,7 +104,27 @@ export const mapTenderItems = (row = {}) => {
     awardedQty: qty,
     unitPrice: price,
     currency,
+    stockCoverageDays: Number.isFinite(stockCoverageDays) ? stockCoverageDays : undefined,
     lineTotal: qty * price,
+    _raw: row,
+  };
+};
+
+/** ---------------------------------------------------------
+ *  MASTER DE PRESENTACIONES (Hoja: "product_presentation_master")
+ *  Necesario para multiplicar por package_units en Total Value:
+ *  awarded_qty × (unit_price × package_units)
+ * --------------------------------------------------------- */
+export const mapPresentationMaster = (row = {}) => {
+  return {
+    presentationCode:
+      str(
+        pick(row, ["presentation_code", "presentationCode", "presentation", "sku", "code"]) ||
+          ""
+      ),
+    productName: str(pick(row, ["product_name", "productName", "name"]) || ""),
+    packageUnits:
+      toNumber(pick(row, ["package_units", "packageUnits", "units_per_package", "units"])) || 1,
     _raw: row,
   };
 };
@@ -141,7 +172,7 @@ export const mapPurchaseOrderItems = (row = {}) => {
     presentationCode: str(
       pick(row, ["presentation_code", "sku", "code"]) || ""
     ),
-    qty: toNumber(pick(row, ["qty", "quantity"])),
+    qty: toNumber(pick(row, ["qty", "quantity"]))),
     unitPrice: toNumber(pick(row, ["unit_price", "price"])),
     lineTotal:
       toNumber(pick(row, ["qty", "quantity"])) *
