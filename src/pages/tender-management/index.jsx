@@ -8,7 +8,11 @@ import Icon from "../../components/AppIcon";
 
 // Datos desde Google Sheets
 import { useSheet } from "../../lib/sheetsApi";
-import { mapTenders, mapTenderItems } from "../../lib/adapters";
+import {
+  mapTenders,
+  mapTenderItems,
+  mapPresentationMaster, // ← usamos el maestro de presentaciones
+} from "../../lib/adapters";
 
 const API_URL = import.meta.env.VITE_SHEETS_API_URL;
 
@@ -416,7 +420,7 @@ const TenderManagement = () => {
   const [editTender, setEditTender] = useState(null);
   const [newOpen, setNewOpen] = useState(false);
 
-  // Trae TENDERS y TENDER_ITEMS
+  // Trae TENDERS, TENDER_ITEMS y el maestro de presentaciones
   const {
     rows: tenders = [],
     loading: loadingTenders,
@@ -430,6 +434,12 @@ const TenderManagement = () => {
     error: errorItems,
   } = useSheet("tender_items", mapTenderItems);
 
+  const {
+    rows: presentationMaster = [],
+    loading: loadingMaster,
+    error: errorMaster,
+  } = useSheet("product_presentation_master", mapPresentationMaster);
+
   useEffect(() => {
     const saved = localStorage.getItem("language") || "en";
     setCurrentLanguage(saved);
@@ -438,7 +448,18 @@ const TenderManagement = () => {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // Índice de ítems por tender_id + agregados
+  // Diccionario: presentation_code => package_units
+  const unitsByPresentation = useMemo(() => {
+    const m = {};
+    (presentationMaster || []).forEach((p) => {
+      const code = p?.presentationCode || p?.presentation_code || "";
+      const units = Number(p?.packageUnits ?? p?.package_units ?? 1);
+      if (code) m[code] = Number.isFinite(units) ? units : 1;
+    });
+    return m;
+  }, [presentationMaster]);
+
+  // Índice de ítems por tender_id + agregados (con package_units)
   const byTender = useMemo(() => {
     const map = new Map();
     (items || []).forEach((it) => {
@@ -457,12 +478,17 @@ const TenderManagement = () => {
         });
       }
       const agg = map.get(tenderId);
+
       // Unicidad por presentation_code
       const pcode = it?.presentationCode || it?.presentation_code || it?.presentation || "";
       if (pcode) agg.productsSet.add(pcode);
 
-      // total value = sum(awarded_qty * unit_price)
-      agg.totalValueClp += (Number.isFinite(awardedQty) ? awardedQty : 0) * (Number.isFinite(unitPrice) ? unitPrice : 0);
+      // *** NUEVO: multiplicamos por package_units del maestro ***
+      const pkgUnits = unitsByPresentation[pcode] ?? 1;
+      const lineValue = (Number.isFinite(awardedQty) ? awardedQty : 0) *
+                        (Number.isFinite(unitPrice) ? unitPrice : 0) *
+                        (Number.isFinite(pkgUnits) ? pkgUnits : 1);
+      agg.totalValueClp += lineValue;
 
       // stock coverage -> tomamos el mínimo disponible (peor caso)
       const days = Number(scDays);
@@ -482,7 +508,7 @@ const TenderManagement = () => {
       };
     }
     return out;
-  }, [items]);
+  }, [items, unitsByPresentation]);
 
   // Enriquecer TENDERS con agregados y aplicar filtros
   const tableRows = useMemo(() => {
@@ -512,8 +538,8 @@ const TenderManagement = () => {
     });
   }, [tenders, byTender, filters]);
 
-  const loading = loadingTenders || loadingItems;
-  const error = errorTenders || errorItems;
+  const loading = loadingTenders || loadingItems || loadingMaster;
+  const error = errorTenders || errorItems || errorMaster;
 
   /* -------- acciones CRUD -------- */
   const handleDelete = async (row) => {
