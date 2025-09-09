@@ -3,241 +3,241 @@ import React, { useMemo, useState } from "react";
 import Icon from "@/components/AppIcon";
 import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
-import { mapImports } from "@/lib/adapters";
-import ImportDetailsModal from "./components/ImportDetailsModal";
+import { mapImports, mapImportItems, _utils } from "@/lib/adapters";
+import ImportDetailsDrawer from "./components/ImportDetailsDrawer";
 
-// ⚠️ Usa el MISMO wrapper/layout que usas en Tenders/Orders para que salga la barra superior.
-// Si ya usas un AppShell global en App.jsx no hace falta envolver aquí.
-import PageHeader from "@/components/PageHeader"; // mismo header que usas en Tenders
+const { toNumber } = _utils;
 
-const fmtClp = (n) =>
-  new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(
-    Number.isFinite(+n) ? +n : 0
+const Badge = ({ children, tone = "neutral" }) => {
+  const tones = {
+    neutral: "bg-muted text-foreground/80",
+    green: "bg-emerald-100 text-emerald-700",
+    yellow: "bg-amber-100 text-amber-700",
+    red: "bg-rose-100 text-rose-700",
+    blue: "bg-sky-100 text-sky-700",
+    gray: "bg-gray-100 text-gray-700",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${tones[tone] || tones.neutral}`}>
+      {children}
+    </span>
   );
-
-const Badge = ({ children, tone = "muted" }) => {
-  const color =
-    tone === "success"
-      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-      : tone === "warning"
-      ? "bg-amber-50 text-amber-700 border-amber-200"
-      : tone === "danger"
-      ? "bg-rose-50 text-rose-700 border-rose-200"
-      : "bg-muted text-foreground/70 border-transparent";
-  return <span className={`px-2 py-0.5 rounded-full text-xs border ${color}`}>{children}</span>;
 };
 
-const toneFrom = (v) => {
-  switch ((v || "").toLowerCase()) {
-    case "approved":
-    case "cleared":
-      return "success";
-    case "in customs":
-    case "pending":
-    case "in progress":
-      return "warning";
-    case "rejected":
-    case "hold":
-      return "danger";
-    default:
-      return "muted";
+const qcTone = (s) => {
+  switch ((s || "").toLowerCase()) {
+    case "approved": return "green";
+    case "in-progress": return "yellow";
+    case "pending": return "red";
+    default: return "gray";
   }
 };
 
+const statusTone = (s) => (s === "warehouse" ? "green" : "blue");
+
 export default function ImportManagement() {
-  const { rows: imports = [], loading, error } = useSheet("imports", mapImports);
+  // ✅ datos desde Google Sheets
+  const { rows: imports = [], loading: l1, error: e1 } = useSheet("imports", mapImports);
+  const { rows: importItems = [], loading: l2, error: e2 } = useSheet("import_items", mapImportItems);
 
-  // filtros simples (puedes ampliarlos)
-  const [transport, setTransport] = useState("all");
-  const [qc, setQc] = useState("all");
-  const [customs, setCustoms] = useState("all");
-  const [q, setQ] = useState("");
-
+  const [filters, setFilters] = useState({ transport: "", qc: "", imp: "" });
   const [selected, setSelected] = useState(null);
-  const [open, setOpen] = useState(false);
 
-  const list = useMemo(() => {
-    let arr = imports || [];
-    if (q) {
-      const s = q.toLowerCase();
-      arr = arr.filter(
-        (r) =>
-          String(r.ociNumber).toLowerCase().includes(s) ||
-          String(r.location || "").toLowerCase().includes(s)
-      );
+  // QC agregado por shipment (si hay algún pending -> pending; si no, si hay in-progress -> in-progress; si no -> approved)
+  const qcByShipment = useMemo(() => {
+    const order = { pending: 0, "in-progress": 1, approved: 2 };
+    const res = {};
+    for (const it of importItems) {
+      const key = it.shipmentId || "";
+      if (!key) continue;
+      const s = (it.qcStatus || "").toLowerCase();
+      if (!res[key]) res[key] = "approved";
+      if (s in order && order[s] < order[res[key]]) res[key] = s;
     }
-    if (transport !== "all") arr = arr.filter((r) => r.transportType === transport);
-    if (qc !== "all") arr = arr.filter((r) => r.qcStatus === qc);
-    if (customs !== "all") arr = arr.filter((r) => r.customs === customs);
-    return arr;
-  }, [imports, q, transport, qc, customs]);
+    return res;
+  }, [importItems]);
 
-  const totals = useMemo(() => {
-    const totalClp = (list || []).reduce((acc, r) => acc + (r.totalCostClp || 0), 0);
-    const pendingQc = (list || []).filter((r) => r.qcStatus === "pending").length;
-    const inCustoms = (list || []).filter((r) => r.customs === "in customs").length;
-    return { totalClp, pendingQc, inCustoms, active: list.length };
-  }, [list]);
+  // Total por shipment (si no viene “totalCostClp”, sumamos CLP de items)
+  const totalByShipment = useMemo(() => {
+    const res = {};
+    for (const it of importItems) {
+      if (!it.shipmentId) continue;
+      if (it.currency === "CLP") {
+        const val = toNumber(it.qty) * toNumber(it.unitPrice);
+        res[it.shipmentId] = (res[it.shipmentId] || 0) + val;
+      }
+    }
+    return res;
+  }, [importItems]);
 
-  const openDetails = (imp) => {
-    setSelected(imp);
-    setOpen(true);
-  };
+  // aplica filtros
+  const rows = useMemo(() => {
+    return (imports || []).filter((r) => {
+      if (!r) return false;
+      if (filters.transport && r.transportType !== filters.transport) return false;
+      if (filters.imp && r.importStatus !== filters.imp) return false;
+      if (filters.qc && (qcByShipment[r.id] || "approved") !== filters.qc) return false;
+      return true;
+    });
+  }, [imports, qcByShipment, filters]);
+
+  // Tarjetas KPI
+  const kpis = useMemo(() => {
+    const active = rows.length;
+    const pendingQC = importItems.filter((x) => (x.qcStatus || "").toLowerCase() === "pending").length;
+    const inWarehouse = rows.filter((r) => r.importStatus === "warehouse").length;
+    const totalClp = rows.reduce((acc, r) => acc + (r.totalCostClp || totalByShipment[r.id] || 0), 0);
+    return { active, pendingQC, inWarehouse, totalClp };
+  }, [rows, importItems, totalByShipment]);
+
+  if (l1 || l2) return <div className="p-6">Loading imports…</div>;
+  if (e1 || e2) return <div className="p-6 text-red-600">Error: {String(e1 || e2)}</div>;
 
   return (
-    <div className="w-full">
-      {/* Header/breadcrumbs: usa el mismo componente que en Tenders para ver la barra superior */}
-      <PageHeader
-        title="Import Management"
-        breadcrumb={[{ label: "Dashboard", href: "/" }, { label: "Import Management" }]}
-        actions={
+    // ⬇️ No usamos contenedores que cubran toda la pantalla, así el layout (barra superior) se ve normal
+    <div className="px-6 py-6 max-w-7xl mx-auto">
+      {/* Encabezado */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-foreground">Import Management</h1>
+            <p className="text-sm text-muted-foreground">
+              Track incoming shipments from arrival through quality control completion
+            </p>
+          </div>
           <div className="flex gap-2">
-            <Button variant="outline"><Icon name="Download" className="mr-2" /> Export Data</Button>
-            <Button variant="default"><Icon name="RefreshCcw" className="mr-2" /> Refresh Data</Button>
+            <Button variant="outline" iconName="Download">Export Data</Button>
+            <Button variant="default" iconName="RefreshCcw">Refresh Data</Button>
           </div>
-        }
-      />
+        </div>
+      </div>
 
-      {/* Tarjetas resumen */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 px-6">
-        <div className="border border-border rounded-xl p-4">
-          <div className="text-sm text-muted-foreground mb-1 flex items-center gap-2">
-            <Icon name="Package" /> Active Imports
+      {/* KPIs */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-sm text-muted-foreground flex items-center gap-2">
+            <Icon name="Package" size={16} /> Active Imports
           </div>
-          <div className="text-2xl font-semibold">{totals.active}</div>
+          <div className="mt-2 text-2xl font-semibold">{kpis.active}</div>
         </div>
-        <div className="border border-border rounded-xl p-4">
-          <div className="text-sm text-muted-foreground mb-1 flex items-center gap-2">
-            <Icon name="Shield" /> Pending QC
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-sm text-muted-foreground flex items-center gap-2">
+            <Icon name="ShieldAlert" size={16} /> Pending QC
           </div>
-          <div className="text-2xl font-semibold">{totals.pendingQc}</div>
+          <div className="mt-2 text-2xl font-semibold">{kpis.pendingQC}</div>
         </div>
-        <div className="border border-border rounded-xl p-4">
-          <div className="text-sm text-muted-foreground mb-1 flex items-center gap-2">
-            <Icon name="ClipboardCheck" /> Customs Clearance
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-sm text-muted-foreground flex items-center gap-2">
+            <Icon name="BadgeCheck" size={16} /> In Warehouse
           </div>
-          <div className="text-2xl font-semibold">{totals.inCustoms}</div>
+          <div className="mt-2 text-2xl font-semibold">{kpis.inWarehouse}</div>
         </div>
-        <div className="border border-border rounded-xl p-4">
-          <div className="text-sm text-muted-foreground mb-1 flex items-center gap-2">
-            <Icon name="DollarSign" /> Total Import Value
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-sm text-muted-foreground flex items-center gap-2">
+            <Icon name="DollarSign" size={16} /> Total Import Value (CLP)
           </div>
-          <div className="text-2xl font-semibold">{fmtClp(totals.totalClp)}</div>
+          <div className="mt-2 text-2xl font-semibold">
+            {new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 })
+              .format(kpis.totalClp)}
+          </div>
         </div>
       </div>
 
       {/* Filtros */}
-      <div className="px-6 mt-6">
-        <div className="bg-card border border-border rounded-xl p-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <input
-              placeholder="Search shipments…"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+      <div className="border border-border rounded-lg p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="text-sm text-muted-foreground">Transport Type</label>
             <select
-              value={transport}
-              onChange={(e) => setTransport(e.target.value)}
-              className="rounded-md border border-border bg-background px-3 py-2"
-            >
-              <option value="all">All Transports</option>
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+              value={filters.transport}
+              onChange={(e) => setFilters((f) => ({ ...f, transport: e.target.value }))}>
+              <option value="">All</option>
               <option value="air">Air</option>
               <option value="sea">Sea</option>
               <option value="land">Land</option>
             </select>
-            <select value={qc} onChange={(e) => setQc(e.target.value)} className="rounded-md border border-border bg-background px-3 py-2">
-              <option value="all">All QC</option>
+          </div>
+          <div>
+            <label className="text-sm text-muted-foreground">QC Status</label>
+            <select
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+              value={filters.qc}
+              onChange={(e) => setFilters((f) => ({ ...f, qc: e.target.value }))}>
+              <option value="">All</option>
               <option value="pending">Pending</option>
-              <option value="in-progress">In Progress</option>
+              <option value="in-progress">In-Progress</option>
               <option value="approved">Approved</option>
             </select>
+          </div>
+          <div>
+            <label className="text-sm text-muted-foreground">Import Status</label>
             <select
-              value={customs}
-              onChange={(e) => setCustoms(e.target.value)}
-              className="rounded-md border border-border bg-background px-3 py-2"
-            >
-              <option value="all">All Customs</option>
-              <option value="in customs">In Customs</option>
-              <option value="cleared">Cleared</option>
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+              value={filters.imp}
+              onChange={(e) => setFilters((f) => ({ ...f, imp: e.target.value }))}>
+              <option value="">All</option>
+              <option value="transit">Transit</option>
+              <option value="warehouse">Warehouse</option>
             </select>
           </div>
         </div>
       </div>
 
       {/* Tabla */}
-      <div className="px-6 mt-6">
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
           <table className="w-full">
-            <thead className="bg-muted/50 border-b border-border">
+            <thead className="bg-muted border-b border-border">
               <tr>
-                <th className="px-4 py-3 text-left text-sm">Shipment ID</th>
-                <th className="px-4 py-3 text-left text-sm">Arrival Date</th>
-                <th className="px-4 py-3 text-left text-sm">Transport</th>
-                <th className="px-4 py-3 text-left text-sm">QC Status</th>
-                <th className="px-4 py-3 text-left text-sm">Customs</th>
-                <th className="px-4 py-3 text-right text-sm">Total Cost</th>
-                <th className="px-4 py-3 text-left text-sm">Location</th>
-                <th className="px-4 py-3 text-left text-sm">Actions</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-muted-foreground">Shipment ID</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-muted-foreground">Arrival Date</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-muted-foreground">Transport</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-muted-foreground">QC Status</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-muted-foreground">Import Status</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-muted-foreground">Total Cost (CLP)</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {loading && (
-                <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
-                    Loading…
-                  </td>
-                </tr>
-              )}
-              {error && (
-                <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-red-600">
-                    Error: {String(error)}
-                  </td>
-                </tr>
-              )}
-              {!loading &&
-                !error &&
-                list.map((r) => (
-                  <tr key={r.id || r.ociNumber}>
-                    <td className="px-4 py-3 font-medium">{r.ociNumber || "—"}</td>
-                    <td className="px-4 py-3">
-                      {r.arrivalDate ? new Date(r.arrivalDate).toLocaleDateString("es-CL") : "—"}
+              {rows.map((r) => {
+                const qcAgg = qcByShipment[r.id] || "approved";
+                const totalClp = r.totalCostClp || totalByShipment[r.id] || 0;
+                return (
+                  <tr key={r.id} className="hover:bg-muted/50">
+                    <td className="px-6 py-4 font-medium">{r.id}</td>
+                    <td className="px-6 py-4">{r.arrivalDate ? new Date(r.arrivalDate).toLocaleDateString("es-CL") : "—"}</td>
+                    <td className="px-6 py-4 capitalize">{r.transportType || "—"}</td>
+                    <td className="px-6 py-4"><Badge tone={qcTone(qcAgg)}>{qcAgg || "—"}</Badge></td>
+                    <td className="px-6 py-4"><Badge tone={statusTone(r.importStatus)}>{r.importStatus || "—"}</Badge></td>
+                    <td className="px-6 py-4">
+                      {new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(totalClp)}
                     </td>
-                    <td className="px-4 py-3 capitalize">{r.transportType || "—"}</td>
-                    <td className="px-4 py-3">
-                      <Badge tone={toneFrom(r.qcStatus)}>{r.qcStatus || "—"}</Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone={toneFrom(r.customs)}>{r.customs || "—"}</Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right">{fmtClp(r.totalCostClp)}</td>
-                    <td className="px-4 py-3">{r.location || "—"}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="sm" onClick={() => openDetails(r)}>
-                          <Icon name="Eye" className="mr-2" /> View Details
-                        </Button>
-                        {/* Si tienes timeline, aquí otro botón */}
+                    <td className="px-6 py-4">
+                      <div className="flex gap-2">
+                        <Button variant="ghost" size="sm" iconName="Eye" onClick={() => setSelected(r)}>View Details</Button>
+                        <Button variant="ghost" size="sm" iconName="Clock">View Timeline</Button>
                       </div>
                     </td>
                   </tr>
-                ))}
-              {!loading && !error && list.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
-                    No imports found.
-                  </td>
-                </tr>
+                );
+              })}
+              {rows.length === 0 && (
+                <tr><td className="px-6 py-8 text-center text-muted-foreground" colSpan={7}>No shipments found.</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Modal detalles */}
-      <ImportDetailsModal imp={selected} isOpen={open} onClose={() => setOpen(false)} />
+      {/* Drawer de detalles */}
+      {selected && (
+        <ImportDetailsDrawer
+          shipment={selected}
+          items={importItems.filter((x) => x.shipmentId === selected.id)}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   );
 }
-
