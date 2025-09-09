@@ -1,363 +1,318 @@
 // src/pages/tender-management/index.jsx
-import React, { useMemo, useState } from "react";
-
-// UI base
-import Header from "../../components/ui/Header";
-import Breadcrumb from "../../components/ui/Breadcrumb";
-import Button from "../../components/ui/Button";
-import Icon from "../../components/AppIcon";
+import React, { useMemo, useState } from 'react';
+import Header from '../../components/ui/Header';
+import Button from '../../components/ui/Button';
+import Icon from '../../components/AppIcon';
 
 // Datos desde Google Sheets
-import { useSheet } from "../../lib/sheetsApi";
-import { mapTenders } from "../../lib/adapters";
+import { useSheet } from '../../lib/sheetsApi';
+import { mapTenders, mapTenderItems } from '../../lib/adapters';
 
-// ---------------------------------------------
-// Helpers formato / números
-// ---------------------------------------------
-const toNumber = (v) => {
-  if (v === null || v === undefined || v === "") return 0;
-  const n = Number(String(v).replace(/[^\d.-]/g, ""));
-  return Number.isFinite(n) ? n : 0;
-};
+const API_URL = import.meta.env.VITE_SHEETS_API_URL;
 
-const fmtDate = (value, locale = "en-US") => {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-};
+// Badge simple para status
+function TenderStatusBadge({ status = '' }) {
+  const s = String(status).toLowerCase();
+  const cls =
+    s === 'awarded' ? 'bg-emerald-100 text-emerald-700' :
+    s === 'in delivery' ? 'bg-amber-100 text-amber-700' :
+    s === 'submitted' ? 'bg-blue-100 text-blue-700' :
+    s === 'rejected' ? 'bg-rose-100 text-rose-700' :
+    'bg-muted text-foreground';
+  return (
+    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${cls}`}>
+      {status || '—'}
+    </span>
+  );
+}
 
-const fmtMoney = (num, locale = "en-US", currency = "CLP") => {
-  const n = Number.isFinite(+num) ? +num : 0;
-  return new Intl.NumberFormat(locale, {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0
-  }).format(n);
-};
+// Modal muy sencillo para crear/editar
+function TenderModal({ isOpen, onClose, onSubmit, initial = {} }) {
+  const [form, setForm] = useState({
+    tender_id: initial.tenderId ?? '',
+    title: initial.title ?? '',
+    status: initial.status ?? '',
+    delivery_date: initial.deliveryDate
+      ? new Date(initial.deliveryDate).toISOString().slice(0,10)
+      : '',
+  });
 
-// ---------------------------------------------
-// Mapeador local para tender_items
-// (como no existe mapTenderItems en adapters.js)
-// ---------------------------------------------
-const mapTenderItemsLocal = (row) => {
-  // Acepta distintos nombres de columnas por seguridad
-  const tenderId =
-    row?.tender_id ??
-    row?.tenderId ??
-    row?.TenderId ??
-    row?.tenderID ??
-    "";
+  if (!isOpen) return null;
 
-  const valueClp =
-    row?.total_value_clp ??
-    row?.total_value ??
-    row?.value_clp ??
-    row?.TotalValueCLP ??
-    "";
-
-  return {
-    tender_id: String(tenderId || ""),
-    total_value_clp: toNumber(valueClp),
+  const change = (e) => {
+    const { name, value } = e.target;
+    setForm((p) => ({ ...p, [name]: value }));
   };
-};
 
-// ---------------------------------------------
-// Página
-// ---------------------------------------------
-const TenderManagement = () => {
-  const [language, setLanguage] = useState(() => localStorage.getItem("language") || "en");
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const submit = async (e) => {
+    e.preventDefault();
+    await onSubmit(form);
+  };
 
-  // Carga de datos
-  const {
-    rows: rawTenders = [],
-    loading: loadingTenders,
-    error: errorTenders
-  } = useSheet("tenders", mapTenders);
+  return (
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/50">
+      <div className="bg-card rounded-lg shadow-modal max-w-lg w-full mx-4 overflow-hidden border border-border">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <h2 className="text-lg font-semibold text-foreground">
+            {initial.tenderId ? 'Edit Tender' : 'New Tender'}
+          </h2>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            <Icon name="X" size={18} />
+          </Button>
+        </div>
 
-  const {
-    rows: rawItems = [],
-    loading: loadingItems,
-    error: errorItems
-  } = useSheet("tender_items", mapTenderItemsLocal);
-
-  const locale = language === "es" ? "es-CL" : "en-US";
-  const t = (en, es) => (language === "es" ? es : en);
-
-  // Agrupar items por tender_id para contar productos y sumar valor
-  const itemsByTender = useMemo(() => {
-    const map = new Map();
-    (Array.isArray(rawItems) ? rawItems : []).forEach((it) => {
-      const key = it?.tender_id || "";
-      if (!key) return;
-      if (!map.has(key)) map.set(key, { count: 0, valueClp: 0 });
-      const agg = map.get(key);
-      agg.count += 1;
-      agg.valueClp += toNumber(it?.total_value_clp);
-    });
-    return map;
-  }, [rawItems]);
-
-  // Inyectar productos y total a cada tender
-  const tenders = useMemo(() => {
-    const src = Array.isArray(rawTenders) ? rawTenders : [];
-    return src.map((tender) => {
-      const id = tender?.tender_id || tender?.id || "";
-      const agg = itemsByTender.get(id) || { count: 0, valueClp: 0 };
-
-      const tenderTotal = Number.isFinite(+tender?.total_value_clp) ? +tender.total_value_clp : null;
-      const totalClp = tenderTotal != null ? tenderTotal : agg.valueClp;
-
-      return {
-        ...tender,
-        _products_count: agg.count,
-        _total_value_clp: totalClp
-      };
-    });
-  }, [rawTenders, itemsByTender]);
-
-  // Métricas
-  const summary = useMemo(() => {
-    const src = Array.isArray(tenders) ? tenders : [];
-    const active = src.filter((t) => (t?.status || "").toLowerCase() !== "awarded").length;
-    const awarded = src.filter((t) => (t?.status || "").toLowerCase() === "awarded").length;
-    const inDelivery = src.filter((t) => (t?.status || "").toLowerCase().includes("delivery")).length;
-    const critical = src.filter((t) => {
-      const d = Number.isFinite(+t?.stock_coverage_days) ? +t.stock_coverage_days : null;
-      return d != null && d <= 15;
-    }).length;
-    return { active, awarded, inDelivery, critical };
-  }, [tenders]);
-
-  // Filtros
-  const filtered = useMemo(() => {
-    const src = Array.isArray(tenders) ? tenders : [];
-    const s = (search || "").toLowerCase();
-
-    return src.filter((row) => {
-      if (s) {
-        const a = (row?.tender_id || "").toLowerCase();
-        const b = (row?.title || "").toLowerCase();
-        if (!a.includes(s) && !b.includes(s)) return false;
-      }
-      if (statusFilter && row?.status !== statusFilter) return false;
-      return true;
-    });
-  }, [tenders, search, statusFilter]);
-
-  // Loading / Error
-  if (loadingTenders || loadingItems) {
-    return (
-      <div className="min-h-screen bg-background">
-        <Header />
-        <main className="pt-16">
-          <div className="max-w-7xl mx-auto px-6 py-10">Loading…</div>
-        </main>
-      </div>
-    );
-  }
-
-  if (errorTenders || errorItems) {
-    return (
-      <div className="min-h-screen bg-background">
-        <Header />
-        <main className="pt-16">
-          <div className="max-w-7xl mx-auto px-6 py-10 text-red-600">
-            {String(errorTenders || errorItems)}
+        <form onSubmit={submit} className="p-4 space-y-4">
+          <div>
+            <label className="text-sm font-medium text-muted-foreground">Tender ID</label>
+            <input
+              name="tender_id"
+              value={form.tender_id}
+              onChange={change}
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+              placeholder="CENABAST-2024-001"
+              required
+            />
           </div>
-        </main>
+
+          <div>
+            <label className="text-sm font-medium text-muted-foreground">Title</label>
+            <input
+              name="title"
+              value={form.title}
+              onChange={change}
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+              placeholder="Medicamentos..."
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Status</label>
+              <select
+                name="status"
+                value={form.status}
+                onChange={change}
+                className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+              >
+                <option value="">—</option>
+                <option value="Draft">Draft</option>
+                <option value="Submitted">Submitted</option>
+                <option value="In Delivery">In Delivery</option>
+                <option value="Awarded">Awarded</option>
+                <option value="Rejected">Rejected</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Delivery Date</label>
+              <input
+                type="date"
+                name="delivery_date"
+                value={form.delivery_date}
+                onChange={change}
+                className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" variant="default">Save</Button>
+          </div>
+        </form>
       </div>
-    );
-  }
+    </div>
+  );
+}
+
+export default function TenderManagementPage() {
+  const [isNewOpen, setIsNewOpen] = useState(false);
+  const [edit, setEdit] = useState(null);
+
+  // 1) Trae "tenders"
+  const { rows: tenders = [], loading: loadingTenders, error: errTenders } =
+    useSheet('tenders', mapTenders);
+
+  // 2) Trae "tender_items" para calcular Products / Total Value
+  const { rows: items = [], loading: loadingItems, error: errItems } =
+    useSheet('tender_items', mapTenderItems);
+
+  // 3) Agrupa por tenderNumber: productos y monto CLP
+  const aggregates = useMemo(() => {
+    const m = {};
+    (items || []).forEach((it) => {
+      const key = it.tenderNumber;
+      if (!key) return;
+      if (!m[key]) m[key] = { products: 0, totalClp: 0 };
+      m[key].products += 1;
+      m[key].totalClp += Number.isFinite(it.lineTotalClp) ? it.lineTotalClp : 0;
+    });
+    return m;
+  }, [items]);
+
+  // 4) Une agregados a los tenders
+  const rows = useMemo(() => {
+    return (tenders || []).map((t) => {
+      const ag = aggregates[t.tenderId] || { products: 0, totalClp: 0 };
+      return { ...t, products: ag.products, totalClp: ag.totalClp };
+    });
+  }, [tenders, aggregates]);
+
+  const fmtCLP = (n) =>
+    new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
+      .format(Number(n || 0));
+
+  const fmtDate = (d) => {
+    if (!d) return '—';
+    const dt = new Date(d);
+    if (Number.isNaN(dt.getTime())) return '—';
+    return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(dt);
+    // cambia locale si quieres mostrar en ES
+  };
+
+  // CRUD helpers
+  const createTender = async (payload) => {
+    if (!API_URL) return alert('Falta VITE_SHEETS_API_URL');
+    const res = await fetch(`${API_URL}?route=write&action=create&name=tenders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Create failed');
+    setIsNewOpen(false);
+    window.location.reload();
+  };
+
+  const updateTender = async (payload) => {
+    if (!API_URL) return alert('Falta VITE_SHEETS_API_URL');
+    const res = await fetch(`${API_URL}?route=write&action=update&name=tenders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      // IMPORTANTE: aquí enviamos la KEY configurada en Apps Script
+      body: JSON.stringify({ tender_id: edit.tenderId, ...payload }),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Update failed');
+    setEdit(null);
+    window.location.reload();
+  };
+
+  const deleteTender = async (t) => {
+    if (!API_URL) return alert('Falta VITE_SHEETS_API_URL');
+    if (!confirm(`Delete tender ${t.tenderId}?`)) return;
+    const res = await fetch(`${API_URL}?route=write&action=delete&name=tenders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ tender_id: t.tenderId }), // coincide con KEYS.tenders
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Delete failed');
+    window.location.reload();
+  };
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Barra superior de toda la app */}
       <Header />
 
       <main className="pt-16">
-        <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="max-w-[1200px] mx-auto px-6 py-8">
           {/* Encabezado de página */}
-          <div className="mb-6">
-            <Breadcrumb />
-            <div className="flex items-center justify-between mt-4">
-              <div>
-                <h1 className="text-3xl font-bold text-foreground">
-                  {t("Tender Management", "Tender Management")}
-                </h1>
-                <p className="text-muted-foreground mt-2">
-                  {t(
-                    "Manage and oversee all CENABAST tenders from registration through delivery tracking.",
-                    "Manage and oversee all CENABAST tenders from registration through delivery tracking."
-                  )}
-                </p>
-              </div>
-              <div className="flex items-center space-x-3">
-                <Button type="button" variant="outline" iconName="Download" iconPosition="left">
-                  {t("Export", "Export")}
-                </Button>
-                <Button type="button" variant="default" iconName="Plus" iconPosition="left">
-                  {t("New Tender", "New Tender")}
-                </Button>
-              </div>
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h1 className="text-3xl font-bold text-foreground">Tender Management</h1>
+              <p className="text-muted-foreground">
+                Manage and oversee all CENABAST tenders from registration through delivery tracking.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" iconName="Download" iconPosition="left">Export</Button>
+              <Button variant="default" iconName="Plus" iconPosition="left" onClick={() => setIsNewOpen(true)}>
+                New Tender
+              </Button>
             </div>
           </div>
 
-          {/* Tarjetas resumen */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-            <div className="bg-card rounded-lg border border-border p-4">
-              <div className="text-sm text-muted-foreground">{t("Active", "Active")}</div>
-              <div className="text-3xl font-bold">{summary.active}</div>
-            </div>
-            <div className="bg-card rounded-lg border border-border p-4">
-              <div className="text-sm text-muted-foreground">{t("Awarded", "Awarded")}</div>
-              <div className="text-3xl font-bold">{summary.awarded}</div>
-            </div>
-            <div className="bg-card rounded-lg border border-border p-4">
-              <div className="text-sm text-muted-foreground">{t("In Delivery", "In Delivery")}</div>
-              <div className="text-3xl font-bold">{summary.inDelivery}</div>
-            </div>
-            <div className="bg-card rounded-lg border border-border p-4">
-              <div className="text-sm text-muted-foreground">{t("Critical", "Critical")}</div>
-              <div className="text-3xl font-bold">{summary.critical}</div>
-            </div>
-          </div>
-
-          {/* Layout: filtros + tabla */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            {/* Sidebar de filtros */}
-            <aside className="md:col-span-1 space-y-6">
-              <div className="bg-card rounded-lg border border-border p-4">
-                <h3 className="text-sm font-semibold text-foreground mb-3">{t("Filters", "Filters")}</h3>
-
-                <label className="text-xs font-medium text-muted-foreground">{t("Search", "Search")}</label>
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t("Tender ID or Title…", "Tender ID or Title…")}
-                  className="mt-1 mb-4 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                />
-
-                <label className="text-xs font-medium text-muted-foreground">{t("Status", "Status")}</label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:ring-2 ring-ring"
-                >
-                  <option value="">{t("All", "All")}</option>
-                  {Array.from(
-                    new Set((Array.isArray(tenders) ? tenders : []).map((t) => t?.status).filter(Boolean))
-                  ).map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
+          {/* Tabla */}
+          <div className="bg-card rounded-lg border border-border shadow-soft overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-muted border-b border-border">
+                  <tr>
+                    <th className="px-6 py-4 text-left text-sm font-medium">Tender ID</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium">Title</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium">Products</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium">Status</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium">Delivery Date</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium">Stock Coverage</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium">Total Value</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {(rows || []).map((t) => (
+                    <tr key={t.tenderId || t.id}>
+                      <td className="px-6 py-4">{t.tenderId || '—'}</td>
+                      <td className="px-6 py-4">{t.title || '—'}</td>
+                      <td className="px-6 py-4">{t.products ?? 0}</td>
+                      <td className="px-6 py-4"><TenderStatusBadge status={t.status} /></td>
+                      <td className="px-6 py-4">{fmtDate(t.deliveryDate)}</td>
+                      <td className="px-6 py-4">
+                        {Number.isFinite(t.stockCoverageDays) ? (
+                          <span className="inline-flex items-center gap-2">
+                            <Icon name="Shield" size={14} /> {t.stockCoverageDays} days
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="px-6 py-4">{fmtCLP(t.totalClp)}</td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          <Button variant="ghost" size="sm" iconName="Eye" onClick={() => setEdit(t)}>View</Button>
+                          <Button variant="ghost" size="sm" iconName="Edit" onClick={() => setEdit(t)}>Edit</Button>
+                          <Button variant="ghost" size="sm" iconName="Trash" onClick={() => deleteTender(t)}>Delete</Button>
+                        </div>
+                      </td>
+                    </tr>
                   ))}
-                </select>
-              </div>
 
-              {/* Marcos listos para más filtros */}
-              <div className="bg-card rounded-lg border border-border p-4">
-                <h3 className="text-sm font-semibold text-foreground mb-2">{t("Product Category", "Product Category")}</h3>
-                <p className="text-xs text-muted-foreground">
-                  {t("Coming soon", "Próximamente")}
-                </p>
-              </div>
+                  {rows.length === 0 && !(loadingTenders || loadingItems) && (
+                    <tr>
+                      <td colSpan={8} className="px-6 py-10 text-center text-muted-foreground">
+                        No tenders found.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
 
-              <div className="bg-card rounded-lg border border-border p-4">
-                <h3 className="text-sm font-semibold text-foreground mb-2">{t("Contract Period", "Contract Period")}</h3>
-                <p className="text-xs text-muted-foreground">
-                  {t("Coming soon", "Próximamente")}
-                </p>
+            {(loadingTenders || loadingItems) && (
+              <div className="px-6 py-4 text-sm text-muted-foreground">Loading…</div>
+            )}
+            {(errTenders || errItems) && (
+              <div className="px-6 py-4 text-sm text-red-600">
+                Error: {String(errTenders || errItems)}
               </div>
-            </aside>
-
-            {/* Tabla */}
-            <section className="md:col-span-3">
-              <div className="bg-card rounded-lg border border-border shadow-soft overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-muted border-b border-border">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-sm font-medium text-foreground">{t("Tender ID", "Tender ID")}</th>
-                        <th className="px-6 py-3 text-left text-sm font-medium text-foreground">{t("Title", "Title")}</th>
-                        <th className="px-6 py-3 text-left text-sm font-medium text-foreground">{t("Products", "Products")}</th>
-                        <th className="px-6 py-3 text-left text-sm font-medium text-foreground">{t("Status", "Status")}</th>
-                        <th className="px-6 py-3 text-left text-sm font-medium text-foreground">{t("Delivery Date", "Delivery Date")}</th>
-                        <th className="px-6 py-3 text-left text-sm font-medium text-foreground">{t("Stock Coverage", "Stock Coverage")}</th>
-                        <th className="px-6 py-3 text-left text-sm font-medium text-foreground">{t("Total Value", "Total Value")}</th>
-                        <th className="px-6 py-3 text-left text-sm font-medium text-foreground">{t("Actions", "Actions")}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {(Array.isArray(filtered) ? filtered : []).map((row) => (
-                        <tr key={row?.tender_id || row?.id || crypto.randomUUID()} className="hover:bg-muted/50">
-                          <td className="px-6 py-4">
-                            <div className="font-medium text-foreground">{row?.tender_id || "—"}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="font-medium text-foreground">{row?.title || "—"}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="font-medium text-foreground">{row?._products_count ?? 0}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className="text-sm">{row?.status || "—"}</span>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="font-medium text-foreground">{fmtDate(row?.delivery_date, locale)}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            {Number.isFinite(+row?.stock_coverage_days) ? (
-                              <div className="inline-flex items-center px-2 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium">
-                                {+row.stock_coverage_days} {t("days", "days")}
-                              </div>
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="font-medium text-foreground">
-                              {row?._total_value_clp != null ? fmtMoney(row._total_value_clp, locale, "CLP") : "—"}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center space-x-2">
-                              <Button variant="ghost" size="sm" iconName="Pencil" iconPosition="left">
-                                {t("Edit", "Edit")}
-                              </Button>
-                              <Button variant="ghost" size="sm" iconName="Trash2" iconPosition="left">
-                                {t("Delete", "Delete")}
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {(Array.isArray(filtered) ? filtered.length : 0) === 0 && (
-                  <div className="text-center py-12">
-                    <Icon name="Package" size={48} className="mx-auto text-muted-foreground mb-4" />
-                    <h3 className="text-lg font-medium text-foreground mb-2">
-                      {t("No tenders found", "No tenders found")}
-                    </h3>
-                    <p className="text-muted-foreground">
-                      {t("Try adjusting the filters to see more results.", "Try adjusting the filters to see more results.")}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </section>
+            )}
           </div>
         </div>
       </main>
+
+      {/* Modales */}
+      <TenderModal
+        isOpen={isNewOpen}
+        onClose={() => setIsNewOpen(false)}
+        onSubmit={createTender}
+      />
+      <TenderModal
+        isOpen={!!edit}
+        onClose={() => setEdit(null)}
+        initial={edit || {}}
+        onSubmit={updateTender}
+      />
     </div>
   );
-};
-
-export default TenderManagement;
+}
 
