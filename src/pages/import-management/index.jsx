@@ -1,6 +1,6 @@
 // src/pages/import-management/index.jsx
 import React, { useMemo, useState } from "react";
-import Header from '../../components/ui/Header';               // ⬅️ agrega el Header
+import Header from "@/components/ui/Header";               // ⬅️ agrega el Header
 import Icon from "@/components/AppIcon";
 import Button from "@/components/ui/Button";
 
