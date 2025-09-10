@@ -1,12 +1,12 @@
 // src/lib/adapters.js
 
-/** ========== Utils ======================================================= */
+/** ===================== Utils ===================== */
 const str = (v) => (v == null ? "" : String(v).trim());
 
 const toNumber = (v) => {
   if (v == null || v === "") return 0;
-  if (typeof v === "number") return v;
-  // Soporta "1.234,56" (EU) y "1,234.56" (US)
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  // Soporta "1.234,56" o "1,234.56"
   const s = String(v).replace(/\./g, "").replace(/,/g, ".");
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : 0;
@@ -27,7 +27,7 @@ const pick = (row, keys) => {
   return undefined;
 };
 
-/** ========== TENDERS ===================================================== */
+/** ===================== TENDERS ===================== */
 export const mapTenders = (row = {}) => {
   const tenderId = str(pick(row, ["tender_id", "tender_number", "id", "tender"]));
   return {
@@ -37,6 +37,7 @@ export const mapTenders = (row = {}) => {
     status: str(pick(row, ["status", "tender_status"]) || "").toLowerCase(),
     buyer: str(pick(row, ["buyer", "organization", "org", "customer"]) || ""),
     deliveryDate: toDateISO(pick(row, ["delivery_date", "delivery", "eta", "due_date"])),
+    // Métricas opcionales (si no vienen, se calculan en el front con tender_items)
     productsCount: toNumber(pick(row, ["products_count", "items_count", "n_items"])),
     totalValue: toNumber(pick(row, ["total_value", "total_usd"])),
     stockCoverage: toNumber(pick(row, ["stock_coverage", "coverage"])),
@@ -44,12 +45,14 @@ export const mapTenders = (row = {}) => {
   };
 };
 
-/** ========== TENDER ITEMS =============================================== */
+/** ================ TENDER ITEMS ===================== */
+/* Columnas típicas: tender_number|tender_id, presentation_code,
+   awarded_qty, unit_price, currency, (opt) stock_coverage_days */
 export const mapTenderItems = (row = {}) => {
   const tenderId = str(pick(row, ["tender_number", "tender_id", "tender"]));
   const qty = toNumber(pick(row, ["awarded_qty", "awarded_quantity", "qty", "quantity"]));
   const price = toNumber(pick(row, ["unit_price", "price"]));
-  const currency = str(pick(row, ["currency", "curr"]) || "USD");
+  const currency = str(pick(row, ["currency", "curr"]) || "USD").toUpperCase();
 
   const sc = pick(row, [
     "stock_coverage_days",
@@ -72,7 +75,7 @@ export const mapTenderItems = (row = {}) => {
   };
 };
 
-/** ========== PRODUCT PRESENTATION MASTER ================================ */
+/** ===== PRODUCT PRESENTATION MASTER (enrichment) ===== */
 export const mapPresentationMaster = (row = {}) => {
   return {
     presentationCode: str(
@@ -85,7 +88,7 @@ export const mapPresentationMaster = (row = {}) => {
   };
 };
 
-/** ========== PURCHASE ORDERS ============================================ */
+/** ================ PURCHASE ORDERS ================== */
 export const mapPurchaseOrders = (row = {}) => {
   const poNumber = str(pick(row, ["po_number", "po", "id", "poNumber"]));
   return {
@@ -105,26 +108,34 @@ export const mapPurchaseOrders = (row = {}) => {
   };
 };
 
+/** ============ PURCHASE ORDER ITEMS (líneas) ========== */
+/* Acepta ordered_qty | qty para la cantidad pedida.
+   Permite estado por línea (manufacturing_status) opcional. */
 export const mapPurchaseOrderItems = (row = {}) => {
-  const qty = toNumber(pick(row, ["qty", "quantity"]));
+  const ordered = toNumber(pick(row, ["ordered_qty", "qty", "quantity"]));
   const price = toNumber(pick(row, ["unit_price", "price"]));
   return {
-    poNumber: str(pick(row, ["po_number", "po", "poNumber"])),
+    poNumber: str(pick(row, ["po_number", "po", "poNumber"]) || ""),
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
-    qty,
+    qty: ordered,
     unitPrice: price,
-    lineTotal: qty * price,
+    itemManufacturingStatus: str(
+      pick(row, ["manufacturing_status", "mfg_status", "status"]) || ""
+    ).toLowerCase(),
+    lineTotal: ordered * price,
     _raw: row,
   };
 };
 
-/** ========== IMPORTS (shipments) ======================================== */
+/** ===================== IMPORTS ====================== */
+/* import_status reemplaza a customs_status. Normalizamos:
+   - "in customs" -> "transit"
+   - "cleared"    -> "warehouse" */
 export const mapImports = (row = {}) => {
   const shipmentId = str(pick(row, ["shipment_id", "shipment", "shipmentId", "id"]) || "");
   const oci = str(pick(row, ["oci_number", "oci"]) || "");
   const po = str(pick(row, ["po_number", "po"]) || "");
 
-  // import_status sustituye customs_status
   let importStatus = str(pick(row, ["import_status", "customs_status"]) || "").toLowerCase();
   if (importStatus === "in customs") importStatus = "transit";
   if (importStatus === "cleared") importStatus = "warehouse";
@@ -136,17 +147,18 @@ export const mapImports = (row = {}) => {
     poNumber: po,
     transportType: str(pick(row, ["transport_type", "transport", "mode"]) || "").toLowerCase(),
     eta: toDateISO(pick(row, ["eta", "arrival_date", "arrival"])),
-    importStatus, // 'transit' | 'warehouse' | ''
-    totalCostUsd: toNumber(pick(row, ["total_cost_usd", "cif_cost_usd", "cost_usd"])),
+    importStatus, // 'transit' | 'warehouse'
+    // Costo CIF en USD (alias)
+    totalCostUsd: toNumber(pick(row, ["cif_cost_usd", "total_cost_usd", "cost_usd"])),
     _raw: row,
   };
 };
 
-/** Items del import: NECESARIO po_number para cruzar con la PO */
+/** ================== IMPORT ITEMS ==================== */
+/* Por cada OCI: items con lotes, qty y qc_status por lote. */
 export const mapImportItems = (row = {}) => {
   return {
-    ociNumber: str(pick(row, ["oci_number", "oci"])),
-    poNumber: str(pick(row, ["po_number", "po"])), // ⬅️ clave para vincular con la PO
+    ociNumber: str(pick(row, ["oci_number", "oci"]) || ""),
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
     lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
     qty: toNumber(pick(row, ["qty", "quantity"])),
@@ -157,7 +169,7 @@ export const mapImportItems = (row = {}) => {
   };
 };
 
-/** ========== DEMAND ====================================================== */
+/** ====================== DEMAND ====================== */
 export const mapDemand = (row = {}) => {
   return {
     monthOfSupply: str(pick(row, ["month_of_supply", "month"]) || ""),
@@ -168,12 +180,12 @@ export const mapDemand = (row = {}) => {
   };
 };
 
-/** ========== COMMUNICATIONS ============================================= */
+/** ================== COMMUNICATIONS ================= */
 export const mapCommunications = (row = {}) => {
   return {
     id: str(pick(row, ["id", "comm_id"]) || ""),
     createdDate: toDateISO(pick(row, ["created_date", "date", "created"])),
-    type: str(pick(row, ["type", "channel"]) || "").toLowerCase(),
+    type: str(pick(row, ["type", "channel"]) || "").toLowerCase(), // email/phone/whatsapp/etc
     subject: str(pick(row, ["subject", "title"]) || ""),
     participants: str(pick(row, ["participants", "from_to", "people"]) || ""),
     content: str(pick(row, ["content", "body", "text"]) || ""),
@@ -184,5 +196,5 @@ export const mapCommunications = (row = {}) => {
   };
 };
 
-/** ========== Export utils =============================================== */
+/** ================ Export utils ====================== */
 export const _utils = { str, toNumber, toDateISO, pick };
