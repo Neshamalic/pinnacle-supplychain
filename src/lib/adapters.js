@@ -123,15 +123,26 @@ export const mapImports = (row = {}) => {
     poNumber: po,
     transportType: str(pick(row, ["transport_type", "transport", "mode"]) || "").toLowerCase(),
     eta: toDateISO(pick(row, ["eta", "arrival_date", "arrival"])),
-    importStatus,                          // 'transit' | 'warehouse'
-    // costes opcionales; la vista sumará desde import_items si no vienen
-    totalCostUsd: toNumber(pick(row, ["total_cost_usd", "cif_cost_usd"])),
+    importStatus, // 'transit' | 'warehouse'
+    // CIF / totales en USD (admite varias columnas posibles)
+    totalCostUsd: toNumber(
+      pick(row, [
+        "cif_cost_usd",
+        "cif_usd",
+        "total_cost_usd",
+        "total_usd",
+        "cost_usd",
+        "amount_usd",
+      ])
+    ),
     _raw: row,
   };
 };
 
 export const mapImportItems = (row = {}) => {
   return {
+    // 👇 añadido: poNumber es imprescindible para cruzar importaciones con la PO
+    poNumber: str(pick(row, ["po_number", "po"]) || ""),
     ociNumber: str(pick(row, ["oci_number", "oci"])),
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
     lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
