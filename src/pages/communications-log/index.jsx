@@ -2,7 +2,7 @@
 import React, { useMemo, useState } from "react";
 import { useSheet } from "@/lib/sheetsApi.js";
 import { mapCommunications } from "@/lib/adapters.js";
-import CommTimeline from "./components/CommTimeline";
+import CommunicationTimeline from "./components/CommunicationTimeline";
 import Icon from "@/components/AppIcon";
 
 const CommunicationsPage = () => {
@@ -133,7 +133,7 @@ const CommunicationsPage = () => {
           {error && (
             <div className="p-6 text-red-600">Error: {String(error)}</div>
           )}
-          {!loading && !error && current && <CommTimeline thread={current} />}
+          {!loading && !error && current && <CommunicationTimeline thread={current} />}
           {!loading && !error && !current && (
             <div className="p-6 text-muted-foreground">
               Select a thread on the left.
