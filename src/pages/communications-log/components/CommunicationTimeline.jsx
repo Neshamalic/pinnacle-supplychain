@@ -1,4 +1,4 @@
-// src/pages/communications/components/CommTimeline.jsx
+// src/pages/communications/components/CommunicationTimeline.jsx
 import React from "react";
 import Icon from "@/components/AppIcon";
 
@@ -24,7 +24,7 @@ const badge = (type) => {
   return { label: t || "Note", cls: "bg-muted text-foreground" };
 };
 
-const CommTimeline = ({ thread }) => {
+const CommunicationTimeline = ({ thread }) => {
   const items = thread?.items ?? [];
   return (
     <div className="p-6">
@@ -88,4 +88,4 @@ const CommTimeline = ({ thread }) => {
   );
 };
 
-export default CommTimeline;
+export default CommunicationTimeline;
