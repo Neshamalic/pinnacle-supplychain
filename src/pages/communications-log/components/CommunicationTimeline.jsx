@@ -1,91 +1,185 @@
-// src/pages/communications/components/CommunicationTimeline.jsx
-import React from "react";
-import Icon from "@/components/AppIcon";
+import React, { useMemo, useState } from "react";
+import { useSheet, writeRow } from "@/lib/sheetsApi";
+import { mapCommunications } from "@/lib/adapters";
+import NewCommunicationModal from "./components/NewCommunicationModal";
 
-const formatDate = (iso) => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(d);
-};
+// Agrupar por día (YYYY-MM-DD)
+function groupByDate(items) {
+  const by = {};
+  for (const it of items) {
+    const d = it.createdDate?.slice(0, 10) || "unknown";
+    if (!by[d]) by[d] = [];
+    by[d].push(it);
+  }
+  // ordenar días desc
+  return Object.entries(by)
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .map(([day, arr]) => ({ day, items: arr }));
+}
 
-const badge = (type) => {
-  const t = String(type || "").toLowerCase();
-  if (t === "email") return { label: "Email", cls: "bg-blue-100 text-blue-700" };
-  if (t === "phone" || t === "call")
-    return { label: "Call", cls: "bg-purple-100 text-purple-700" };
-  if (t === "whatsapp")
-    return { label: "WhatsApp", cls: "bg-green-100 text-green-700" };
-  if (t === "meeting")
-    return { label: "Meeting", cls: "bg-orange-100 text-orange-700" };
-  return { label: t || "Note", cls: "bg-muted text-foreground" };
-};
-
-const CommunicationTimeline = ({ thread }) => {
-  const items = thread?.items ?? [];
+function DayHeader({ day }) {
+  const d = new Date(day);
+  const nice = isNaN(d) ? day : d.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   return (
-    <div className="p-6">
-      <div className="mb-4">
-        <div className="text-lg font-semibold">{thread?.title}</div>
-        <div className="text-sm text-muted-foreground">
-          {items.length} message{items.length === 1 ? "" : "s"}
+    <div className="text-sm font-semibold text-muted-foreground mt-8 mb-2">
+      {nice}
+    </div>
+  );
+}
+
+function CommunicationCard({ c }) {
+  const icon = {
+    email: "✉️",
+    call: "📞",
+    meeting: "👥",
+    whatsapp: "💬",
+    note: "📝",
+  }[c.type] || "🗒️";
+
+  const time = c.createdDate
+    ? new Date(c.createdDate).toLocaleString()
+    : "";
+
+  const linked = c.linked_type && c.linked_id
+    ? `${c.linked_type.toUpperCase()}: ${c.linked_id}`
+    : "";
+
+  return (
+    <div className="border rounded-lg p-4 bg-card hover:bg-accent/40 transition">
+      <div className="flex items-start gap-3">
+        <div className="text-xl">{icon}</div>
+        <div className="flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-medium text-foreground">{c.subject || "(sin asunto)"}</div>
+            <div className="text-xs text-muted-foreground">{time}</div>
+          </div>
+          {linked && (
+            <div className="text-xs mt-1 text-muted-foreground">{linked}</div>
+          )}
+          {c.preview && (
+            <div className="text-sm mt-2 text-muted-foreground line-clamp-2">{c.preview}</div>
+          )}
+          {!c.preview && c.content && (
+            <div className="text-sm mt-2 text-muted-foreground line-clamp-2">{c.content}</div>
+          )}
+          {c.participants && (
+            <div className="text-xs mt-2 text-muted-foreground">
+              Participants: {c.participants}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function CommunicationTimeline() {
+  const { rows: comms, loading, error, reload } = useSheet("communications", mapCommunications);
+  const [q, setQ] = useState("");
+  const [type, setType] = useState("all");
+  const [isOpen, setIsOpen] = useState(false);
+
+  const filtered = useMemo(() => {
+    let f = comms || [];
+    if (type !== "all") {
+      f = f.filter((c) => (c.type || "").toLowerCase() === type);
+    }
+    if (q.trim()) {
+      const s = q.trim().toLowerCase();
+      f = f.filter(
+        (c) =>
+          (c.subject || "").toLowerCase().includes(s) ||
+          (c.content || "").toLowerCase().includes(s) ||
+          (c.participants || "").toLowerCase().includes(s) ||
+          (c.linked_id || "").toLowerCase().includes(s)
+      );
+    }
+    // orden recientemente primero
+    return [...f].sort((a, b) => (a.createdDate < b.createdDate ? 1 : -1));
+  }, [comms, q, type]);
+
+  const grouped = useMemo(() => groupByDate(filtered), [filtered]);
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm text-muted-foreground">Dashboard › Communications Log</div>
+          <h1 className="text-2xl font-semibold">Communications Timeline</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            className="px-3 py-2 text-sm rounded-md border bg-background hover:bg-accent"
+            onClick={reload}
+          >
+            Refresh Data
+          </button>
+          <button
+            className="px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:opacity-90"
+            onClick={() => setIsOpen(true)}
+          >
+            + New Communication
+          </button>
         </div>
       </div>
 
-      <ol className="relative ml-4 border-s border-border">
-        {items.map((m, i) => {
-          const b = badge(m.type);
-          return (
-            <li key={i} className="mb-6 ms-6">
-              <span className="absolute -start-3 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                <Icon name="MessageSquare" size={14} />
-              </span>
+      {/* Filtros */}
+      <div className="flex items-center gap-3">
+        <input
+          className="w-full md:w-96 px-3 py-2 border rounded-md bg-background"
+          placeholder="Search communications…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <select
+          className="px-3 py-2 border rounded-md bg-background"
+          value={type}
+          onChange={(e) => setType(e.target.value)}
+        >
+          <option value="all">All types</option>
+          <option value="email">Email</option>
+          <option value="call">Call</option>
+          <option value="meeting">Meeting</option>
+          <option value="whatsapp">WhatsApp</option>
+          <option value="note">Note</option>
+        </select>
+      </div>
 
-              <div className="rounded-lg border border-border bg-background p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium">
-                    {m.subject || "(no subject)"}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatDate(m.createdDate)}
-                  </div>
-                </div>
+      {/* Lista */}
+      {loading && <div>Loading…</div>}
+      {error && <div className="text-red-600">Error: {String(error)}</div>}
 
-                {m.participants && (
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {m.participants}
-                  </div>
-                )}
+      {!loading && !error && grouped.length === 0 && (
+        <div className="text-muted-foreground">No communications found.</div>
+      )}
 
-                <div className="mt-3 whitespace-pre-wrap text-sm">
-                  {m.content || m.preview || "(no content)"}
-                </div>
-
-                <div className="mt-3">
-                  <span
-                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${b.cls}`}
-                  >
-                    {b.label}
-                  </span>
-                </div>
+      {!loading && !error && grouped.length > 0 && (
+        <div className="space-y-6">
+          {grouped.map(({ day, items }) => (
+            <div key={day}>
+              <DayHeader day={day} />
+              <div className="space-y-3">
+                {items.map((c) => (
+                  <CommunicationCard key={`${c.id}-${c.createdDate}`} c={c} />
+                ))}
               </div>
-            </li>
-          );
-        })}
-
-        {items.length === 0 && (
-          <li className="ms-6">
-            <div className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
-              No communications in this thread.
             </div>
-          </li>
-        )}
-      </ol>
+          ))}
+        </div>
+      )}
+
+      {/* Modal crear */}
+      {isOpen && (
+        <NewCommunicationModal
+          onClose={() => setIsOpen(false)}
+          onSaved={() => {
+            setIsOpen(false);
+            reload();
+          }}
+        />
+      )}
     </div>
   );
-};
+}
 
-export default CommunicationTimeline;
