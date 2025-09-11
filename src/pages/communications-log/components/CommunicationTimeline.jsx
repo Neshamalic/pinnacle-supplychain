@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
-import { useSheet, writeRow } from "@/lib/sheetsApi";
+import { useSheet } from "@/lib/sheetsApi";
 import { mapCommunications } from "@/lib/adapters";
-import NewCommunicationModal from "./components/NewCommunicationModal";
+import NewCommunicationModal from "./NewCommunicationModal";
 
 // Agrupar por día (YYYY-MM-DD)
 function groupByDate(items) {
@@ -11,7 +11,6 @@ function groupByDate(items) {
     if (!by[d]) by[d] = [];
     by[d].push(it);
   }
-  // ordenar días desc
   return Object.entries(by)
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))
     .map(([day, arr]) => ({ day, items: arr }));
@@ -19,7 +18,14 @@ function groupByDate(items) {
 
 function DayHeader({ day }) {
   const d = new Date(day);
-  const nice = isNaN(d) ? day : d.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const nice = isNaN(d)
+    ? day
+    : d.toLocaleDateString(undefined, {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
   return (
     <div className="text-sm font-semibold text-muted-foreground mt-8 mb-2">
       {nice}
@@ -28,21 +34,20 @@ function DayHeader({ day }) {
 }
 
 function CommunicationCard({ c }) {
-  const icon = {
-    email: "✉️",
-    call: "📞",
-    meeting: "👥",
-    whatsapp: "💬",
-    note: "📝",
-  }[c.type] || "🗒️";
+  const icon =
+    {
+      email: "✉️",
+      call: "📞",
+      meeting: "👥",
+      whatsapp: "💬",
+      note: "📝",
+    }[c.type] || "🗒️";
 
-  const time = c.createdDate
-    ? new Date(c.createdDate).toLocaleString()
-    : "";
-
-  const linked = c.linked_type && c.linked_id
-    ? `${c.linked_type.toUpperCase()}: ${c.linked_id}`
-    : "";
+  const time = c.createdDate ? new Date(c.createdDate).toLocaleString() : "";
+  const linked =
+    c.linked_type && c.linked_id
+      ? `${c.linked_type.toUpperCase()}: ${c.linked_id}`
+      : "";
 
   return (
     <div className="border rounded-lg p-4 bg-card hover:bg-accent/40 transition">
@@ -50,17 +55,23 @@ function CommunicationCard({ c }) {
         <div className="text-xl">{icon}</div>
         <div className="flex-1">
           <div className="flex items-center justify-between gap-2">
-            <div className="font-medium text-foreground">{c.subject || "(sin asunto)"}</div>
+            <div className="font-medium text-foreground">
+              {c.subject || "(sin asunto)"}
+            </div>
             <div className="text-xs text-muted-foreground">{time}</div>
           </div>
           {linked && (
             <div className="text-xs mt-1 text-muted-foreground">{linked}</div>
           )}
           {c.preview && (
-            <div className="text-sm mt-2 text-muted-foreground line-clamp-2">{c.preview}</div>
+            <div className="text-sm mt-2 text-muted-foreground line-clamp-2">
+              {c.preview}
+            </div>
           )}
           {!c.preview && c.content && (
-            <div className="text-sm mt-2 text-muted-foreground line-clamp-2">{c.content}</div>
+            <div className="text-sm mt-2 text-muted-foreground line-clamp-2">
+              {c.content}
+            </div>
           )}
           {c.participants && (
             <div className="text-xs mt-2 text-muted-foreground">
@@ -74,7 +85,10 @@ function CommunicationCard({ c }) {
 }
 
 export default function CommunicationTimeline() {
-  const { rows: comms, loading, error, reload } = useSheet("communications", mapCommunications);
+  const { rows: comms, loading, error, reload } = useSheet(
+    "communications",
+    mapCommunications
+  );
   const [q, setQ] = useState("");
   const [type, setType] = useState("all");
   const [isOpen, setIsOpen] = useState(false);
@@ -94,7 +108,6 @@ export default function CommunicationTimeline() {
           (c.linked_id || "").toLowerCase().includes(s)
       );
     }
-    // orden recientemente primero
     return [...f].sort((a, b) => (a.createdDate < b.createdDate ? 1 : -1));
   }, [comms, q, type]);
 
@@ -102,10 +115,11 @@ export default function CommunicationTimeline() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm text-muted-foreground">Dashboard › Communications Log</div>
+          <div className="text-sm text-muted-foreground">
+            Dashboard › Communications Log
+          </div>
           <h1 className="text-2xl font-semibold">Communications Timeline</h1>
         </div>
         <div className="flex items-center gap-2">
@@ -124,7 +138,6 @@ export default function CommunicationTimeline() {
         </div>
       </div>
 
-      {/* Filtros */}
       <div className="flex items-center gap-3">
         <input
           className="w-full md:w-96 px-3 py-2 border rounded-md bg-background"
@@ -146,7 +159,6 @@ export default function CommunicationTimeline() {
         </select>
       </div>
 
-      {/* Lista */}
       {loading && <div>Loading…</div>}
       {error && <div className="text-red-600">Error: {String(error)}</div>}
 
@@ -169,7 +181,6 @@ export default function CommunicationTimeline() {
         </div>
       )}
 
-      {/* Modal crear */}
       {isOpen && (
         <NewCommunicationModal
           onClose={() => setIsOpen(false)}
