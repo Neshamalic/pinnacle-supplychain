@@ -1,42 +1,47 @@
 // src/Routes.jsx
 import React, { Suspense, lazy } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
-import ScrollToTop from "./components/ScrollToTop";
-import NotFound from "./pages/NotFound.jsx";
+import AppLayout from "@/layouts/AppLayout";
+import ScrollToTop from "@/components/ScrollToTop";
+import NotFound from "@/pages/NotFound.jsx";
 
-// 👇 Ajusta este HOME por una ruta que SÍ exista en tu repo.
-// Si NO tienes /dashboard, cambia a "/communications-log".
+// Si no tienes /dashboard, cambia DEFAULT_HOME a la ruta que quieras por defecto.
 const DEFAULT_HOME = "/dashboard";
 
-const CommunicationsLog      = lazy(() => import("./pages/communications-log/index.jsx"));
-const DemandForecasting      = lazy(() => import("./pages/demand-forecasting/index.jsx"));
-const ImportManagement       = lazy(() => import("./pages/import-management/index.jsx"));
-const PurchaseOrderTracking  = lazy(() => import("./pages/purchase-order-tracking/index.jsx"));
-const TenderManagement       = lazy(() => import("./pages/tender-management/index.jsx"));
-const Dashboard              = lazy(() => import("./pages/dashboard/index.jsx")); // si no existe, borra esta línea y su <Route>
+// Lazy pages (usa los index.jsx de cada carpeta)
+const Dashboard             = lazy(() => import("@/pages/dashboard"));
+const TenderManagement      = lazy(() => import("@/pages/tender-management"));
+const PurchaseOrderTracking = lazy(() => import("@/pages/purchase-order-tracking"));
+const ImportManagement      = lazy(() => import("@/pages/import-management"));
+const DemandForecasting     = lazy(() => import("@/pages/demand-forecasting"));
+const CommunicationsLog     = lazy(() => import("@/pages/communications-log")); // wrapper con header
 
 export default function AppRoutes() {
   return (
     <Suspense fallback={<div style={{ padding: 16 }}>Loading…</div>}>
       <ScrollToTop />
       <Routes>
-        {/* Redirige la raíz a la sección que sí existe */}
-        <Route path="/" element={<Navigate to={DEFAULT_HOME} replace />} />
+        {/* Todo lo interno usa el header/sidebar del AppLayout */}
+        <Route element={<AppLayout />}>
+          {/* Home */}
+          <Route index element={<Navigate to={DEFAULT_HOME} replace />} />
+          <Route path="/dashboard" element={<Dashboard />} />
 
-        {/* Rutas (mantén sólo las que exista su carpeta+index.jsx) */}
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/communications-log" element={<CommunicationsLog />} />
-        <Route path="/demand-forecasting" element={<DemandForecasting />} />
-        <Route path="/import-management" element={<ImportManagement />} />
-        <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
-        <Route path="/tender-management" element={<TenderManagement />} />
+          {/* Secciones */}
+          <Route path="/tender-management" element={<TenderManagement />} />
+          <Route path="/purchase-order-tracking" element={<PurchaseOrderTracking />} />
+          <Route path="/import-management" element={<ImportManagement />} />
+          <Route path="/demand-forecasting" element={<DemandForecasting />} />
+          <Route path="/communications" element={<CommunicationsLog />} />
 
-        {/* Aliases viejos, por si los usaste */}
-        <Route path="/tenders" element={<Navigate to="/tender-management" replace />} />
-        <Route path="/procurement" element={<Navigate to="/import-management" replace />} />
+          {/* Aliases/compatibilidad */}
+          <Route path="/communications-log" element={<Navigate to="/communications" replace />} />
+          <Route path="/tenders" element={<Navigate to="/tender-management" replace />} />
+          <Route path="/procurement" element={<Navigate to="/import-management" replace />} />
 
-        {/* 404 */}
-        <Route path="*" element={<NotFound />} />
+          {/* 404 */}
+          <Route path="*" element={<NotFound />} />
+        </Route>
       </Routes>
     </Suspense>
   );
