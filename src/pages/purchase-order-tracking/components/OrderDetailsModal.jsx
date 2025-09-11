@@ -1,273 +1,228 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import React, { useMemo, useState } from "react";
 import Button from "@/components/ui/Button";
-import Icon from "@/components/AppIcon";
 import { useSheet } from "@/lib/sheetsApi";
-import { mapImports, mapImportItems, mapPurchaseOrderItems } from "@/lib/adapters";
+import {
+  mapPurchaseOrderItems,
+  mapImportItems,
+  mapCommunications,
+} from "@/lib/adapters";
 import { usePresentationCatalog } from "@/lib/catalog";
+import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
 
-// --- helpers ------------------------------------------------
-const fmtInt = (n) => new Intl.NumberFormat("en-US").format(n || 0);
-const fmtMoney2 = (n) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n || 0);
+const fmtUSD = (n) =>
+  typeof n === "number"
+    ? `USD ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `USD ${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const Badge = ({ tone = "muted", children }) => {
-  const tones = {
-    success: "bg-emerald-100 text-emerald-700",
-    warn: "bg-amber-100 text-amber-700",
-    info: "bg-blue-100 text-blue-700",
-    muted: "bg-muted text-muted-foreground",
-    violet: "bg-violet-100 text-violet-700",
-  };
-  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${tones[tone] || tones.muted}`}>{children}</span>;
-};
+export default function OrderDetailsModal({
+  open = false,
+  onClose = () => {},
+  order: orderProp,
+  row, // alias
+}) {
+  const order = orderProp || row;
+  const [openNewComm, setOpenNewComm] = useState(false);
 
-const importStatusBadge = ({ transitQty, arrivedQty }) => {
-  if (transitQty > 0) return <Badge tone="info">Transit</Badge>;
-  if (arrivedQty > 0) return <Badge tone="success">Warehouse</Badge>;
-  return <Badge>—</Badge>;
-};
-
-const mfgBadge = (s) => {
-  const v = (s || "").toLowerCase();
-  if (v === "ready" || v === "approved") return <Badge tone="success">Ready</Badge>;
-  if (v === "in process" || v === "in_process" || v === "inprocess") return <Badge tone="warn">In Process</Badge>;
-  return <Badge>—</Badge>;
-};
-
-// --- main modal ---------------------------------------------
-export default function OrderDetailsModal({ order, isOpen, onClose }) {
-  // Montamos siempre los hooks; devolvemos null solo al final
-  const [tab, setTab] = useState("products"); // "details" | "products" | "timeline" | "comms"
-
-  // 1) Items de la PO
-  const { rows: allPoItems = [], loading: loadingPOI } = useSheet("purchase_order_items", mapPurchaseOrderItems);
-
-  // 2) Imports + Import Items (para cruzar por po_number -> oci_number -> items)
-  const { rows: allImports = [], loading: loadingImp } = useSheet("imports", mapImports);
-  const { rows: allImpItems = [], loading: loadingImpItems } = useSheet("import_items", mapImportItems);
-
-  // 3) Catálogo de presentaciones (product_name y package_units)
-  const { enrich } = usePresentationCatalog();
-
-  // Guard-rails
-  if (!isOpen || !order) return null;
-
-  // ---- Filtrar items de la PO actual
-  const poItemsRaw = useMemo(
-    () => (allPoItems || []).filter((r) => (r.poNumber || "") === (order.poNumber || "")),
-    [allPoItems, order?.poNumber]
+  // PO items
+  const { rows: allPoItems = [], loading: loadingPoItems } = useSheet(
+    "purchase_order_items",
+    mapPurchaseOrderItems
   );
 
-  // Enriquecidos con product_name y package_units
-  const poItems = useMemo(() => enrich(poItemsRaw), [poItemsRaw, enrich]);
+  // Import items (para cantidad llegada/importada)
+  const { rows: allImportItems = [], loading: loadingImp } = useSheet(
+    "import_items",
+    mapImportItems
+  );
 
-  // ---- Buscar todos los OCIs de esta PO y su import_status
-  const ociByStatus = useMemo(() => {
+  // Enriquecer con product master
+  const { enrich } = usePresentationCatalog();
+
+  const poItems = useMemo(() => {
+    const po = order?.poNumber || "";
+    const items = (allPoItems || []).filter((r) => r.poNumber === po);
+    return enrich(items);
+  }, [allPoItems, order?.poNumber, enrich]);
+
+  // Sumar importados por code para el mismo PO
+  const importedByCode = useMemo(() => {
+    const po = order?.poNumber || "";
     const map = new Map();
-    for (const r of allImports || []) {
-      if ((r.poNumber || "") === (order.poNumber || "")) {
-        map.set(r.ociNumber, r.importStatus || "");
-      }
+    for (const it of allImportItems || []) {
+      if (String(it.poNumber || "") !== po) continue;
+      const key = it.presentationCode;
+      const current = map.get(key) || 0;
+      map.set(key, current + (it.qty || 0));
     }
     return map;
-  }, [allImports, order?.poNumber]);
+  }, [allImportItems, order?.poNumber]);
 
-  const relatedOcis = useMemo(() => new Set(Array.from(ociByStatus.keys())), [ociByStatus]);
-
-  // ---- Import items de esos OCI; agregamos cantidades por presentation_code y status
-  const importedAggByCode = useMemo(() => {
-    const agg = new Map(); // code -> { transitQty, arrivedQty, totalQty }
-    for (const it of allImpItems || []) {
-      if (!relatedOcis.has(it.ociNumber)) continue;
-      const code = it.presentationCode || "";
-      if (!code) continue;
-      const status = ociByStatus.get(it.ociNumber) || "";
-      const cur = agg.get(code) || { transitQty: 0, arrivedQty: 0, totalQty: 0 };
-      const qty = Number(it.qty || 0);
-      if (status === "transit") cur.transitQty += qty;
-      else if (status === "warehouse") cur.arrivedQty += qty;
-      cur.totalQty += qty;
-      agg.set(code, cur);
-    }
-    return agg;
-  }, [allImpItems, relatedOcis, ociByStatus]);
-
-  // ---- Derivar métricas por producto (pedido vs importado)
-  const productsView = useMemo(() => {
-    return poItems.map((p) => {
-      const imported = importedAggByCode.get(p.presentationCode) || {
-        transitQty: 0,
-        arrivedQty: 0,
-        totalQty: 0,
-      };
-      const orderedQty = Number(p.qty || 0);
-      const remaining = Math.max(0, orderedQty - imported.totalQty);
-      return {
-        ...p,
-        orderedQty,
-        transitQty: imported.transitQty,
-        arrivedQty: imported.arrivedQty,
-        importedQty: imported.totalQty,
-        remainingQty: remaining,
-        perItemMfg: p.itemManufacturingStatus || order.manufacturingStatus || "",
-      };
+  const rows = useMemo(() => {
+    return (poItems || []).map((r) => {
+      const importedQty = importedByCode.get(r.presentationCode) || 0;
+      const remainingQty = Math.max(0, (r.qty || 0) - importedQty);
+      return { ...r, importedQty, remainingQty };
     });
-  }, [poItems, importedAggByCode, order?.manufacturingStatus]);
+  }, [poItems, importedByCode]);
 
-  // ---- Totales para "Details"
-  const totals = useMemo(() => {
-    let ordered = 0,
-      imp = 0,
-      tran = 0,
-      arr = 0;
-    for (const r of productsView) {
-      ordered += r.orderedQty;
-      imp += r.importedQty;
-      tran += r.transitQty;
-      arr += r.arrivedQty;
-    }
-    return { ordered, imp, tran, arr, rem: Math.max(0, ordered - imp) };
-  }, [productsView]);
+  // Communications del PO
+  const {
+    rows: allComms = [],
+    loading: loadingComms,
+    refetch: refetchComms,
+  } = useSheet("communications", mapCommunications);
 
-  const loading = loadingPOI || loadingImp || loadingImpItems;
+  const comms = useMemo(() => {
+    const id = order?.poNumber || "";
+    return (allComms || []).filter(
+      (c) =>
+        String(c.linked_id || "").trim() === String(id) &&
+        (c.linked_type === "po" || c.linked_type === "purchaseorder")
+    );
+  }, [allComms, order?.poNumber]);
+
+  if (!open || !order) return null;
+
+  const handleSavedComm = async () => {
+    if (typeof refetchComms === "function") await refetchComms();
+    setOpenNewComm(false);
+  };
 
   return (
     <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-background/60" onClick={onClose} />
-      <div className="absolute inset-0 flex items-start justify-center p-6">
-        <div className="w-full max-w-5xl bg-card border rounded-xl shadow-xl overflow-hidden">
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b bg-muted/40">
-            <div className="space-y-1">
-              <h3 className="text-lg font-semibold text-foreground">Order Details</h3>
-              <p className="text-sm text-muted-foreground">
-                PO <span className="font-medium">{order.poNumber}</span>
-                {order.tenderRef ? (
-                  <>
-                    {" "}
-                    · Tender <span className="font-medium">{order.tenderRef}</span>
-                  </>
-                ) : null}
-              </p>
-            </div>
-            <Button variant="ghost" iconName="X" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div
+        className="absolute inset-x-0 top-10 mx-auto w-full max-w-4xl rounded-xl bg-white shadow-xl border"
+        role="dialog"
+        aria-modal="true"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b">
+          <div>
+            <h3 className="text-lg font-semibold">Order Details – {order.poNumber}</h3>
+            <p className="text-sm text-muted-foreground">
+              Tender Ref: {order.tenderRef || "—"}
+            </p>
           </div>
+          <Button variant="ghost" iconName="X" onClick={onClose} />
+        </div>
 
-          {/* Tabs */}
-          <div className="px-6 pt-3">
-            <div className="flex items-center gap-6 border-b">
-              {[
-                { id: "details", label: "Details", icon: "Info" },
-                { id: "products", label: "Products", icon: "Package" },
-                { id: "timeline", label: "Timeline", icon: "Clock" },
-                { id: "comms", label: "Communications", icon: "MessageSquare" },
-              ].map((t) => (
-                <button
-                  key={t.id}
-                  className={`pb-3 -mb-px border-b-2 text-sm flex items-center gap-2 ${
-                    tab === t.id ? "border-primary text-primary" : "border-transparent text-muted-foreground"
-                  }`}
-                  onClick={() => setTab(t.id)}
-                >
-                  <Icon name={t.icon} size={16} />
-                  {t.label}
-                </button>
-              ))}
+        {/* Info + costos */}
+        <div className="grid grid-cols-3 gap-4 px-6 py-4">
+          <div className="p-4 rounded-lg bg-muted/40">
+            <div className="text-xs text-muted-foreground">Manufacturing</div>
+            <div className="text-sm font-medium capitalize">
+              {order.manufacturingStatus || "—"}
             </div>
           </div>
+          <div className="p-4 rounded-lg bg-muted/40">
+            <div className="text-xs text-muted-foreground">Transport</div>
+            <div className="text-sm font-medium capitalize">
+              {order.transportType || "—"}
+            </div>
+          </div>
+          <div className="p-4 rounded-lg bg-muted/40">
+            <div className="text-xs text-muted-foreground">Cost (USD)</div>
+            <div className="text-base font-semibold">{fmtUSD(order.costUsd || 0)}</div>
+          </div>
+        </div>
 
-          {/* Content */}
-          <div className="px-6 py-4 max-h-[70vh] overflow-auto">
-            {loading ? (
-              <div className="text-sm text-muted-foreground">Loading…</div>
-            ) : tab === "details" ? (
-              <DetailsSummary totals={totals} />
-            ) : tab === "products" ? (
-              <ProductsList rows={productsView} />
-            ) : tab === "timeline" ? (
-              <Empty hint="Timeline will display shipment milestones (ETAs, departures, arrivals)." />
-            ) : (
-              <Empty hint="Link emails/notes to this PO in the Communications tab." />
+        {/* Product lines */}
+        <div className="px-6 pb-2">
+          <h4 className="text-sm font-semibold mb-2">Products in PO</h4>
+          <div className="rounded-lg border divide-y">
+            {(rows || []).map((r, idx) => (
+              <div key={idx} className="px-4 py-3">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="font-medium">
+                      {r.presentationCode}{" "}
+                      <span className="text-muted-foreground">
+                        • {r.productName || "—"}{" "}
+                        {r.packageUnits ? `• ${r.packageUnits} units/pack` : ""}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Requested: {r.qty?.toLocaleString("es-CL")} · Imported:{" "}
+                      {r.importedQty?.toLocaleString("es-CL")} · Remaining:{" "}
+                      {r.remainingQty?.toLocaleString("es-CL")}
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Unit:{" "}
+                    {r.unitPrice?.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}{" "}
+                    USD
+                  </div>
+                </div>
+              </div>
+            ))}
+            {loadingPoItems && (
+              <div className="px-4 py-4 text-sm text-muted-foreground">
+                Loading PO items…
+              </div>
+            )}
+            {!loadingPoItems && (rows || []).length === 0 && (
+              <div className="px-4 py-4 text-sm text-muted-foreground">
+                No items for this PO.
+              </div>
             )}
           </div>
+        </div>
 
-          {/* Footer */}
-          <div className="flex items-center justify-end gap-2 px-6 py-4 border-t bg-muted/30">
-            <Button variant="secondary" onClick={onClose}>
-              Close
+        {/* Communications */}
+        <div className="px-6 py-4">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-semibold">Communications</h4>
+            <Button size="sm" iconName="Plus" onClick={() => setOpenNewComm(true)}>
+              New Communication
             </Button>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// --- subviews ------------------------------------------------
-function DetailsSummary({ totals }) {
-  const Card = ({ title, value, icon }) => (
-    <div className="flex-1 min-w-[160px] rounded-lg border bg-background p-4">
-      <div className="text-xs text-muted-foreground flex items-center gap-2">
-        <Icon name={icon} size={14} />
-        {title}
-      </div>
-      <div className="text-lg font-semibold mt-1">{fmtInt(value)}</div>
-    </div>
-  );
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-      <Card title="Ordered" value={totals.ordered} icon="ShoppingCart" />
-      <Card title="In Transit" value={totals.tran} icon="Truck" />
-      <Card title="In Warehouse" value={totals.arr} icon="Package" />
-      <Card title="Imported (Total)" value={totals.imp} icon="ArrowDown" />
-      <Card title="Remaining" value={totals.rem} icon="MinusCircle" />
-    </div>
-  );
-}
-
-function ProductsList({ rows }) {
-  if (!rows?.length) return <Empty hint="No products in this purchase order." />;
-
-  return (
-    <div className="space-y-3">
-      {rows.map((r, idx) => (
-        <div key={`${r.presentationCode}-${idx}`} className="rounded-lg border p-4 bg-muted/20">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-base font-medium text-foreground">
-                {r.presentationCode || "—"}{" "}
-                <span className="text-muted-foreground">
-                  · {r.productName || "—"}
-                  {r.packageUnits ? ` · ${r.packageUnits} units/pkg` : ""}
-                </span>
-              </div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                Ordered: <span className="font-medium text-foreground">{fmtInt(r.orderedQty)}</span> · Imported:{" "}
-                <span className="font-medium text-foreground">
-                  {fmtInt(r.importedQty)} (Transit {fmtInt(r.transitQty)} / Warehouse {fmtInt(r.arrivedQty)})
-                </span>{" "}
-                · Remaining: <span className="font-medium text-foreground">{fmtInt(r.remainingQty)}</span>
-              </div>
-              {r.unitPrice ? (
-                <div className="mt-1 text-sm text-muted-foreground">
-                  Unit: <span className="font-medium text-foreground">{fmtMoney2(r.unitPrice)}</span>
+          <div className="space-y-2">
+            {(comms || []).map((c) => (
+              <div key={c.id} className="p-3 rounded-lg border">
+                <div className="text-sm font-medium">{c.subject || "(no subject)"}</div>
+                <div className="text-xs text-muted-foreground">
+                  {c.createdDate?.slice(0, 10)} · {c.type || "—"} · {c.participants || "—"}
                 </div>
-              ) : null}
-            </div>
-            <div className="flex flex-col items-end gap-2">
-              <div className="flex items-center gap-2">
-                {mfgBadge(r.perItemMfg)}
-                {importStatusBadge({ transitQty: r.transitQty, arrivedQty: r.arrivedQty })}
+                {c.content ? (
+                  <div className="text-sm mt-1">{c.content}</div>
+                ) : (
+                  <div className="text-xs text-muted-foreground mt-1">(no content)</div>
+                )}
               </div>
-            </div>
+            ))}
+            {loadingComms && (
+              <div className="text-sm text-muted-foreground">Loading…</div>
+            )}
+            {!loadingComms && (comms || []).length === 0 && (
+              <div className="text-sm text-muted-foreground">No communications.</div>
+            )}
           </div>
         </div>
-      ))}
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t flex justify-end">
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+
+      {/* Create Communication (prefilled to this PO) */}
+      {openNewComm && (
+        <NewCommunicationModal
+          open={openNewComm}
+          onClose={() => setOpenNewComm(false)}
+          onSaved={handleSavedComm}
+          defaultLinkedType="po"
+          defaultLinkedId={order?.poNumber || ""}
+        />
+      )}
     </div>
   );
 }
 
-function Empty({ hint }) {
-  return <div className="text-sm text-muted-foreground">{hint}</div>;
-}
