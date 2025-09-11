@@ -1,19 +1,25 @@
-// vite.config.js
+// vite.config.mjs
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 import tagger from "@dhiwise/component-tagger";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-// https://vitejs.dev/config/
+// __dirname en ESM:
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 export default defineConfig({
-  // Output en "build" (como ya lo tenías)
   build: {
-    outDir: "build",
+    // ⚠️ Si despliegas en Vercel y NO cambiaste el "Output Directory",
+    // déjalo en "dist" (valor por defecto que Vercel espera).
+    // Si prefieres "build", recuerda ajustar el Output Directory en Vercel.
+    outDir: "dist",
     chunkSizeWarningLimit: 2000,
   },
 
-  // ✅ Alias para imports absolutos: '@/...' apunta a 'src'
+  // Alias '@/...' -> 'src'
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
@@ -23,9 +29,10 @@ export default defineConfig({
   plugins: [tsconfigPaths(), react(), tagger()],
 
   server: {
-    port: "4028",
+    port: 4028,
     host: "0.0.0.0",
     strictPort: true,
-    allowedHosts: [".amazonaws.com", ".builtwithrocket.new"],
+    // Usa RegExp si quieres permitir subdominios:
+    allowedHosts: [/\.amazonaws\.com$/, /\.builtwithrocket\.new$/],
   },
 });
