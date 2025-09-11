@@ -2,54 +2,87 @@
 import React, { useMemo } from "react";
 import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
-import { mapImportItems } from "@/lib/adapters";
-import { usePresentationCatalog } from "@/lib/catalog";
+import { mapImportItems, _utils } from "@/lib/adapters"; // para toNumber
 import ImportDetails from "./ImportDetails";
 
 /**
- * Drawer que muestra el detalle de un import (items por OCI/PO).
- * Props esperadas (cualquiera de estas variantes funciona):
- * - isOpen, onClose, importRow
- * - isOpen, onClose, selectedImport
- * - open, onClose, row
+ * Drawer de detalle de un import.
+ *
+ * Props soportadas:
+ * - open / isOpen: boolean
+ * - onClose: () => void
+ * - importRow / selectedImport / row: objeto del shipment seleccionado
+ * - items: (opcional) array de ítems ya filtrados por shipment (preferido)
+ * - productIndex: (opcional) { [presentationCode]: { productName, packageUnits } }
+ *
+ * Si no se provee `items`, el componente intentará filtrar desde la hoja
+ * `import_items` usando shipmentId, ociNumber o poNumber.
  */
 export default function ImportDetailsDrawer(props) {
-  const isOpen =
-    props.isOpen ?? props.open ?? false;
-  const imp =
-    props.importRow || props.selectedImport || props.row || null;
-
+  const isOpen = (props.isOpen ?? props.open ?? false) === true;
+  const imp = props.importRow || props.selectedImport || props.row || null;
   const onClose = props.onClose || (() => {});
+  const externalItems = props.items || null;
+  const productIndex = props.productIndex || {};
 
   if (!isOpen || !imp) return null;
 
-  // 1) Items de import desde Google Sheets
+  // Siempre cargamos import_items para mantener compatibilidad cuando no nos pasan `items`.
   const { rows: allImportItems = [], loading } = useSheet(
     "import_items",
     mapImportItems
   );
 
-  // 2) Filtramos por oci_number (y opcionalmente por po_number si aplica)
-  const filtered = useMemo(() => {
+  // Si no nos pasaron `items` desde el padre, filtramos localmente por shipment/oci/po
+  const fallbackFiltered = useMemo(() => {
+    if (!allImportItems?.length) return [];
     const list = [];
-    for (const r of allImportItems || []) {
-      if (imp.ociNumber && r.ociNumber === imp.ociNumber) list.push(r);
-      else if (imp.poNumber && r.poNumber === imp.poNumber) list.push(r);
+
+    const sid = String(imp.shipmentId || "");
+    const oci = String(imp.ociNumber || "");
+    const po  = String(imp.poNumber || "");
+
+    for (const r of allImportItems) {
+      // prioridad: shipmentId -> ociNumber -> poNumber
+      if (sid && String(r.shipmentId || "") === sid) {
+        list.push(r);
+        continue;
+      }
+      if (oci && String(r.ociNumber || "") === oci) {
+        list.push(r);
+        continue;
+      }
+      if (po && String(r.poNumber || "") === po) {
+        list.push(r);
+      }
     }
     return list;
-  }, [allImportItems, imp?.ociNumber, imp?.poNumber]);
+  }, [allImportItems, imp?.shipmentId, imp?.ociNumber, imp?.poNumber]);
 
-  // 3) Enriquecemos con product_name y package_units
-  const { enrich } = usePresentationCatalog();
-  const items = useMemo(() => enrich(filtered), [filtered, enrich]);
+  // Base de ítems a usar en el drawer
+  const baseItems = externalItems ?? fallbackFiltered;
 
-  // Drawer UI
+  // Enriquecer con productName y packageUnits desde productIndex,
+  // y asegurar al menos 2 decimales en unit price.
+  const items = useMemo(() => {
+    const toNumber = _utils?.toNumber ?? ((v) => (v == null || v === "" ? 0 : Number(v)));
+    return (baseItems || []).map((it) => {
+      const meta = productIndex[it.presentationCode] || {};
+      const unit = toNumber(it.unitPrice);
+      return {
+        ...it,
+        productName: meta.productName || "",
+        packageUnits: meta.packageUnits ?? "",
+        unitPriceFixed: unit.toFixed(2),
+      };
+    });
+  }, [baseItems, productIndex]);
+
   return (
     <div className="fixed inset-0 z-50">
-      <div
-        className="absolute inset-0 bg-background/60"
-        onClick={onClose}
-      />
+      {/* Overlay para cerrar */}
+      <div className="absolute inset-0 bg-background/60" onClick={onClose} />
+
       <aside
         className="absolute right-0 top-0 h-full w-full max-w-2xl bg-card border-l shadow-xl flex flex-col"
         role="dialog"
@@ -60,19 +93,31 @@ export default function ImportDetailsDrawer(props) {
           <div className="space-y-1">
             <h3 className="text-lg font-semibold text-foreground">Import Details</h3>
             <p className="text-sm text-muted-foreground">
-              {imp.shipmentId ? <>Shipment: <span className="font-medium">{imp.shipmentId}</span> · </> : null}
-              {imp.ociNumber ? <>OCI: <span className="font-medium">{imp.ociNumber}</span> · </> : null}
-              {imp.poNumber ? <>PO: <span className="font-medium">{imp.poNumber}</span></> : null}
+              {imp.shipmentId ? (
+                <>
+                  Shipment:&nbsp;<span className="font-medium">{imp.shipmentId}</span>
+                </>
+              ) : null}
+              {imp.ociNumber ? (
+                <>
+                  &nbsp;·&nbsp;OCI:&nbsp;<span className="font-medium">{imp.ociNumber}</span>
+                </>
+              ) : null}
+              {imp.poNumber ? (
+                <>
+                  &nbsp;·&nbsp;PO:&nbsp;<span className="font-medium">{imp.poNumber}</span>
+                </>
+              ) : null}
             </p>
           </div>
           <Button variant="ghost" iconName="X" onClick={onClose} />
         </div>
 
-        {/* Content */}
+        {/* Contenido */}
         <div className="flex-1 overflow-auto">
           <ImportDetails
             items={items}
-            loading={loading}
+            loading={loading && !externalItems} // si vienen de fuera, ignoramos el loading interno
             importRow={imp}
           />
         </div>
