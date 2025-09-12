@@ -1,41 +1,29 @@
 // src/pages/communications-log/index.jsx
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
 import { mapCommunications } from "@/lib/adapters";
-import Button from "@/components/ui/Button";
-
-// Tu timeline existente
-import CommunicationTimeline from "./components/CommunicationTimeline.jsx";
-// El modal que creaste en este directorio: ./components/NewCommunicationModal.jsx
 import NewCommunicationModal from "./components/NewCommunicationModal.jsx";
 
-export default function CommunicationsLogPage() {
-  // Carga de comunicaciones
-  const sheet = useSheet("communications", mapCommunications);
-  const {
-    rows: communications = [],
-    loading,
-    error,
-    refetch, // si tu hook lo expone, lo usamos para refrescar después de guardar
-  } = sheet;
+export default function CommunicationsLog() {
+  const { rows: all = [], loading, error, reload } = useSheet("communications", mapCommunications);
+  const [openNew, setOpenNew] = useState(false);
 
-  const [openCreate, setOpenCreate] = useState(false);
-
-  const handleOpenCreate = () => setOpenCreate(true);
-  const handleCloseCreate = () => setOpenCreate(false);
-
-  const handleSaved = async () => {
-    // Al guardar en el modal, cerramos y refrescamos
-    if (typeof refetch === "function") {
-      await refetch();
+  // Agrupa por fecha (aaaa-mm-dd)
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const r of all || []) {
+      const d = (r.createdDate || "").slice(0, 10) || "Unknown";
+      if (!map.has(d)) map.set(d, []);
+      map.get(d).push(r);
     }
-    setOpenCreate(false);
-  };
+    // orden descendente por fecha
+    return Array.from(map.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [all]);
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Communications Log</h1>
           <p className="text-sm text-muted-foreground">
@@ -43,30 +31,49 @@ export default function CommunicationsLogPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" iconName="Download">
-            Export Report
-          </Button>
-          <Button iconName="Plus" onClick={handleOpenCreate}>
-            New Communication
-          </Button>
+          <Button variant="outline" onClick={reload}>Refresh Data</Button>
+          <Button onClick={() => setOpenNew(true)}>+ New Communication</Button>
         </div>
       </div>
 
-      {/* Listado / timeline */}
-      {error ? (
-        <div className="text-sm text-red-600">
-          Failed to load communications: {String(error)}
-        </div>
-      ) : (
-        <CommunicationTimeline rows={communications} loading={loading} />
+      {/* Lista */}
+      {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
+      {!loading && groups.length === 0 && (
+        <div className="text-sm text-muted-foreground">No communications.</div>
       )}
 
-      {/* Modal de creación */}
-      <NewCommunicationModal
-        open={openCreate}
-        onClose={handleCloseCreate}
-        onSaved={handleSaved}
-      />
+      <div className="space-y-6">
+        {groups.map(([date, items]) => (
+          <div key={date} className="space-y-2">
+            <div className="text-xs text-muted-foreground">
+              {new Date(date).toLocaleDateString("es-CL", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+            </div>
+            <div className="space-y-3">
+              {items.map((c) => (
+                <div key={c.id} className="p-4 rounded-lg border">
+                  <div className="text-sm font-medium">{c.subject || "(no subject)"}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {c.type || "—"}{c.linked_type ? ` · ${c.linked_type.toUpperCase()}` : ""} {c.linked_id ? ` ${c.linked_id}` : ""}
+                  </div>
+                  {c.content && <div className="text-sm mt-1">{c.content}</div>}
+                  {!c.content && <div className="text-xs text-muted-foreground mt-1">(no content)</div>}
+                  {c.participants && (
+                    <div className="text-xs text-muted-foreground mt-1">Participants: {c.participants}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {openNew && (
+        <NewCommunicationModal
+          open={openNew}
+          onClose={() => setOpenNew(false)}
+          onSaved={() => { setOpenNew(false); reload(); }}
+        />
+      )}
     </div>
   );
 }
