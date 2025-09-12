@@ -2,13 +2,10 @@
 import React, { useMemo, useState } from "react";
 import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
-import {
-  mapPurchaseOrderItems,
-  mapImportItems,
-  mapCommunications,
-} from "@/lib/adapters";
+import { mapPurchaseOrderItems, mapImportItems } from "@/lib/adapters";
 import { usePresentationCatalog } from "@/lib/catalog";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
+import CommunicationList from "@/components/CommunicationList";
 
 const fmtUSD = (n) =>
   typeof n === "number"
@@ -22,7 +19,11 @@ export default function OrderDetailsModal({
   row, // alias
 }) {
   const order = orderProp || row;
+
+  // Modal "New Communication"
   const [openNewComm, setOpenNewComm] = useState(false);
+  // Para forzar el refresco del <CommunicationList/> tras guardar
+  const [commRefresh, setCommRefresh] = useState(0);
 
   // PO items
   const { rows: allPoItems = [], loading: loadingPoItems } = useSheet(
@@ -66,26 +67,10 @@ export default function OrderDetailsModal({
     });
   }, [poItems, importedByCode]);
 
-  // Communications del PO
-  const {
-    rows: allComms = [],
-    loading: loadingComms,
-    refetch: refetchComms,
-  } = useSheet("communications", mapCommunications);
-
-  const comms = useMemo(() => {
-    const id = order?.poNumber || "";
-    return (allComms || []).filter(
-      (c) =>
-        String(c.linked_id || "").trim() === String(id) &&
-        (c.linked_type === "po" || c.linked_type === "purchaseorder")
-    );
-  }, [allComms, order?.poNumber]);
-
   if (!open || !order) return null;
 
-  const handleSavedComm = async () => {
-    if (typeof refetchComms === "function") await refetchComms();
+  const handleSavedComm = () => {
+    setCommRefresh((k) => k + 1);
     setOpenNewComm(false);
   };
 
@@ -181,27 +166,13 @@ export default function OrderDetailsModal({
               New Communication
             </Button>
           </div>
-          <div className="space-y-2">
-            {(comms || []).map((c) => (
-              <div key={c.id} className="p-3 rounded-lg border">
-                <div className="text-sm font-medium">{c.subject || "(no subject)"}</div>
-                <div className="text-xs text-muted-foreground">
-                  {c.createdDate?.slice(0, 10)} · {c.type || "—"} · {c.participants || "—"}
-                </div>
-                {c.content ? (
-                  <div className="text-sm mt-1">{c.content}</div>
-                ) : (
-                  <div className="text-xs text-muted-foreground mt-1">(no content)</div>
-                )}
-              </div>
-            ))}
-            {loadingComms && (
-              <div className="text-sm text-muted-foreground">Loading…</div>
-            )}
-            {!loadingComms && (comms || []).length === 0 && (
-              <div className="text-sm text-muted-foreground">No communications.</div>
-            )}
-          </div>
+
+          {/* Lista filtrada por este PO */}
+          <CommunicationList
+            key={commRefresh}
+            linkedType="po"
+            linkedId={order?.poNumber || ""}
+          />
         </div>
 
         {/* Footer */}
