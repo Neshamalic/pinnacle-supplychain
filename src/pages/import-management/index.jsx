@@ -1,6 +1,6 @@
 // src/pages/import-management/index.jsx
 import React, { useMemo, useState } from "react";
-import { RefreshCcw, Search, Eye } from "lucide-react";
+import { RefreshCcw, Search, Eye, Ship, Plane, Truck, Boxes } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
 import { mapImports } from "@/lib/adapters";
@@ -18,21 +18,28 @@ const statusBadge = (status) => {
 };
 
 export default function ImportManagement() {
-  const {
-    rows: impRaw = [],
-    loading,
-    error,
-    reload,
-  } = useSheet("imports", mapImports);
+  const { rows: impRaw = [], loading, reload } = useSheet("imports", mapImports);
 
-  const [q, setQ] = useState("");
-
-  // Agrupar por shipmentId
+  // ====== Agrupar por Shipment ID ======
   const groups = useMemo(() => {
     const map = new Map();
     for (const r of impRaw || []) {
-      const key = r.shipmentId || r.shipment_id || r.id;
+      // tratamos de encontrar un id de shipment robustamente
+      let key =
+        r.shipmentId ||
+        r.shipment_id ||
+        r.shipmentID ||
+        r.ShipmentID ||
+        r.id;
+
+      if (!key) {
+        const dyn = Object.keys(r || {}).find((k) =>
+          k.toLowerCase().includes("shipment") && r[k]
+        );
+        key = dyn ? r[dyn] : null;
+      }
       if (!key) continue;
+
       if (!map.has(key)) {
         map.set(key, {
           shipmentId: key,
@@ -40,38 +47,80 @@ export default function ImportManagement() {
           poNumber: r.poNumber || r.po || "",
           transportType: r.transportType || r.transport || "",
           importStatus: r.importStatus || r.status || "",
+          qcStatus: r.qcStatus || "",
+          customsStatus: r.customsStatus || "",
           _rows: [],
         });
       }
-      map.get(key)._rows.push(r);
-      // priorizar estatus “transit -> customs -> warehouse -> delivered”
-      const order = ["transit", "customs", "warehouse", "delivered", "arrived"];
       const g = map.get(key);
-      const a = norm(g.importStatus);
-      const b = norm(r.importStatus || r.status);
-      if (!a || (order.indexOf(b) >= 0 && order.indexOf(b) < order.indexOf(a))) {
-        g.importStatus = r.importStatus || r.status || g.importStatus;
-      }
-      // preferimos último transport si está vacío
-      if (!g.transportType && r.transportType) g.transportType = r.transportType;
-      if (!g.ociNumber && r.ociNumber) g.ociNumber = r.ociNumber;
-      if (!g.poNumber && r.poNumber) g.poNumber = r.poNumber;
+      g._rows.push(r);
+
+      // priorizamos estados
+      const order = ["transit", "customs", "warehouse", "delivered", "arrived"];
+      const a = order.indexOf(norm(g.importStatus));
+      const b = order.indexOf(norm(r.importStatus || r.status));
+      if (a === -1 || (b >= 0 && b < a)) g.importStatus = r.importStatus || r.status || g.importStatus;
+
+      // completar campos del grupo
+      if (!g.transportType && (r.transportType || r.transport))
+        g.transportType = r.transportType || r.transport || "";
+      if (!g.ociNumber && (r.ociNumber || r.oci)) g.ociNumber = r.ociNumber || r.oci || "";
+      if (!g.poNumber && (r.poNumber || r.po)) g.poNumber = r.poNumber || r.po || "";
+      if (!g.qcStatus && r.qcStatus) g.qcStatus = r.qcStatus;
+      if (!g.customsStatus && r.customsStatus) g.customsStatus = r.customsStatus;
     }
+
     return Array.from(map.values()).sort((a, b) =>
       String(a.shipmentId).localeCompare(String(b.shipmentId))
     );
   }, [impRaw]);
 
+  // ====== KPI ======
+  const kpis = useMemo(() => {
+    const total = groups.length;
+    const transit = groups.filter((g) => norm(g.importStatus) === "transit").length;
+    const warehouse = groups.filter((g) => norm(g.importStatus) === "warehouse").length;
+    const delivered =
+      groups.filter((g) => ["delivered", "arrived"].includes(norm(g.importStatus))).length;
+    return { total, transit, warehouse, delivered };
+  }, [groups]);
+
+  // ====== Filtros ======
+  const [q, setQ] = useState("");
+  const [transport, setTransport] = useState("");
+  const [qc, setQc] = useState("");
+  const [customs, setCustoms] = useState("");
+  const [showMore, setShowMore] = useState(false);
+
+  const transportOpts = useMemo(
+    () => Array.from(new Set(groups.map((g) => g.transportType).filter(Boolean))).sort(),
+    [groups]
+  );
+  const qcOpts = useMemo(
+    () => Array.from(new Set(groups.map((g) => g.qcStatus).filter(Boolean))).sort(),
+    [groups]
+  );
+  const customsOpts = useMemo(
+    () => Array.from(new Set(groups.map((g) => g.customsStatus).filter(Boolean))).sort(),
+    [groups]
+  );
+
   const filtered = useMemo(() => {
-    if (!q.trim()) return groups;
-    const n = norm(q);
-    return groups.filter(
-      (g) =>
-        norm(g.shipmentId).includes(n) ||
-        norm(g.ociNumber).includes(n) ||
-        norm(g.poNumber).includes(n)
-    );
-  }, [groups, q]);
+    let list = groups;
+    if (q.trim()) {
+      const n = norm(q);
+      list = list.filter(
+        (g) =>
+          norm(g.shipmentId).includes(n) ||
+          norm(g.ociNumber).includes(n) ||
+          norm(g.poNumber).includes(n)
+      );
+    }
+    if (transport) list = list.filter((g) => norm(g.transportType) === norm(transport));
+    if (qc) list = list.filter((g) => norm(g.qcStatus) === norm(qc));
+    if (customs) list = list.filter((g) => norm(g.customsStatus) === norm(customs));
+    return list;
+  }, [groups, q, transport, qc, customs]);
 
   // Drawer
   const [open, setOpen] = useState(false);
@@ -93,20 +142,102 @@ export default function ImportManagement() {
         </Button>
       </div>
 
-      {/* Filtros */}
-      <div className="rounded-lg border p-3 mb-4">
-        <div className="relative">
-          <Search className="h-4 w-4 absolute left-3 top-3 text-muted-foreground" />
-          <input
-            className="w-full pl-9 pr-3 py-2 rounded-md border bg-background text-sm outline-none"
-            placeholder="Search shipments by Shipment ID, OCI or PO…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
+      {/* KPI Cards (íconos) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="rounded-lg border p-4 flex items-center gap-3">
+          <Boxes className="h-6 w-6 text-muted-foreground" />
+          <div>
+            <div className="text-xs text-muted-foreground">Total Shipments</div>
+            <div className="text-2xl font-semibold">{kpis.total}</div>
+          </div>
+        </div>
+        <div className="rounded-lg border p-4 flex items-center gap-3">
+          <Ship className="h-6 w-6 text-amber-600" />
+          <div>
+            <div className="text-xs text-muted-foreground">In Transit</div>
+            <div className="text-2xl font-semibold">{kpis.transit}</div>
+          </div>
+        </div>
+        <div className="rounded-lg border p-4 flex items-center gap-3">
+          <Truck className="h-6 w-6 text-slate-600" />
+          <div>
+            <div className="text-xs text-muted-foreground">Warehouse</div>
+            <div className="text-2xl font-semibold">{kpis.warehouse}</div>
+          </div>
+        </div>
+        <div className="rounded-lg border p-4 flex items-center gap-3">
+          <Plane className="h-6 w-6 text-green-600" />
+          <div>
+            <div className="text-xs text-muted-foreground">Delivered / Arrived</div>
+            <div className="text-2xl font-semibold">{kpis.delivered}</div>
+          </div>
         </div>
       </div>
 
-      {/* Tabla */}
+      {/* Filtros */}
+      <div className="rounded-lg border p-3 mb-4">
+        <div className="flex flex-col md:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="h-4 w-4 absolute left-3 top-3 text-muted-foreground" />
+            <input
+              className="w-full pl-9 pr-3 py-2 rounded-md border bg-background text-sm outline-none"
+              placeholder="Search shipments by Shipment ID, OCI or PO…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+
+          <button
+            className="text-sm text-muted-foreground underline"
+            onClick={() => setShowMore((s) => !s)}
+          >
+            {showMore ? "Hide Filters" : "Show More Filters"}
+          </button>
+
+          <Button variant="ghost" onClick={() => { setQ(""); setTransport(""); setQc(""); setCustoms(""); }}>
+            Clear Filters
+          </Button>
+        </div>
+
+        {showMore && (
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <select
+              value={transport}
+              onChange={(e) => setTransport(e.target.value)}
+              className="h-9 rounded-md border bg-background text-sm px-3"
+            >
+              <option value="">Transport (all)</option>
+              {transportOpts.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+
+            <select
+              value={qc}
+              onChange={(e) => setQc(e.target.value)}
+              className="h-9 rounded-md border bg-background text-sm px-3"
+            >
+              <option value="">QC Status (all)</option>
+              {qcOpts.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+
+            <select
+              value={customs}
+              onChange={(e) => setCustoms(e.target.value)}
+              className="h-9 rounded-md border bg-background text-sm px-3"
+            >
+              <option value="">Customs Status (all)</option>
+              {customsOpts.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {/* Tabla agrupada por Shipment ID */}
       <div className="rounded-lg border overflow-hidden">
         <div className="grid grid-cols-12 px-4 py-2 text-xs text-muted-foreground bg-muted/40">
           <div className="col-span-3">Shipment ID</div>
@@ -122,9 +253,7 @@ export default function ImportManagement() {
         )}
 
         {!loading && filtered.length === 0 && (
-          <div className="px-4 py-6 text-sm text-muted-foreground">
-            No imports found.
-          </div>
+          <div className="px-4 py-6 text-sm text-muted-foreground">No imports found.</div>
         )}
 
         {!loading &&
@@ -144,12 +273,8 @@ export default function ImportManagement() {
                   className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
                   onClick={() => {
                     setCurrent({
-                      shipmentId: g.shipmentId,
-                      ociNumber: g.ociNumber,
-                      poNumber: g.poNumber,
-                      transportType: g.transportType,
-                      importStatus: g.importStatus,
-                      // mantenemos el resto accesible en el drawer
+                      ...g, // incluye shipmentId, ociNumber, poNumber, transportType, importStatus
+                      rows: g._rows,
                     });
                     setOpen(true);
                   }}
