@@ -2,9 +2,10 @@
 import React, { useMemo, useState } from "react";
 import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
-import { mapTenderItems, mapCommunications } from "@/lib/adapters";
+import { mapTenderItems } from "@/lib/adapters";
 import { usePresentationCatalog } from "@/lib/catalog";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
+import CommunicationList from "@/components/CommunicationList";
 
 const fmtCLP = (n) =>
   typeof n === "number"
@@ -18,7 +19,11 @@ export default function TenderDetailsModal({
   row, // alias opcional
 }) {
   const tender = tenderProp || row;
+
+  // modal "new communication"
   const [openNewComm, setOpenNewComm] = useState(false);
+  // para forzar refresco del listado al guardar
+  const [commRefresh, setCommRefresh] = useState(0);
 
   // Cargamos tender_items
   const { rows: allItems = [], loading: loadingItems } = useSheet(
@@ -38,7 +43,7 @@ export default function TenderDetailsModal({
       lineTotalCLP:
         r.currency?.toUpperCase() === "CLP"
           ? r.awardedQty * r.unitPrice * (r.packageUnits || 1)
-          : r.awardedQty * r.unitPrice * (r.packageUnits || 1), // si tu data viene en CLP ya, se mantendrá
+          : r.awardedQty * r.unitPrice * (r.packageUnits || 1),
     }));
   }, [allItems, tender?.tenderId, enrich]);
 
@@ -48,26 +53,11 @@ export default function TenderDetailsModal({
     return { products, totalValue };
   }, [items]);
 
-  // Communications vinculadas a este Tender
-  const {
-    rows: allComms = [],
-    loading: loadingComms,
-    refetch: refetchComms,
-  } = useSheet("communications", mapCommunications);
-
-  const comms = useMemo(() => {
-    const id = tender?.tenderId || "";
-    return (allComms || []).filter(
-      (c) =>
-        String(c.linked_id || "").trim() === String(id) &&
-        (c.linked_type === "tender" || c.linked_type === "tenders")
-    );
-  }, [allComms, tender?.tenderId]);
-
   if (!open || !tender) return null;
 
-  const handleSavedComm = async () => {
-    if (typeof refetchComms === "function") await refetchComms();
+  const handleSavedComm = () => {
+    // fuerza el remount de <CommunicationList/> para leer la hoja nuevamente
+    setCommRefresh((k) => k + 1);
     setOpenNewComm(false);
   };
 
@@ -159,28 +149,12 @@ export default function TenderDetailsModal({
               New Communication
             </Button>
           </div>
-          <div className="space-y-2">
-            {(comms || []).map((c) => (
-              <div key={c.id} className="p-3 rounded-lg border">
-                <div className="text-sm font-medium">{c.subject || "(no subject)"}</div>
-                <div className="text-xs text-muted-foreground">
-                  {c.createdDate?.slice(0, 10)} · {c.type || "—"} ·{" "}
-                  {c.participants || "—"}
-                </div>
-                {c.content ? (
-                  <div className="text-sm mt-1">{c.content}</div>
-                ) : (
-                  <div className="text-xs text-muted-foreground mt-1">(no content)</div>
-                )}
-              </div>
-            ))}
-            {loadingComms && (
-              <div className="text-sm text-muted-foreground">Loading…</div>
-            )}
-            {!loadingComms && (comms || []).length === 0 && (
-              <div className="text-sm text-muted-foreground">No communications.</div>
-            )}
-          </div>
+
+          <CommunicationList
+            key={commRefresh}
+            linkedType="tender"
+            linkedId={tender?.tenderId || ""}
+          />
         </div>
 
         {/* Footer */}
@@ -204,4 +178,3 @@ export default function TenderDetailsModal({
     </div>
   );
 }
-
