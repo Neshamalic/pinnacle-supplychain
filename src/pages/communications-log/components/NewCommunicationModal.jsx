@@ -1,43 +1,13 @@
-import { useState } from "react";
+// src/pages/communications-log/components/NewCommunicationModal.jsx
+import React, { useState } from "react";
+import Button from "@/components/ui/Button";
+import { createCommunication } from "@/lib/sheetsApi";
 
-// Usa tu endpoint de Apps Script.
-// O bien define VITE_SHEETS_ENDPOINT en .env
-const SCRIPT_URL =
-  import.meta.env.VITE_SHEETS_ENDPOINT ||
-  window.__GS_URL__ ||
-  "PASTE_YOUR_APPS_SCRIPT_URL_HERE"; // <-- reemplázalo si no usas env
-
-async function createCommunication(row) {
-  const res = await fetch(`${SCRIPT_URL}?route=write&name=communications`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      action: "create",
-      name: "communications",
-      row,
-    }),
-  });
-
-  // Aseguramos parseo robusto
-  let payload = null;
-  try {
-    payload = await res.json();
-  } catch {
-    const txt = await res.text();
-    throw new Error(txt || "Empty response from Apps Script");
-  }
-
-  if (!res.ok || payload?.ok === false) {
-    throw new Error(payload?.error || "Failed to save");
-  }
-  return payload;
-}
-
+const TYPES = ["email", "call", "meeting", "message"];
 const LINKED_TYPES = [
-  { value: "tender", label: "Tender" },
-  { value: "po", label: "Purchase Order (PO)" },
-  { value: "oci", label: "OCI (internal PO)" },
-  { value: "import", label: "Import (Shipment ID)" },
+  { label: "Tender", value: "tender" },
+  { label: "Purchase Order (PO/OCI)", value: "po" },
+  { label: "Import (Shipment)", value: "import" },
 ];
 
 export default function NewCommunicationModal({ open, onClose, onSaved }) {
@@ -54,126 +24,132 @@ export default function NewCommunicationModal({ open, onClose, onSaved }) {
 
   const handleSave = async () => {
     setError("");
-    setSaving(true);
+    if (!subject.trim() || !content.trim()) {
+      setError("Subject and Content are required.");
+      return;
+    }
+    if (!linkedId.trim()) {
+      setError("Linked ID is required.");
+      return;
+    }
+
+    const payload = {
+      type,
+      subject: subject.trim(),
+      content: content.trim(),
+      participants: participants.trim(),
+      linked_type: linkedType, // tender | po | import
+      linked_id: linkedId.trim(),
+      created_date: new Date().toISOString(),
+    };
+
     try {
-      const row = {
-        created_date: new Date().toISOString(),
-        type,
-        subject,
-        content,
-        participants,
-        linked_type: linkedType, // tender | po | oci | import
-        linked_id: linkedId,
-        preview: (content || "").slice(0, 160),
-      };
-      await createCommunication(row);
+      setSaving(true);
+      await createCommunication(payload);
       setSaving(false);
-      onSaved?.();  // pide recargar la tabla en el padre
+      onSaved?.(); // refresca la lista
       onClose?.();
     } catch (e) {
       setSaving(false);
-      setError(String(e.message || e));
+      setError(e.message || "Error saving communication");
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30">
-      <div className="w-[720px] rounded-xl bg-white p-20 shadow-xl">
-        <div className="flex items-center justify-between mb-12">
-          <h3 className="text-lg font-semibold">New Communication</h3>
-          <button onClick={onClose} className="text-slate-500">✕</button>
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="absolute inset-x-0 top-10 mx-auto w-full max-w-2xl rounded-lg bg-white shadow-xl">
+        <div className="border-b px-6 py-4">
+          <div className="text-lg font-semibold">New Communication</div>
+          {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
         </div>
 
-        {error && (
-          <div className="mb-12 rounded-md bg-red-50 p-12 text-sm text-red-700">
-            {error}
-          </div>
-        )}
+        <div className="px-6 py-4 space-y-4 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="space-y-1">
+              <span className="text-muted-foreground">Communication Type *</span>
+              <select
+                className="w-full rounded border px-3 py-2"
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+              >
+                {TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        <div className="grid grid-cols-2 gap-12">
-          <div>
-            <label className="text-sm font-medium">Communication Type *</label>
-            <select
-              className="mt-2 w-full rounded-md border p-10"
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-            >
-              <option value="email">Email</option>
-              <option value="meeting">Meeting</option>
-              <option value="phone">Phone</option>
-              <option value="whatsapp">WhatsApp</option>
-              <option value="note">Note</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">Subject *</label>
-            <input
-              className="mt-2 w-full rounded-md border p-10"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="Subject"
-            />
+            <label className="md:col-span-2 space-y-1">
+              <span className="text-muted-foreground">Subject *</span>
+              <input
+                className="w-full rounded border px-3 py-2"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Enter subject"
+              />
+            </label>
           </div>
 
-          <div className="col-span-2">
-            <label className="text-sm font-medium">Content *</label>
+          <label className="space-y-1 block">
+            <span className="text-muted-foreground">Content *</span>
             <textarea
               rows={6}
-              className="mt-2 w-full rounded-md border p-10"
+              className="w-full rounded border px-3 py-2"
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              placeholder="Enter communication details..."
+              placeholder="Enter communication details…"
             />
-          </div>
+          </label>
 
-          <div>
-            <label className="text-sm font-medium">Participants</label>
+          <label className="space-y-1 block">
+            <span className="text-muted-foreground">
+              Participants (comma separated)
+            </span>
             <input
-              className="mt-2 w-full rounded-md border p-10"
+              className="w-full rounded border px-3 py-2"
               value={participants}
               onChange={(e) => setParticipants(e.target.value)}
-              placeholder="Comma separated…"
+              placeholder="e.g. Alice, Bob"
             />
-          </div>
+          </label>
 
-          <div>
-            <label className="text-sm font-medium">Linked Type *</label>
-            <select
-              className="mt-2 w-full rounded-md border p-10"
-              value={linkedType}
-              onChange={(e) => setLinkedType(e.target.value)}
-            >
-              {LINKED_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="space-y-1">
+              <span className="text-muted-foreground">Linked Type</span>
+              <select
+                className="w-full rounded border px-3 py-2"
+                value={linkedType}
+                onChange={(e) => setLinkedType(e.target.value)}
+              >
+                {LINKED_TYPES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <div className="col-span-2">
-            <label className="text-sm font-medium">Linked ID *</label>
-            <input
-              className="mt-2 w-full rounded-md border p-10"
-              value={linkedId}
-              onChange={(e) => setLinkedId(e.target.value)}
-              placeholder="e.g. 621-29-LR25, PO-2025-001, OCI-171, EXP-25-26-UK-14…"
-            />
+            <label className="md:col-span-2 space-y-1">
+              <span className="text-muted-foreground">Linked ID *</span>
+              <input
+                className="w-full rounded border px-3 py-2"
+                value={linkedId}
+                onChange={(e) => setLinkedId(e.target.value)}
+                placeholder="Tender ID / PO/OCI / Shipment ID"
+              />
+            </label>
           </div>
         </div>
 
-        <div className="mt-16 flex justify-end gap-8">
-          <button className="rounded-md border px-16 py-10" onClick={onClose}>
+        <div className="border-t px-6 py-4 flex items-center justify-end gap-2">
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
             Cancel
-          </button>
-          <button
-            className="rounded-md bg-blue-600 px-16 py-10 text-white disabled:opacity-60"
-            onClick={handleSave}
-            disabled={saving}
-          >
+          </Button>
+          <Button onClick={handleSave} disabled={saving}>
             {saving ? "Saving…" : "Save Communication"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
