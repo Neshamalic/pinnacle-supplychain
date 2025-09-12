@@ -5,6 +5,7 @@ import { useSheet } from "@/lib/sheetsApi";
 import { mapImportItems } from "@/lib/adapters";
 import { usePresentationCatalog } from "@/lib/catalog";
 import ImportDetails from "./ImportDetails";
+import CommunicationList from "@/components/CommunicationList";
 
 export default function ImportDetailsDrawer(props) {
   const isOpen = props.isOpen ?? props.open ?? false;
@@ -13,13 +14,10 @@ export default function ImportDetailsDrawer(props) {
 
   if (!isOpen || !imp) return null;
 
-  // 1) Items de import desde Google Sheets
-  const { rows: allImportItems = [], loading } = useSheet(
-    "import_items",
-    mapImportItems
-  );
+  // 1) Items
+  const { rows: allImportItems = [], loading } = useSheet("import_items", mapImportItems);
 
-  // 2) Filtramos por oci_number (y opcionalmente por po_number si aplica)
+  // 2) Filtrar por OCI o PO
   const filtered = useMemo(() => {
     const list = [];
     for (const r of allImportItems || []) {
@@ -29,7 +27,7 @@ export default function ImportDetailsDrawer(props) {
     return list;
   }, [allImportItems, imp?.ociNumber, imp?.poNumber]);
 
-  // 3) Enriquecemos con product_name y package_units
+  // 3) Enriquecer con product_name y package_units
   const { enrich } = usePresentationCatalog();
   const items = useMemo(() => enrich(filtered), [filtered, enrich]);
 
@@ -57,6 +55,12 @@ export default function ImportDetailsDrawer(props) {
         {/* Content */}
         <div className="flex-1 overflow-auto">
           <ImportDetails items={items} loading={loading} importRow={imp} />
+
+          {/* Communications */}
+          <div className="px-6 pb-6">
+            <h4 className="text-sm font-medium mb-2">Communications</h4>
+            <CommunicationList linkedType="import" linkedId={imp.shipmentId} />
+          </div>
         </div>
 
         {/* Footer */}
@@ -69,4 +73,3 @@ export default function ImportDetailsDrawer(props) {
     </div>
   );
 }
-
