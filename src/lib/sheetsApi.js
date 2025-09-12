@@ -1,139 +1,47 @@
 // src/lib/sheetsApi.js
 import { useEffect, useMemo, useState } from "react";
 
-/** =============================
- *  CONFIG
- * ==============================*/
-const BASE_URL = (import.meta.env.VITE_SHEETS_API_URL || "").replace(/\/+$/, "");
-if (!BASE_URL) {
-  // Aviso temprano para detectar falta de env var
-  // (no lanzamos error para no romper el build)
-  // eslint-disable-next-line no-console
-  console.warn(
-    "[sheetsApi] Missing VITE_SHEETS_API_URL. Set it in your .env or Vercel env."
-  );
-}
+// 👉 Ajusta esta URL a tu Web App de Google Apps Script (ya la usas en otras vistas)
+const BASE_URL = import.meta.env.VITE_SHEETS_API_URL;
 
-/** =============================
- *  HELPERS: fetch seguro + parseo tolerante
- * ==============================*/
+/* ----------------------------- Internos ----------------------------- */
 
-// Timeout por defecto (ms)
-const DEFAULT_TIMEOUT = 25000;
-
-function withTimeout(ms = DEFAULT_TIMEOUT) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), ms);
-  return { controller, clear: () => clearTimeout(id) };
-}
-
-/**
- * fetchSafe: incluye timeout y errores claros
- */
-async function fetchSafe(url, options = {}, { timeoutMs = DEFAULT_TIMEOUT } = {}) {
-  const { controller, clear } = withTimeout(timeoutMs);
+async function safeJson(res) {
+  const text = await res.text();
   try {
-    const res = await fetch(url, { signal: controller.signal, ...options });
-    clear();
-    return res;
-  } catch (err) {
-    clear();
-    // Mensaje consistente
-    const msg =
-      err?.name === "AbortError"
-        ? `Request timeout after ${timeoutMs}ms: ${url}`
-        : `Network error calling ${url}: ${err?.message || err}`;
-    throw new Error(msg);
-  }
-}
-
-/**
- * readJsonSafe: lee el cuerpo UNA SOLA VEZ,
- * si viene vacío o no es JSON, devuelve objeto tolerante.
- */
-async function readJsonSafe(res) {
-  const text = await res.text(); // leer una vez
-  const trimmed = (text || "").trim();
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
-
-  // Sin contenido: tratamos como éxito si el status es 2xx
-  if (!trimmed) {
-    return { ok: res.ok, status: res.status, message: "" };
-  }
-
-  // Si parece JSON (header o forma), parseamos
-  const looksJson =
-    ct.includes("application/json") ||
-    trimmed.startsWith("{") ||
-    trimmed.startsWith("[");
-  if (looksJson) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      // Si el servidor devolvió JSON inválido
-      throw new Error("Server returned invalid JSON.");
-    }
-  }
-
-  // No es JSON: devolvemos como mensaje de texto
-  return { ok: res.ok, status: res.status, message: trimmed };
-}
-
-/** =============================
- *  R/W genéricos
- * ==============================*/
-
-/** GET de tabla (route=table&name=...) */
-async function getTable(name) {
-  const url = `${BASE_URL}?route=table&name=${encodeURIComponent(name)}`;
-  const res = await fetchSafe(url, { method: "GET" });
-  const data = await readJsonSafe(res);
-
-  // Apps Script estándar: { ok: true, rows: [...] }
-  if (!data.ok && res.ok) {
-    // Si el servidor respondió 200 pero sin "ok", asumimos éxito y devolvemos rows vacío
-    return Array.isArray(data.rows) ? data.rows : [];
-  }
-  if (!res.ok || data.ok === false) {
+    return JSON.parse(text);
+  } catch (_) {
+    // Mensaje claro cuando el Apps Script respondió texto vacío o HTML
     throw new Error(
-      data?.error || data?.message || `Error fetching sheet: ${name} (HTTP ${res.status})`
+      `Respuesta no-JSON del servidor (status ${res.status}). Body: ${String(text || "").slice(0, 200)}`
     );
   }
-  return Array.isArray(data.rows) ? data.rows : [];
 }
 
-/** POST de escritura (create/update/delete) */
+async function getTable(name) {
+  const url = `${BASE_URL}?route=table&name=${encodeURIComponent(name)}`;
+  const res = await fetch(url, { method: "GET" });
+  const json = await safeJson(res);
+  if (!json.ok) throw new Error(json.error || `Error leyendo hoja: ${name}`);
+  return json.rows || [];
+}
+
 async function postWrite(payload) {
-  // Mandamos como JSON; Apps Script puede leer e.postData.contents
-  const res = await fetchSafe(`${BASE_URL}?route=write`, {
+  const res = await fetch(`${BASE_URL}?route=write`, {
     method: "POST",
-    headers: {
-      // Accept por si tu Apps Script decide mandar JSON formal
-      Accept: "application/json",
-      "Content-Type": "application/json;charset=utf-8"
-    },
-    body: JSON.stringify(payload)
+    // 👇 text/plain evita problemas de CORS con Apps Script;
+    // igual mandamos JSON en el body.
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+    body: JSON.stringify(payload),
   });
-
-  const data = await readJsonSafe(res);
-
-  // Si el servidor no manda JSON pero fue 2xx y sin cuerpo -> tratamos como éxito
-  if (res.ok && (data?.ok === undefined || data?.ok === null)) {
-    return { ok: true, ...data };
-  }
-
-  if (!res.ok || data.ok === false) {
-    throw new Error(data?.error || data?.message || "Write error");
-  }
-  return data;
+  const json = await safeJson(res);
+  if (!json.ok) throw new Error(json.error || "Error de escritura");
+  return json;
 }
 
-/** =============================
- *  React Hook de lectura
- * ==============================*/
-
+/* ------------------------------ Hook GET ---------------------------- */
 /**
- * useSheet: lee una hoja y mapea filas
+ * Hook genérico para leer una hoja y mapear filas
  * @param {string} sheetName
  * @param {(row:any)=>any} mapFn
  */
@@ -157,29 +65,66 @@ export function useSheet(sheetName, mapFn = (x) => x) {
   };
 
   useEffect(() => {
-    if (!sheetName) return;
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheetName]);
 
-  return useMemo(() => ({ rows, loading, error, reload }), [rows, loading, error]);
+  // alias "refetch" por si el componente lo prefiere
+  return useMemo(
+    () => ({ rows, loading, error, reload, refetch: reload }),
+    [rows, loading, error]
+  );
 }
 
-/** =============================
- *  Helpers de escritura
- * ==============================*/
+/* ------------------------------ CRUD ------------------------------- */
 
-// Crear fila
 export async function writeRow(sheetName, row) {
   return postWrite({ action: "create", name: sheetName, row });
 }
 
-// Actualizar fila (coincidencia por id o por claves del Apps Script)
 export async function updateRow(sheetName, row) {
   return postWrite({ action: "update", name: sheetName, row });
 }
 
-// Eliminar fila (por id o claves)
 export async function deleteRow(sheetName, where) {
   return postWrite({ action: "delete", name: sheetName, where });
+}
+
+/* --------------------- Comunicaciones (Create) ---------------------- */
+/**
+ * Crea una comunicación en la hoja "communications".
+ * Acepta claves en camelCase o snake_case:
+ * {
+ *   type, subject, participants, content,
+ *   linkedType/linked_type, linkedId/linked_id,
+ *   createdDate (opcional), id (opcional)
+ * }
+ */
+export async function createCommunication(data = {}) {
+  const id =
+    data.id ||
+    `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const createdIso =
+    data.createdDate ||
+    data.created_date ||
+    new Date().toISOString();
+
+  const row = {
+    id,
+    created_date: createdIso,
+    type: String(data.type || "").toLowerCase(),
+    subject: data.subject || "",
+    participants: data.participants || "",
+    content: data.content || "",
+    preview: (data.content || "").slice(0, 140),
+
+    // normalizamos nombres
+    linked_type: String(data.linked_type || data.linkedType || "").toLowerCase(),
+    linked_id: String(data.linked_id || data.linkedId || ""),
+  };
+
+  // Se escribe en la hoja "communications"
+  // (Apps Script appendRow_ usará los headers existentes)
+  return writeRow("communications", row);
 }
