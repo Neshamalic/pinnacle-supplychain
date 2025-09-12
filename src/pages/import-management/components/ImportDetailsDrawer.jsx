@@ -4,8 +4,6 @@ import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
 import { mapImportItems } from "@/lib/adapters";
 import { usePresentationCatalog } from "@/lib/catalog";
-import ImportDetails from "./ImportDetails";
-import CommunicationList from "@/components/CommunicationList";
 
 export default function ImportDetailsDrawer(props) {
   const isOpen = props.isOpen ?? props.open ?? false;
@@ -14,20 +12,33 @@ export default function ImportDetailsDrawer(props) {
 
   if (!isOpen || !imp) return null;
 
-  // 1) Items
+  // 1) Import items desde la hoja
   const { rows: allImportItems = [], loading } = useSheet("import_items", mapImportItems);
 
-  // 2) Filtrar por OCI o PO
+  // 2) Filtrado por prioridad: shipmentId -> ociNumber -> poNumber
   const filtered = useMemo(() => {
     const list = [];
+    const sid = imp.shipmentId || imp.shipment_id || imp.shipmentID;
+    const oci = imp.ociNumber || imp.oci;
+    const po = imp.poNumber || imp.po;
     for (const r of allImportItems || []) {
-      if (imp.ociNumber && r.ociNumber === imp.ociNumber) list.push(r);
-      else if (imp.poNumber && r.poNumber === imp.poNumber) list.push(r);
+      if (sid && (r.shipmentId === sid || r.shipment_id === sid)) {
+        list.push(r);
+        continue;
+      }
+      if (!sid && oci && r.ociNumber === oci) {
+        list.push(r);
+        continue;
+      }
+      if (!sid && !oci && po && r.poNumber === po) {
+        list.push(r);
+        continue;
+      }
     }
     return list;
-  }, [allImportItems, imp?.ociNumber, imp?.poNumber]);
+  }, [allImportItems, imp]);
 
-  // 3) Enriquecer con product_name y package_units
+  // 3) Enriquecer con product master (product_name, package_units)
   const { enrich } = usePresentationCatalog();
   const items = useMemo(() => enrich(filtered), [filtered, enrich]);
 
@@ -54,12 +65,38 @@ export default function ImportDetailsDrawer(props) {
 
         {/* Content */}
         <div className="flex-1 overflow-auto">
-          <ImportDetails items={items} loading={loading} importRow={imp} />
-
-          {/* Communications */}
-          <div className="px-6 pb-6">
-            <h4 className="text-sm font-medium mb-2">Communications</h4>
-            <CommunicationList linkedType="import" linkedId={imp.shipmentId} />
+          <div className="px-6 py-4">
+            <h4 className="text-sm font-semibold mb-2">Items & Lots</h4>
+            <div className="rounded-lg border divide-y">
+              {(items || []).map((it, idx) => (
+                <div key={idx} className="px-4 py-3">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="font-medium">
+                        {it.presentationCode}{" "}
+                        <span className="text-muted-foreground">
+                          • {it.productName || "—"}{" "}
+                          {it.packageUnits ? `• ${it.packageUnits} units/pack` : ""}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Lot: {it.lot || "—"} · OCI: {it.ociNumber || "—"}
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground text-right">
+                      Qty: {Number(it.qty || 0).toLocaleString("es-CL")}<br />
+                      Unit: {it.unitPrice ? Number(it.unitPrice).toLocaleString("en-US", { minimumFractionDigits: 2 }) : "—"}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {loading && (
+                <div className="px-4 py-4 text-sm text-muted-foreground">Loading items…</div>
+              )}
+              {!loading && (items || []).length === 0 && (
+                <div className="px-4 py-4 text-sm text-muted-foreground">No items found.</div>
+              )}
+            </div>
           </div>
         </div>
 
