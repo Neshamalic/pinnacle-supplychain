@@ -155,10 +155,24 @@ export const mapImports = (row = {}) => {
 };
 
 /** ================== IMPORT ITEMS ==================== */
-/* Por cada OCI: items con lotes, qty y qc_status por lote. */
 export const mapImportItems = (row = {}) => {
+  const str = (v) => (v == null ? "" : String(v).trim());
+  const toNumber = (v) => {
+    if (v == null || v === "") return 0;
+    if (typeof v === "number") return v;
+    const s = String(v).replace(/\./g, "").replace(/,/g, ".");
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const pick = (r, keys) => {
+    for (const k of keys) if (Object.prototype.hasOwnProperty.call(r, k)) return r[k];
+    return undefined;
+  };
+
   return {
-    ociNumber: str(pick(row, ["oci_number", "oci"]) || ""),
+    // ✅ ahora también mapeamos poNumber para que el modal de PO pueda cruzar cantidades importadas
+    poNumber: str(pick(row, ["po_number", "po", "poNumber"]) || ""),
+    ociNumber: str(pick(row, ["oci_number", "oci"])),
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
     lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
     qty: toNumber(pick(row, ["qty", "quantity"])),
