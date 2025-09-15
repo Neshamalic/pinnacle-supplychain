@@ -155,30 +155,32 @@ export const mapImports = (row = {}) => {
 };
 
 /** ================== IMPORT ITEMS ==================== */
+/* ✅ Normaliza y también guarda alias para máxima compatibilidad:
+   - ociNumber + (oci)
+   - poNumber  + (po)
+   - shipmentId + (shipment_id)
+*/
 export const mapImportItems = (row = {}) => {
-  const str = (v) => (v == null ? "" : String(v).trim());
-  const toNumber = (v) => {
-    if (v == null || v === "") return 0;
-    if (typeof v === "number") return v;
-    const s = String(v).replace(/\./g, "").replace(/,/g, ".");
-    const n = parseFloat(s);
-    return Number.isFinite(n) ? n : 0;
-  };
-  const pick = (r, keys) => {
-    for (const k of keys) if (Object.prototype.hasOwnProperty.call(r, k)) return r[k];
-    return undefined;
+  const normalized = {
+    shipmentId: str(pick(row, ["shipmentId", "shipment_id", "shipment", "ShipmentId"]) || ""),
+    ociNumber: str(pick(row, ["ociNumber", "oci_number", "oci", "OCI", "oci_id"]) || ""),
+    poNumber: str(pick(row, ["poNumber", "po_number", "po", "PO", "po_id"]) || ""),
+    presentationCode: str(pick(row, ["presentationCode", "presentation_code", "product_code", "sku", "code"]) || ""),
+    lotNumber: str(pick(row, ["lotNumber", "lot_number", "lot"]) || ""),
+    qty: toNumber(pick(row, ["qty", "quantity"])),
+    unitPrice: toNumber(pick(row, ["unitPrice", "unit_price", "price"])),
+    currency: str(pick(row, ["currency", "curr"]) || "USD").toUpperCase(),
+    qcStatus: str(pick(row, ["qcStatus", "qc_status", "quality_status", "qc"]) || "").toLowerCase(),
   };
 
+  // además dejamos alias para que componentes antiguos sigan funcionando
   return {
-    // ✅ ahora también mapeamos poNumber para que el modal de PO pueda cruzar cantidades importadas
-    poNumber: str(pick(row, ["po_number", "po", "poNumber"]) || ""),
-    ociNumber: str(pick(row, ["oci_number", "oci"])),
-    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
-    lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
-    qty: toNumber(pick(row, ["qty", "quantity"])),
-    unitPrice: toNumber(pick(row, ["unit_price", "price"])),
-    currency: str(pick(row, ["currency", "curr"]) || "USD").toUpperCase(),
-    qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
+    ...normalized,
+    // alias duplicados (por si algún componente viejo los usa)
+    oci: normalized.ociNumber,
+    po: normalized.poNumber,
+    shipment_id: normalized.shipmentId,
+    product_code: normalized.presentationCode,
     _raw: row,
   };
 };
@@ -212,3 +214,4 @@ export const mapCommunications = (row = {}) => {
 
 /** ================ Export utils ====================== */
 export const _utils = { str, toNumber, toDateISO, pick };
+
