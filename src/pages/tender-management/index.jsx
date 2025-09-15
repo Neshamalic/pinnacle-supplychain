@@ -1,431 +1,126 @@
 // src/pages/tender-management/index.jsx
 import React, { useMemo, useState } from "react";
-import { format } from "date-fns";
-
 import { useSheet } from "@/lib/sheetsApi";
 import { mapTenders, mapTenderItems } from "@/lib/adapters";
+import { usePresentationCatalog } from "@/lib/catalog";
 
-import Button from "@/components/ui/Button";
-import Icon from "@/components/AppIcon";
+// UI
+import TenderToolbar from "./components/TenderToolbar";
+import TenderTable from "./components/TenderTable";
 import TenderDetailsDrawer from "./components/TenderDetailsDrawer";
-import NewTenderModal from "./components/NewTenderModal";
 
-const fmtCLP = (n) =>
-  typeof n === "number"
-    ? `CLP ${n.toLocaleString("es-CL")}`
-    : `CLP ${Number(n || 0).toLocaleString("es-CL")}`;
-
-const asDate = (iso) => {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
-};
+function fmtCLP(n) {
+  const v = Number.isFinite(+n) ? +n : 0;
+  return new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", minimumFractionDigits: 0 }).format(v);
+}
 
 export default function TenderManagementPage() {
-  // --- Estado UI ---
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [fromDate, setFromDate] = useState(""); // Contract Period (desde)
-  const [toDate, setToDate] = useState(""); // Contract Period (hasta)
-  const [openDrawer, setOpenDrawer] = useState(false);
+  const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(null);
-  const [openNewTender, setOpenNewTender] = useState(false);
-  const [editRow, setEditRow] = useState(null);
 
-  // --- Datos ---
-  const {
-    rows: rawTenders = [],
-    loading: loadingTenders,
-    reload: reloadTenders,
-  } = useSheet("tenders", mapTenders);
+  // Carga base
+  const { rows: tenders = [], loading: loadingTenders } = useSheet("tenders", mapTenders);
+  const { rows: tenderItems = [], loading: loadingItems } = useSheet("tender_items", mapTenderItems);
 
-  const {
-    rows: tenderItems = [],
-    loading: loadingItems,
-  } = useSheet("tender_items", mapTenderItems);
+  const { enrich } = usePresentationCatalog();
 
-  // ---- Agregamos métricas por tenderId a partir de tender_items ----
-  const itemsAggByTender = useMemo(() => {
-    const map = new Map(); // tenderId -> {productsCount, totalValue, stockCoverage, contractStart, contractEnd}
-    for (const it of tenderItems || []) {
-      const key = (it.tenderId || "").trim();
-      if (!key) continue;
-      const entry = map.get(key) || {
-        _set: new Set(),
-        totalValue: 0,
-        stockCoverage: null,
-        contractStart: null,
-        contractEnd: null,
-      };
-      if (it.presentationCode) entry._set.add(it.presentationCode);
-      entry.totalValue += Number(it.lineTotal || 0);
+  // ====== Util común (idéntico a Overview del modal) ======
+  const lineTotalCLP = (it) => {
+    const qty = Number(it.awardedQty ?? it.qty ?? 0);
+    const price = Number(it.unitPrice ?? 0);
+    const packs = Number(it.packageUnits ?? 1);
+    return qty * price * packs;
+  };
 
-      // stock coverage -> tomamos el mínimo (más crítico) disponible
-      if (it.stockCoverageDays != null && it.stockCoverageDays !== "") {
-        const v = Number(it.stockCoverageDays);
-        if (Number.isFinite(v)) {
-          if (entry.stockCoverage == null) entry.stockCoverage = v;
-          else entry.stockCoverage = Math.min(entry.stockCoverage, v);
-        }
-      }
+  // ====== Grouping por tenderId y cálculo de métricas ======
+  const tableRows = useMemo(() => {
+    // enriquecemos para inyectar productName y packageUnits
+    const itemsEnriched = enrich(tenderItems || []);
 
-      // contract period -> mínimo start y máximo end
-      const cs = asDate(it.contractStart);
-      const ce = asDate(it.contractEnd);
-      if (cs) entry.contractStart = !entry.contractStart || cs < entry.contractStart ? cs : entry.contractStart;
-      if (ce) entry.contractEnd = !entry.contractEnd || ce > entry.contractEnd ? ce : entry.contractEnd;
-
-      map.set(key, entry);
+    // agrupamos por tenderId
+    const byTender = new Map();
+    for (const it of itemsEnriched) {
+      const id = String(it.tenderId || "").trim();
+      if (!id) continue;
+      if (!byTender.has(id)) byTender.set(id, []);
+      byTender.get(id).push(it);
     }
-    // transpilar a objeto limpio
-    const out = new Map();
-    for (const [k, v] of map.entries()) {
-      out.set(k, {
-        productsCount: v._set.size,
-        totalValue: v.totalValue,
-        stockCoverage: v.stockCoverage,
-        contractStart: v.contractStart ? v.contractStart.toISOString() : "",
-        contractEnd: v.contractEnd ? v.contractEnd.toISOString() : "",
+
+    // construimos filas finales
+    const rows = [];
+    for (const t of tenders || []) {
+      const id = String(t.tenderId || "").trim();
+      if (!id) continue;
+
+      const items = byTender.get(id) || [];
+
+      // productos únicos
+      const products = new Set(items.map((x) => x.presentationCode)).size;
+
+      // total CLP consistente con Overview (qty * price * packageUnits)
+      const totalCLP = items.reduce((acc, x) => acc + lineTotalCLP(x), 0);
+
+      // entrega (si no viene del master, tomamos la del tender)
+      const deliveryDate = t.deliveryDate || null;
+
+      rows.push({
+        tenderId: id,
+        title: t.title || "—",
+        status: t.status || "",
+        deliveryDate,
+        products,
+        // lo pasamos ya en número; la celda se encarga del formateo
+        totalValueCLP: totalCLP,
+        // (si tienes stockCoverage a nivel tender, mantenlo; si no, 0)
+        stockCoverageDays: Number(t.stockCoverage || 0),
+        _tender: t,
+        _items: items,
       });
     }
-    return out;
-  }, [tenderItems]);
 
-  // 1) Agrupamos tender rows por tenderId (desduplicado básico)
-  const groupedTenders = useMemo(() => {
-    const map = new Map();
-    for (const r of rawTenders) {
-      const key = (r.tenderId || r.id || "").trim();
-      if (!key) continue;
-      if (!map.has(key)) map.set(key, { ...r });
-      else {
-        const prev = map.get(key);
-        map.set(key, {
-          ...prev,
-          deliveryDate:
-            asDate(prev.deliveryDate) && asDate(r.deliveryDate)
-              ? (asDate(prev.deliveryDate) < asDate(r.deliveryDate)
-                  ? prev.deliveryDate
-                  : r.deliveryDate)
-              : prev.deliveryDate || r.deliveryDate,
-          status: (prev.status || r.status || "").toLowerCase(),
-        });
-      }
-    }
-    // Mezclamos la agregación de items (products, totals, stockCoverage, contract period)
-    return Array.from(map.values()).map((row) => {
-      const agg = itemsAggByTender.get(row.tenderId || row.id) || {};
-      return {
-        ...row,
-        productsCount: agg.productsCount ?? row.productsCount ?? 0,
-        totalValue: agg.totalValue ?? row.totalValue ?? 0,
-        stockCoverage: agg.stockCoverage ?? row.stockCoverage ?? null,
-        contractStart: agg.contractStart || "",
-        contractEnd: agg.contractEnd || "",
-      };
+    // orden opcional por fecha
+    rows.sort((a, b) => {
+      const da = a.deliveryDate ? new Date(a.deliveryDate).getTime() : 0;
+      const db = b.deliveryDate ? new Date(b.deliveryDate).getTime() : 0;
+      return da - db;
     });
-  }, [rawTenders, itemsAggByTender]);
 
-  // 2) Filtros (búsqueda, estado, contract period)
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    const from = fromDate ? new Date(fromDate) : null;
-    const to = toDate ? new Date(toDate) : null;
+    return rows;
+  }, [tenders, tenderItems, enrich]);
 
-    const overlaps = (start, end) => {
-      if (!from && !to) return true;
-      const s = asDate(start);
-      const e = asDate(end);
-      if (s && e) {
-        if (from && e < from) return false;
-        if (to && s > to) return false;
-        return true;
-      }
-      // si no hay período, caemos al deliveryDate como fallback
-      const d = asDate(start) || asDate(end) || null;
-      if (!from && to && d) return d <= to;
-      if (from && !to && d) return d >= from;
-      if (from && to && d) return d >= from && d <= to;
-      return true;
-    };
-
-    return (groupedTenders || []).filter((r) => {
-      const okSearch =
-        !term ||
-        String(r.tenderId || "").toLowerCase().includes(term) ||
-        String(r.title || "").toLowerCase().includes(term);
-
-      const okStatus =
-        statusFilter === "all" ||
-        (r.status || "").toLowerCase() === statusFilter;
-
-      const okPeriod = overlaps(r.contractStart, r.contractEnd || r.deliveryDate);
-
-      return okSearch && okStatus && okPeriod;
+  // handlers
+  const handleView = (row) => {
+    setSelected({
+      ...row._tender,
+      items: row._items.map((it) => ({
+        ...it,
+        lineTotalCLP: lineTotalCLP(it), // lo mismo que en Overview
+      })),
     });
-  }, [groupedTenders, search, statusFilter, fromDate, toDate]);
-
-  // 3) KPIs
-  const kpis = useMemo(() => {
-    const active = filtered.length;
-    const awarded = filtered.filter((r) => (r.status || "") === "awarded").length;
-    const inDelivery = filtered.filter((r) => (r.status || "") === "in delivery").length;
-    const critical = filtered.filter((r) => Number(r.stockCoverage || 0) <= 0).length;
-    return { active, awarded, inDelivery, critical };
-  }, [filtered]);
-
-  // --- Acciones UI ---
-  const onView = (row) => {
-    setSelected(row);
-    setOpenDrawer(true);
+    setOpen(true);
   };
-  const onEdit = (row) => {
-    setEditRow(row);
-    setOpenNewTender(true);
-  };
-  const onNew = () => {
-    setEditRow(null);
-    setOpenNewTender(true);
-  };
-  const onSavedTender = async () => {
-    await reloadTenders?.();
-    setOpenNewTender(false);
-    setEditRow(null);
-  };
-  const exportCSV = () => {
-    const headers = [
-      "tenderId",
-      "title",
-      "status",
-      "contractStart",
-      "contractEnd",
-      "deliveryDate",
-      "stockCoverageDays",
-      "productsCount",
-      "totalValueCLP",
-    ];
-    const lines = filtered.map((r) => [
-      r.tenderId,
-      r.title,
-      r.status,
-      r.contractStart ? format(new Date(r.contractStart), "yyyy-MM-dd") : "",
-      r.contractEnd ? format(new Date(r.contractEnd), "yyyy-MM-dd") : "",
-      r.deliveryDate ? format(new Date(r.deliveryDate), "yyyy-MM-dd") : "",
-      r.stockCoverage ?? "",
-      r.productsCount ?? "",
-      Number(r.totalValue || 0),
-    ]);
-    const csv =
-      "\ufeff" +
-      [headers.join(","), ...lines.map((arr) => arr.join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `tenders_${format(new Date(), "yyyyMMdd_HHmm")}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  const clearFilters = () => {
-    setSearch("");
-    setStatusFilter("all");
-    setFromDate("");
-    setToDate("");
-  };
-
-  const loading = loadingTenders || loadingItems;
 
   return (
-    <div className="px-8 py-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold">Tender Management</h1>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" iconName="Download" onClick={exportCSV}>
-            Export
-          </Button>
-          <Button iconName="Plus" onClick={onNew}>
-            New Tender
-          </Button>
-        </div>
-      </div>
-
-      {/* KPI cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">
-        <KpiCard icon="Boxes" label="Active" value={kpis.active} />
-        <KpiCard icon="Medal" label="Awarded" value={kpis.awarded} />
-        <KpiCard icon="Truck" label="In Delivery" value={kpis.inDelivery} />
-        <KpiCard icon="AlertTriangle" label="Critical" value={kpis.critical} />
-      </div>
-
-      {/* Filtros */}
-      <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-end mb-4">
-        <div className="flex-1">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search tenders..."
-            className="w-full h-10 rounded-md border px-3"
-          />
-        </div>
-
-        {/* Contract Period (desde / hasta) */}
-        <div className="text-sm">
-          <div className="text-muted-foreground mb-1">Contract period (from)</div>
-          <input
-            type="date"
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            className="h-10 rounded-md border px-2"
-          />
-        </div>
-        <div className="text-sm">
-          <div className="text-muted-foreground mb-1">to</div>
-          <input
-            type="date"
-            value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-            className="h-10 rounded-md border px-2"
-          />
-        </div>
-
-        <div>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="h-10 rounded-md border px-2"
-            title="Status"
-          >
-            <option value="all">All status</option>
-            <option value="draft">Draft</option>
-            <option value="submitted">Submitted</option>
-            <option value="rejected">Rejected</option>
-            <option value="awarded">Awarded</option>
-            <option value="in delivery">In Delivery</option>
-          </select>
-        </div>
-
-        <div>
-          <Button variant="secondary" onClick={clearFilters} iconName="XCircle">
-            Clear Filters
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-4">
+      <TenderToolbar />
 
       {/* Tabla */}
-      <div className="rounded-lg border overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50">
-            <tr className="text-left">
-              <th className="px-4 py-3">Tender ID</th>
-              <th className="px-4 py-3">Title</th>
-              <th className="px-4 py-3">Products</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Delivery Date</th>
-              <th className="px-4 py-3">Stock Coverage</th>
-              <th className="px-4 py-3">Total Value</th>
-              <th className="px-4 py-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {filtered.map((r) => (
-              <tr key={r.tenderId}>
-                <td className="px-4 py-3 font-medium">{r.tenderId}</td>
-                <td className="px-4 py-3">{r.title || "—"}</td>
-                <td className="px-4 py-3">{r.productsCount ?? "—"}</td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={r.status} />
-                </td>
-                <td className="px-4 py-3">
-                  {r.deliveryDate
-                    ? format(new Date(r.deliveryDate), "dd-MM-yyyy")
-                    : "—"}
-                </td>
-                <td className="px-4 py-3">
-                  {r.stockCoverage != null ? `${r.stockCoverage} days` : "—"}
-                </td>
-                <td className="px-4 py-3 font-semibold">
-                  {fmtCLP(r.totalValue || 0)}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => onView(r)}>
-                      View
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => onEdit(r)}>
-                      Edit
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {!loading && filtered.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
-                  No tenders found with current filters.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <TenderTable
+        rows={tableRows}
+        loading={loadingTenders || loadingItems}
+        onView={handleView}
+        // la tabla debe mostrar totalValueCLP -> formatear con fmtCLP
+        valueFormatter={fmtCLP}
+      />
 
-      {/* Drawer de vista */}
-      {openDrawer && selected && (
+      {/* Drawer de detalles */}
+      {open && selected && (
         <TenderDetailsDrawer
-          open={openDrawer}
-          onClose={() => setOpenDrawer(false)}
+          open={open}
+          onClose={() => setOpen(false)}
           tender={selected}
         />
       )}
-
-      {/* Modal para crear/editar */}
-      {openNewTender && (
-        <NewTenderModal
-          open={openNewTender}
-          onClose={() => {
-            setOpenNewTender(false);
-            setEditRow(null);
-          }}
-          mode={editRow ? "edit" : "create"}
-          defaultValues={editRow || {}}
-          onSaved={onSavedTender}
-        />
-      )}
     </div>
-  );
-}
-
-/* ---------- Helpers de UI ---------- */
-
-function KpiCard({ icon, label, value }) {
-  return (
-    <div className="rounded-lg border p-4 flex items-center gap-3">
-      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-        <Icon name={icon} size={18} />
-      </div>
-      <div>
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <div className="text-lg font-semibold">{value}</div>
-      </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }) {
-  const s = (status || "").toLowerCase();
-  const tone =
-    s === "awarded"
-      ? "bg-green-100 text-green-700"
-      : s === "rejected"
-      ? "bg-rose-100 text-rose-700"
-      : s === "submitted"
-      ? "bg-blue-100 text-blue-700"
-      : s === "in delivery"
-      ? "bg-amber-100 text-amber-700"
-      : "bg-muted text-foreground";
-  return (
-    <span className={`px-2 py-1 rounded text-xs font-medium ${tone}`}>
-      {status || "—"}
-    </span>
   );
 }
