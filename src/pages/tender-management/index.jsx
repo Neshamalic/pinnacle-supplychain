@@ -2,8 +2,8 @@
 import React, { useMemo, useState } from "react";
 import { format } from "date-fns";
 
-import { useSheet, writeRow, updateRow } from "@/lib/sheetsApi";
-import { mapTenders } from "@/lib/adapters";
+import { useSheet } from "@/lib/sheetsApi";
+import { mapTenders, mapTenderItems } from "@/lib/adapters";
 
 import Button from "@/components/ui/Button";
 import Icon from "@/components/AppIcon";
@@ -35,81 +35,142 @@ export default function TenderManagementPage() {
   // --- Datos ---
   const {
     rows: rawTenders = [],
-    loading,
-    error,
-    reload,
+    loading: loadingTenders,
+    reload: reloadTenders,
   } = useSheet("tenders", mapTenders);
 
-  // 1) Agrupación por tenderId (desduplicado)
-  const grouped = useMemo(() => {
+  const {
+    rows: tenderItems = [],
+    loading: loadingItems,
+  } = useSheet("tender_items", mapTenderItems);
+
+  // ---- Agregamos métricas por tenderId a partir de tender_items ----
+  const itemsAggByTender = useMemo(() => {
+    const map = new Map(); // tenderId -> {productsCount, totalValue, stockCoverage, contractStart, contractEnd}
+    for (const it of tenderItems || []) {
+      const key = (it.tenderId || "").trim();
+      if (!key) continue;
+      const entry = map.get(key) || {
+        _set: new Set(),
+        totalValue: 0,
+        stockCoverage: null,
+        contractStart: null,
+        contractEnd: null,
+      };
+      if (it.presentationCode) entry._set.add(it.presentationCode);
+      entry.totalValue += Number(it.lineTotal || 0);
+
+      // stock coverage -> tomamos el mínimo (más crítico) disponible
+      if (it.stockCoverageDays != null && it.stockCoverageDays !== "") {
+        const v = Number(it.stockCoverageDays);
+        if (Number.isFinite(v)) {
+          if (entry.stockCoverage == null) entry.stockCoverage = v;
+          else entry.stockCoverage = Math.min(entry.stockCoverage, v);
+        }
+      }
+
+      // contract period -> mínimo start y máximo end
+      const cs = asDate(it.contractStart);
+      const ce = asDate(it.contractEnd);
+      if (cs) entry.contractStart = !entry.contractStart || cs < entry.contractStart ? cs : entry.contractStart;
+      if (ce) entry.contractEnd = !entry.contractEnd || ce > entry.contractEnd ? ce : entry.contractEnd;
+
+      map.set(key, entry);
+    }
+    // transpilar a objeto limpio
+    const out = new Map();
+    for (const [k, v] of map.entries()) {
+      out.set(k, {
+        productsCount: v._set.size,
+        totalValue: v.totalValue,
+        stockCoverage: v.stockCoverage,
+        contractStart: v.contractStart ? v.contractStart.toISOString() : "",
+        contractEnd: v.contractEnd ? v.contractEnd.toISOString() : "",
+      });
+    }
+    return out;
+  }, [tenderItems]);
+
+  // 1) Agrupamos tender rows por tenderId (desduplicado básico)
+  const groupedTenders = useMemo(() => {
     const map = new Map();
     for (const r of rawTenders) {
       const key = (r.tenderId || r.id || "").trim();
       if (!key) continue;
-
-      const prev = map.get(key);
-      if (!prev) {
-        map.set(key, { ...r });
-      } else {
-        // Consolidación sencilla:
+      if (!map.has(key)) map.set(key, { ...r });
+      else {
+        const prev = map.get(key);
         map.set(key, {
           ...prev,
-          // Preferimos la fecha más temprana
           deliveryDate:
             asDate(prev.deliveryDate) && asDate(r.deliveryDate)
               ? (asDate(prev.deliveryDate) < asDate(r.deliveryDate)
                   ? prev.deliveryDate
                   : r.deliveryDate)
               : prev.deliveryDate || r.deliveryDate,
-          // Productos: tomamos el máximo entre duplicados
-          productsCount: Math.max(
-            Number(prev.productsCount || 0),
-            Number(r.productsCount || 0)
-          ),
-          // Valor total: acumulamos
-          totalValue: Number(prev.totalValue || 0) + Number(r.totalValue || 0),
-          // Status: mantenemos el primero no vacío
           status: (prev.status || r.status || "").toLowerCase(),
         });
       }
     }
-    return Array.from(map.values());
-  }, [rawTenders]);
+    // Mezclamos la agregación de items (products, totals, stockCoverage, contract period)
+    return Array.from(map.values()).map((row) => {
+      const agg = itemsAggByTender.get(row.tenderId || row.id) || {};
+      return {
+        ...row,
+        productsCount: agg.productsCount ?? row.productsCount ?? 0,
+        totalValue: agg.totalValue ?? row.totalValue ?? 0,
+        stockCoverage: agg.stockCoverage ?? row.stockCoverage ?? null,
+        contractStart: agg.contractStart || "",
+        contractEnd: agg.contractEnd || "",
+      };
+    });
+  }, [rawTenders, itemsAggByTender]);
 
-  // 2) Filtros (búsqueda, estado, periodo de contrato)
+  // 2) Filtros (búsqueda, estado, contract period)
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     const from = fromDate ? new Date(fromDate) : null;
     const to = toDate ? new Date(toDate) : null;
 
-    return (grouped || []).filter((r) => {
-      // search por tenderId o title
-      const hayCoincidencia =
+    const overlaps = (start, end) => {
+      if (!from && !to) return true;
+      const s = asDate(start);
+      const e = asDate(end);
+      if (s && e) {
+        if (from && e < from) return false;
+        if (to && s > to) return false;
+        return true;
+      }
+      // si no hay período, caemos al deliveryDate como fallback
+      const d = asDate(start) || asDate(end) || null;
+      if (!from && to && d) return d <= to;
+      if (from && !to && d) return d >= from;
+      if (from && to && d) return d >= from && d <= to;
+      return true;
+    };
+
+    return (groupedTenders || []).filter((r) => {
+      const okSearch =
         !term ||
         String(r.tenderId || "").toLowerCase().includes(term) ||
         String(r.title || "").toLowerCase().includes(term);
 
-      // estado
       const okStatus =
         statusFilter === "all" ||
         (r.status || "").toLowerCase() === statusFilter;
 
-      // periodo
-      const d = asDate(r.deliveryDate);
-      const okPeriod =
-        (!from || (d && d >= from)) && (!to || (d && d <= to));
+      const okPeriod = overlaps(r.contractStart, r.contractEnd || r.deliveryDate);
 
-      return hayCoincidencia && okStatus && okPeriod;
+      return okSearch && okStatus && okPeriod;
     });
-  }, [grouped, search, statusFilter, fromDate, toDate]);
+  }, [groupedTenders, search, statusFilter, fromDate, toDate]);
 
   // 3) KPIs
   const kpis = useMemo(() => {
     const active = filtered.length;
-    const awarded = filtered.filter((r) => r.status === "awarded").length;
-    const inDelivery = filtered.filter((r) => r.status === "in delivery").length;
-    const critical = filtered.filter((r) => Number(r.stockCoverage || 0) <= 0)
-      .length;
+    const awarded = filtered.filter((r) => (r.status || "") === "awarded").length;
+    const inDelivery = filtered.filter((r) => (r.status || "") === "in delivery").length;
+    const critical = filtered.filter((r) => Number(r.stockCoverage || 0) <= 0).length;
     return { active, awarded, inDelivery, critical };
   }, [filtered]);
 
@@ -118,31 +179,28 @@ export default function TenderManagementPage() {
     setSelected(row);
     setOpenDrawer(true);
   };
-
   const onEdit = (row) => {
     setEditRow(row);
     setOpenNewTender(true);
   };
-
   const onNew = () => {
     setEditRow(null);
     setOpenNewTender(true);
   };
-
   const onSavedTender = async () => {
-    await reload?.();
+    await reloadTenders?.();
     setOpenNewTender(false);
     setEditRow(null);
   };
-
-  // Export a CSV del listado filtrado
   const exportCSV = () => {
     const headers = [
       "tenderId",
       "title",
       "status",
+      "contractStart",
+      "contractEnd",
       "deliveryDate",
-      "stockCoverage",
+      "stockCoverageDays",
       "productsCount",
       "totalValueCLP",
     ];
@@ -150,12 +208,13 @@ export default function TenderManagementPage() {
       r.tenderId,
       r.title,
       r.status,
+      r.contractStart ? format(new Date(r.contractStart), "yyyy-MM-dd") : "",
+      r.contractEnd ? format(new Date(r.contractEnd), "yyyy-MM-dd") : "",
       r.deliveryDate ? format(new Date(r.deliveryDate), "yyyy-MM-dd") : "",
       r.stockCoverage ?? "",
       r.productsCount ?? "",
       Number(r.totalValue || 0),
     ]);
-
     const csv =
       "\ufeff" +
       [headers.join(","), ...lines.map((arr) => arr.join(","))].join("\n");
@@ -167,13 +226,14 @@ export default function TenderManagementPage() {
     a.click();
     URL.revokeObjectURL(url);
   };
-
   const clearFilters = () => {
     setSearch("");
     setStatusFilter("all");
     setFromDate("");
     setToDate("");
   };
+
+  const loading = loadingTenders || loadingItems;
 
   return (
     <div className="px-8 py-6">
@@ -208,26 +268,24 @@ export default function TenderManagementPage() {
           />
         </div>
 
-        {/* Contract Period */}
-        <div className="flex items-end gap-2">
-          <div className="text-sm">
-            <div className="text-muted-foreground mb-1">Contract period (from)</div>
-            <input
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="h-10 rounded-md border px-2"
-            />
-          </div>
-          <div className="text-sm">
-            <div className="text-muted-foreground mb-1">to</div>
-            <input
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              className="h-10 rounded-md border px-2"
-            />
-          </div>
+        {/* Contract Period (desde / hasta) */}
+        <div className="text-sm">
+          <div className="text-muted-foreground mb-1">Contract period (from)</div>
+          <input
+            type="date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            className="h-10 rounded-md border px-2"
+          />
+        </div>
+        <div className="text-sm">
+          <div className="text-muted-foreground mb-1">to</div>
+          <input
+            type="date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            className="h-10 rounded-md border px-2"
+          />
         </div>
 
         <div>
