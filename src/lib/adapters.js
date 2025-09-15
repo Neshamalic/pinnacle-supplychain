@@ -46,14 +46,15 @@ export const mapTenders = (row = {}) => {
 };
 
 /** ================ TENDER ITEMS ===================== */
+/** ================ TENDER ITEMS ===================== */
 /* Columnas típicas: tender_number|tender_id, presentation_code,
-   awarded_qty, unit_price, currency, (opt) stock_coverage_days
-   AHORA además: contract_start, contract_end */
+   awarded_qty, unit_price, currency, (opt) stock_coverage_days,
+   (opt) contract_start, contract_end  */
 export const mapTenderItems = (row = {}) => {
   const tenderId = str(pick(row, ["tender_number", "tender_id", "tender"]));
   const qty = toNumber(pick(row, ["awarded_qty", "awarded_quantity", "qty", "quantity"]));
   const price = toNumber(pick(row, ["unit_price", "price"]));
-  const currency = str(pick(row, ["currency", "curr"]) || "CLP").toUpperCase();
+  const currency = str(pick(row, ["currency", "curr"]) || "USD").toUpperCase();
 
   const sc = pick(row, [
     "stock_coverage_days",
@@ -64,12 +65,9 @@ export const mapTenderItems = (row = {}) => {
   ]);
   const stockCoverageDays = sc === undefined ? undefined : toNumber(sc);
 
-  const contractStart = toDateISO(
-    pick(row, ["contract_start", "contract_from", "start_date", "period_start"])
-  );
-  const contractEnd = toDateISO(
-    pick(row, ["contract_end", "contract_to", "end_date", "period_end"])
-  );
+  // NUEVO: período de contrato (para filtrar en la tabla)
+  const contractStart = pick(row, ["contract_start", "contractStart", "start_date"]);
+  const contractEnd = pick(row, ["contract_end", "contractEnd", "end_date"]);
 
   return {
     tenderId,
@@ -78,9 +76,9 @@ export const mapTenderItems = (row = {}) => {
     unitPrice: price,
     currency,
     stockCoverageDays,
-    lineTotal: qty * price, // suponemos mismo currency (CLP); si traes USD, conviértelo en el backend
     contractStart,
     contractEnd,
+    lineTotal: qty * price,
     _raw: row,
   };
 };
