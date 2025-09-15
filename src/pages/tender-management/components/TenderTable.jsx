@@ -1,260 +1,212 @@
-import React, { useState, useEffect } from 'react';
-import Icon from '../../../components/AppIcon';
-import Button from '../../../components/ui/Button';
-import { Checkbox } from '../../../components/ui/Checkbox';
+// src/pages/tender-management/components/TenderTable.jsx
+import React, { useMemo } from "react";
+import Button from "@/components/ui/Button";
+import TenderStatusBadge from "./TenderStatusBadge";
+import StockCoverageBadge from "./StockCoverageBadge";
+import { useSheet } from "@/lib/sheetsApi";
+import { mapTenders, mapTenderItems } from "@/lib/adapters";
+import { usePresentationCatalog } from "@/lib/catalog";
 
-const TenderTable = ({
-  tenders,
-  selectedTenders,
-  onTenderSelect,
-  onTenderSelectAll,
-  onTenderView,
-  onTenderEdit,
-  sortConfig,
-  onSort
-}) => {
-  const [currentLanguage, setCurrentLanguage] = useState('en');
+/**
+ * Formatea CLP exactamente como el Overview
+ */
+const fmtCLP = (v) =>
+  `CLP ${Number(v || 0).toLocaleString("es-CL", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  })}`;
 
-  useEffect(() => {
-    const savedLanguage = localStorage.getItem('language') || 'en';
-    setCurrentLanguage(savedLanguage);
-  }, []);
-
-  // Normaliza estados a un conjunto interno estable
-  const normalizeStatus = (s) => {
-    const raw = String(s ?? '').trim().toLowerCase();
-    const clean = raw.replace(/\s+/g, '_').replace(/-+/g, '_');
-    const dict = {
-      borrador: 'draft',
-      enviado: 'submitted',
-      adjudicado: 'awarded',
-      rechazado: 'rejected',
-      en_entrega: 'in_delivery',
-      'in_delivery': 'in_delivery',
-      'in-delivery': 'in_delivery',
-      'in delivery': 'in_delivery',
-      completado: 'completed'
-    };
-    return dict[clean] || clean || 'draft';
-  };
-
-  const getStatusBadge = (status) => {
-    const s = normalizeStatus(status);
-    const statusConfig = {
-      draft:       { color: 'bg-gray-100 text-gray-800',      label: currentLanguage === 'es' ? 'Borrador' : 'Draft' },
-      submitted:   { color: 'bg-blue-100 text-blue-800',      label: currentLanguage === 'es' ? 'Enviado' : 'Submitted' },
-      awarded:     { color: 'bg-green-100 text-green-800',    label: currentLanguage === 'es' ? 'Adjudicado' : 'Awarded' },
-      rejected:    { color: 'bg-red-100 text-red-800',        label: currentLanguage === 'es' ? 'Rechazado' : 'Rejected' },
-      in_delivery: { color: 'bg-yellow-100 text-yellow-800',  label: currentLanguage === 'es' ? 'En Entrega' : 'In Delivery' },
-      completed:   { color: 'bg-emerald-100 text-emerald-800',label: currentLanguage === 'es' ? 'Completado' : 'Completed' }
-    };
-    const config = statusConfig[s] || statusConfig.draft;
-    return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.color}`}>
-        {config.label}
-      </span>
-    );
-  };
-
-  const getStockCoverageBadge = (daysRaw) => {
-    const days = Number(daysRaw ?? 0);
-    if (days < 15) {
-      return (
-        <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-800">
-          <Icon name="AlertTriangle" size={12} className="mr-1" />
-          {days} {currentLanguage === 'es' ? 'días' : 'days'}
-        </span>
-      );
-    } else if (days < 30) {
-      return (
-        <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-          <Icon name="AlertCircle" size={12} className="mr-1" />
-          {days} {currentLanguage === 'es' ? 'días' : 'days'}
-        </span>
-      );
-    } else {
-      return (
-        <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800">
-          <Icon name="CheckCircle" size={12} className="mr-1" />
-          {days} {currentLanguage === 'es' ? 'días' : 'days'}
-        </span>
-      );
-    }
-  };
-
-  const formatDate = (dateString) => {
-    if (!dateString) return '—';
-    const d = new Date(dateString);
-    if (isNaN(d.getTime())) return '—';
-    return d.toLocaleDateString(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
-  };
-
-  const formatCurrency = (amount, currency = 'CLP') => {
-    const safe = Number.isFinite(Number(amount)) ? Number(amount) : 0;
-    return new Intl.NumberFormat(currentLanguage === 'es' ? 'es-CL' : 'en-US', {
-      style: 'currency',
-      currency,
-      minimumFractionDigits: 0
-    }).format(safe);
-  };
-
-  const getSortIcon = (column) => {
-    if (sortConfig?.key !== column) {
-      return <Icon name="ArrowUpDown" size={14} className="opacity-50" />;
-    }
-    return sortConfig?.direction === 'asc'
-      ? <Icon name="ArrowUp" size={14} />
-      : <Icon name="ArrowDown" size={14} />;
-  };
-
-  const columns = [
-    { key: 'tenderId',      label: currentLanguage === 'es' ? 'ID Licitación'   : 'Tender ID',     sortable: true },
-    { key: 'title',         label: currentLanguage === 'es' ? 'Título'          : 'Title',         sortable: true },
-    { key: 'productsCount', label: currentLanguage === 'es' ? 'Productos'       : 'Products',      sortable: true },
-    { key: 'status',        label: currentLanguage === 'es' ? 'Estado'          : 'Status',        sortable: true },
-    { key: 'deliveryDate',  label: currentLanguage === 'es' ? 'Fecha Entrega'   : 'Delivery Date', sortable: true },
-    { key: 'stockCoverage', label: currentLanguage === 'es' ? 'Cobertura Stock' : 'Stock Coverage',sortable: true },
-    { key: 'totalValue',    label: currentLanguage === 'es' ? 'Valor Total'     : 'Total Value',   sortable: true },
-    { key: 'actions',       label: currentLanguage === 'es' ? 'Acciones'        : 'Actions',       sortable: false }
-  ];
-
-  return (
-    <div className="bg-card rounded-lg border border-border overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full">
-          <thead className="bg-muted">
-            <tr>
-              <th className="w-12 px-4 py-3">
-                <Checkbox
-                  checked={selectedTenders?.length === tenders?.length && tenders?.length > 0}
-                  onChange={onTenderSelectAll}
-                />
-              </th>
-              {columns.map((column) => (
-                <th
-                  key={column.key}
-                  className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                >
-                  {column.sortable ? (
-                    <button
-                      onClick={() => onSort(column.key)}
-                      className="flex items-center space-x-1 hover:text-foreground transition-colors"
-                    >
-                      <span>{column.label}</span>
-                      {getSortIcon(column.key)}
-                    </button>
-                  ) : (
-                    column.label
-                  )}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {tenders?.map((tender) => (
-              <tr
-                key={tender?.id}
-                className="hover:bg-muted/50 transition-colors cursor-pointer"
-                onClick={() => onTenderView(tender?.id)}
-              >
-                <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
-                  <Checkbox
-                    checked={selectedTenders?.includes(tender?.id)}
-                    onChange={() => onTenderSelect(tender?.id)}
-                  />
-                </td>
-                <td className="px-4 py-4">
-                  <div className="text-sm font-medium text-foreground">
-                    {tender?.tenderId || '—'}
-                  </div>
-                </td>
-                <td className="px-4 py-4">
-                  <div className="text-sm text-foreground max-w-xs truncate">
-                    {tender?.title || '—'}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {currentLanguage === 'es' ? 'Creado' : 'Created'}: {formatDate(tender?.createdDate)}
-                  </div>
-                </td>
-                <td className="px-4 py-4">
-                  {getStatusBadge(tender?.status)}
-                </td>
-                <td className="px-4 py-4">
-                  <div className="text-sm text-foreground">
-                    {formatDate(tender?.deliveryDate)}
-                  </div>
-                  {tender?.isOverdue && (
-                    <div className="flex items-center text-xs text-red-600 mt-1">
-                      <Icon name="Clock" size={12} className="mr-1" />
-                      {currentLanguage === 'es' ? 'Vencido' : 'Overdue'}
-                    </div>
-                  )}
-                </td>
-                <td className="px-4 py-4">
-                  {getStockCoverageBadge(tender?.stockCoverage)}
-                </td>
-                <td className="px-4 py-4">
-                  <div className="text-sm font-medium text-foreground">
-                    {formatCurrency(tender?.totalValue)}
-                  </div>
-                  {tender?.currency && tender?.currency !== 'CLP' && Number.isFinite(Number(tender?.totalValueUSD)) && (
-                    <div className="text-xs text-muted-foreground">
-                      {formatCurrency(tender?.totalValueUSD, 'USD')}
-                    </div>
-                  )}
-                </td>
-                <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center space-x-2">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => onTenderView(tender?.id)}
-                      className="h-8 w-8"
-                    >
-                      <Icon name="Eye" size={14} />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => onTenderEdit(tender?.id)}
-                      className="h-8 w-8"
-                    >
-                      <Icon name="Edit" size={14} />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                    >
-                      <Icon name="MoreHorizontal" size={14} />
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {(!tenders || tenders.length === 0) && (
-        <div className="text-center py-12">
-          <Icon name="FileText" size={48} className="mx-auto text-muted-foreground mb-4" />
-          <h3 className="text-lg font-medium text-foreground mb-2">
-            {currentLanguage === 'es' ? 'No se encontraron licitaciones' : 'No tenders found'}
-          </h3>
-          <p className="text-muted-foreground">
-            {currentLanguage === 'es'
-              ? 'Intenta ajustar los filtros o crear una nueva licitación.'
-              : 'Try adjusting your filters or create a new tender.'}
-          </p>
-        </div>
-      )}
-    </div>
-  );
+/**
+ * Convierte a Date o null
+ */
+const toDate = (v) => {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
 };
 
-export default TenderTable;
+/**
+ * Determina si un rango [a1, a2] se solapa con [b1, b2]
+ */
+const rangesOverlap = (a1, a2, b1, b2) => {
+  const s1 = a1 ? a1.getTime() : -Infinity;
+  const e1 = a2 ? a2.getTime() : Infinity;
+  const s2 = b1 ? b1.getTime() : -Infinity;
+  const e2 = b2 ? b2.getTime() : Infinity;
+  return s1 <= e2 && s2 <= e1;
+};
+
+export default function TenderTable({
+  // filtros que vienen del toolbar/filtros
+  filters = {},
+  // callbacks que usa la tabla
+  onView = () => {},
+  onEdit = () => {},
+}) {
+  // 1) Leemos masters
+  const { rows: tenders = [], loading: loadingTenders } = useSheet("tenders", mapTenders);
+  const { rows: tenderItemsRaw = [], loading: loadingItems } = useSheet("tender_items", mapTenderItems);
+
+  // 2) Enriquecemos con product/presentation master (packageUnits)
+  const { enrich } = usePresentationCatalog();
+  const tenderItems = useMemo(() => enrich(tenderItemsRaw), [tenderItemsRaw, enrich]);
+
+  // 3) Armamos agregados por Tender
+  const aggregatesByTender = useMemo(() => {
+    const map = new Map();
+
+    for (const it of tenderItems) {
+      const tid = (it.tenderId || "").trim();
+      if (!tid) continue;
+
+      // total por ítem igual que en Overview: qty * unitPrice * packageUnits
+      const unitsPerPack = Number(it.packageUnits || 1);
+      const lineTotalCLP = Number(it.awardedQty || 0) * Number(it.unitPrice || 0) * unitsPerPack;
+
+      const current = map.get(tid) || {
+        products: 0,
+        totalCLP: 0,
+        // usamos la menor cobertura > 0 si existe
+        minStockCoverage: null,
+        // para el filtro por periodo de contrato
+        periods: [], // [{start: Date|null, end: Date|null}]
+      };
+
+      current.totalCLP += lineTotalCLP;
+      current.products += 1;
+
+      // cobertura: tomamos el menor valor no nulo
+      const cov = it.stockCoverageDays != null ? Number(it.stockCoverageDays) : null;
+      if (cov != null) {
+        if (current.minStockCoverage == null) current.minStockCoverage = cov;
+        else current.minStockCoverage = Math.min(current.minStockCoverage, cov);
+      }
+
+      // período de contrato a nivel ítem (si existen en la hoja)
+      const start = toDate(it.contractStart);
+      const end = toDate(it.contractEnd);
+      if (start || end) current.periods.push({ start, end });
+
+      map.set(tid, current);
+    }
+
+    return map;
+  }, [tenderItems]);
+
+  // 4) Preparamos filtros
+  const q = (filters.q || filters.search || "").toLowerCase();
+  const wantedStatus = (filters.status || filters.state || "all").toLowerCase();
+
+  const fromDate = toDate(filters.from || filters.fromDate);
+  const toDateF = toDate(filters.to || filters.toDate);
+
+  // 5) Construimos las filas (una por Tender real, agrupadas por tenderId)
+  const rows = useMemo(() => {
+    return (tenders || [])
+      .map((t) => {
+        const agg = aggregatesByTender.get(t.tenderId) || {
+          products: 0,
+          totalCLP: 0,
+          minStockCoverage: null,
+          periods: [],
+        };
+
+        // si no hay periodos en items, igual lo dejamos entrar por defecto
+        const passesPeriod =
+          fromDate || toDateF
+            ? // si setearon rango, aceptamos si hay solape con cualquier periodo del tender
+              (agg.periods.length
+                ? agg.periods.some((p) => rangesOverlap(fromDate, toDateF, p.start, p.end))
+                : true)
+            : true;
+
+        // buscador por tenderId o title
+        const matchesSearch =
+          !q ||
+          (t.tenderId && t.tenderId.toLowerCase().includes(q)) ||
+          (t.title && t.title.toLowerCase().includes(q));
+
+        // filtro por status
+        const st = (t.status || "").toLowerCase();
+        const matchesStatus = wantedStatus === "all" || wantedStatus === st;
+
+        if (!passesPeriod || !matchesSearch || !matchesStatus) return null;
+
+        return {
+          tender: t,
+          products: agg.products,
+          totalCLP: agg.totalCLP,
+          stockCoverageDays: agg.minStockCoverage,
+        };
+      })
+      .filter(Boolean);
+  }, [tenders, aggregatesByTender, q, wantedStatus, fromDate, toDateF]);
+
+  // 6) Pintamos tabla
+  return (
+    <div className="rounded-lg border overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/50 text-muted-foreground">
+          <tr>
+            <th className="text-left px-4 py-3">Tender ID</th>
+            <th className="text-left px-4 py-3">Title</th>
+            <th className="text-left px-4 py-3">Products</th>
+            <th className="text-left px-4 py-3">Status</th>
+            <th className="text-left px-4 py-3">Delivery Date</th>
+            <th className="text-left px-4 py-3">Stock Coverage</th>
+            <th className="text-left px-4 py-3">Total Value</th>
+            <th className="text-left px-4 py-3">Actions</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {rows.map(({ tender, products, totalCLP, stockCoverageDays }) => (
+            <tr key={tender.tenderId} className="border-t">
+              <td className="px-4 py-3 font-medium">{tender.tenderId}</td>
+              <td className="px-4 py-3">{tender.title || "—"}</td>
+              <td className="px-4 py-3">{products}</td>
+              <td className="px-4 py-3">
+                <TenderStatusBadge status={tender.status} />
+              </td>
+              <td className="px-4 py-3">
+                {tender.deliveryDate
+                  ? new Date(tender.deliveryDate).toLocaleDateString("es-CL")
+                  : "—"}
+              </td>
+              <td className="px-4 py-3">
+                <StockCoverageBadge days={stockCoverageDays} />
+              </td>
+              <td className="px-4 py-3">{fmtCLP(totalCLP)}</td>
+              <td className="px-4 py-3">
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => onView(tender)}>
+                    View
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => onEdit(tender)}>
+                    Edit
+                  </Button>
+                </div>
+              </td>
+            </tr>
+          ))}
+
+          {(loadingTenders || loadingItems) && (
+            <tr>
+              <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                Loading…
+              </td>
+            </tr>
+          )}
+
+          {!loadingTenders && !loadingItems && rows.length === 0 && (
+            <tr>
+              <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                No tenders found with current filters.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
