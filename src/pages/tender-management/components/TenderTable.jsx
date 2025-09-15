@@ -7,27 +7,27 @@ import { useSheet } from "@/lib/sheetsApi";
 import { mapTenders, mapTenderItems } from "@/lib/adapters";
 import { usePresentationCatalog } from "@/lib/catalog";
 
-/**
- * Formatea CLP exactamente como el Overview
- */
+/* ===== helpers de formato / parse ===== */
 const fmtCLP = (v) =>
   `CLP ${Number(v || 0).toLocaleString("es-CL", {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   })}`;
 
-/**
- * Convierte a Date o null
- */
 const toDate = (v) => {
   if (!v) return null;
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
-/**
- * Determina si un rango [a1, a2] se solapa con [b1, b2]
- */
+const n = (v) => {
+  if (v == null || v === "") return 0;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const s = String(v).replace(/\./g, "").replace(/,/g, ".");
+  const x = parseFloat(s);
+  return Number.isFinite(x) ? x : 0;
+};
+
 const rangesOverlap = (a1, a2, b1, b2) => {
   const s1 = a1 ? a1.getTime() : -Infinity;
   const e1 = a2 ? a2.getTime() : Infinity;
@@ -37,21 +37,19 @@ const rangesOverlap = (a1, a2, b1, b2) => {
 };
 
 export default function TenderTable({
-  // filtros que vienen del toolbar/filtros
   filters = {},
-  // callbacks que usa la tabla
   onView = () => {},
   onEdit = () => {},
 }) {
-  // 1) Leemos masters
+  // Datos base
   const { rows: tenders = [], loading: loadingTenders } = useSheet("tenders", mapTenders);
   const { rows: tenderItemsRaw = [], loading: loadingItems } = useSheet("tender_items", mapTenderItems);
 
-  // 2) Enriquecemos con product/presentation master (packageUnits)
+  // Enrichment para traer packageUnits desde el Product/Presentation master
   const { enrich } = usePresentationCatalog();
   const tenderItems = useMemo(() => enrich(tenderItemsRaw), [tenderItemsRaw, enrich]);
 
-  // 3) Armamos agregados por Tender
+  // Agregados por tenderId (cálculo idéntico al Overview)
   const aggregatesByTender = useMemo(() => {
     const map = new Map();
 
@@ -59,32 +57,50 @@ export default function TenderTable({
       const tid = (it.tenderId || "").trim();
       if (!tid) continue;
 
-      // total por ítem igual que en Overview: qty * unitPrice * packageUnits
-      const unitsPerPack = Number(it.packageUnits || 1);
-      const lineTotalCLP = Number(it.awardedQty || 0) * Number(it.unitPrice || 0) * unitsPerPack;
+      // qty y price robustos
+      const qty = n(it.awardedQty ?? it.qty ?? it._raw?.awarded_qty ?? it._raw?.quantity);
+      const price = n(it.unitPrice ?? it._raw?.unit_price ?? it._raw?.price);
+
+      // packageUnits —> usar enrich y caídas de respaldo al _raw
+      const pupRaw =
+        it.packageUnits ??
+        it._raw?.package_units ??
+        it._raw?.units_per_package ??
+        1;
+      const packageUnits = n(pupRaw) || 1;
+
+      // línea EXACTA como Overview: qty * unitPrice * packageUnits
+      const lineTotalCLP = qty * price * packageUnits;
 
       const current = map.get(tid) || {
         products: 0,
         totalCLP: 0,
-        // usamos la menor cobertura > 0 si existe
         minStockCoverage: null,
-        // para el filtro por periodo de contrato
-        periods: [], // [{start: Date|null, end: Date|null}]
+        periods: [],
       };
 
       current.totalCLP += lineTotalCLP;
       current.products += 1;
 
-      // cobertura: tomamos el menor valor no nulo
-      const cov = it.stockCoverageDays != null ? Number(it.stockCoverageDays) : null;
-      if (cov != null) {
+      const cov =
+        it.stockCoverageDays != null
+          ? n(it.stockCoverageDays)
+          : n(it._raw?.stock_coverage_days);
+      if (cov) {
         if (current.minStockCoverage == null) current.minStockCoverage = cov;
         else current.minStockCoverage = Math.min(current.minStockCoverage, cov);
       }
 
-      // período de contrato a nivel ítem (si existen en la hoja)
-      const start = toDate(it.contractStart);
-      const end = toDate(it.contractEnd);
+      // Guardamos el periodo de contrato a nivel ítem (si existe) para filtrar
+      const start =
+        toDate(it.contractStart) ||
+        toDate(it._raw?.contract_start) ||
+        null;
+      const end =
+        toDate(it.contractEnd) ||
+        toDate(it._raw?.contract_end) ||
+        null;
+
       if (start || end) current.periods.push({ start, end });
 
       map.set(tid, current);
@@ -93,14 +109,13 @@ export default function TenderTable({
     return map;
   }, [tenderItems]);
 
-  // 4) Preparamos filtros
+  // Filtros
   const q = (filters.q || filters.search || "").toLowerCase();
   const wantedStatus = (filters.status || filters.state || "all").toLowerCase();
-
   const fromDate = toDate(filters.from || filters.fromDate);
   const toDateF = toDate(filters.to || filters.toDate);
 
-  // 5) Construimos las filas (una por Tender real, agrupadas por tenderId)
+  // Construimos filas finales (una por Tender ID, agrupado)
   const rows = useMemo(() => {
     return (tenders || [])
       .map((t) => {
@@ -111,22 +126,21 @@ export default function TenderTable({
           periods: [],
         };
 
-        // si no hay periodos en items, igual lo dejamos entrar por defecto
+        // filtro por periodo de contrato (si el usuario eligió)
         const passesPeriod =
           fromDate || toDateF
-            ? // si setearon rango, aceptamos si hay solape con cualquier periodo del tender
-              (agg.periods.length
+            ? (agg.periods.length
                 ? agg.periods.some((p) => rangesOverlap(fromDate, toDateF, p.start, p.end))
                 : true)
             : true;
 
-        // buscador por tenderId o title
+        // buscador
         const matchesSearch =
           !q ||
           (t.tenderId && t.tenderId.toLowerCase().includes(q)) ||
           (t.title && t.title.toLowerCase().includes(q));
 
-        // filtro por status
+        // estado
         const st = (t.status || "").toLowerCase();
         const matchesStatus = wantedStatus === "all" || wantedStatus === st;
 
@@ -142,7 +156,6 @@ export default function TenderTable({
       .filter(Boolean);
   }, [tenders, aggregatesByTender, q, wantedStatus, fromDate, toDateF]);
 
-  // 6) Pintamos tabla
   return (
     <div className="rounded-lg border overflow-hidden">
       <table className="w-full text-sm">
@@ -158,7 +171,6 @@ export default function TenderTable({
             <th className="text-left px-4 py-3">Actions</th>
           </tr>
         </thead>
-
         <tbody>
           {rows.map(({ tender, products, totalCLP, stockCoverageDays }) => (
             <tr key={tender.tenderId} className="border-t">
@@ -179,12 +191,8 @@ export default function TenderTable({
               <td className="px-4 py-3">{fmtCLP(totalCLP)}</td>
               <td className="px-4 py-3">
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => onView(tender)}>
-                    View
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={() => onEdit(tender)}>
-                    Edit
-                  </Button>
+                  <Button size="sm" onClick={() => onView(tender)}>View</Button>
+                  <Button size="sm" variant="secondary" onClick={() => onEdit(tender)}>Edit</Button>
                 </div>
               </td>
             </tr>
