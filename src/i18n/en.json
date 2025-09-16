@@ -1,0 +1,9 @@
+{
+  "tenders": "Tenders",
+  "purchaseOrders": "Purchase Orders",
+  "imports": "Imports",
+  "demandAndStock": "Demand and Stock",
+  "welcome": "Welcome",
+  "loading": "Loading...",
+  "error": "Error loading data"
+}
