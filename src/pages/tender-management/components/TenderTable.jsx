@@ -1,7 +1,18 @@
-// src/pages/tender-management/components/TenderTable.jsx
 import React from "react";
 
 export default function TenderTable({ rows = [], loading = false, onView, valueFormatter }) {
+  // Group rows by unique tenderId using React.useMemo to avoid recomputation on each render
+  const groupedRows = React.useMemo(() => {
+    const seen = new Set();
+    return rows.filter((row) => {
+      if (seen.has(row.tenderId)) {
+        return false;
+      }
+      seen.add(row.tenderId);
+      return true;
+    });
+  }, [rows]);
+
   return (
     <div className="overflow-hidden rounded-lg border">
       <table className="min-w-full text-sm">
@@ -26,7 +37,7 @@ export default function TenderTable({ rows = [], loading = false, onView, valueF
             </tr>
           )}
 
-          {!loading && rows.length === 0 && (
+          {!loading && groupedRows.length === 0 && (
             <tr>
               <td colSpan={8} className="px-4 py-6 text-center text-muted-foreground">
                 No tenders found.
@@ -35,7 +46,7 @@ export default function TenderTable({ rows = [], loading = false, onView, valueF
           )}
 
           {!loading &&
-            rows.map((row) => (
+            groupedRows.map((row) => (
               <tr key={row.tenderId} className="border-t">
                 <td className="px-4 py-3 font-medium">{row.tenderId}</td>
                 <td className="px-4 py-3">{row.title}</td>
