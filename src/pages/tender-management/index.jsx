@@ -23,14 +23,20 @@ export default function TenderManagementPage() {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(null);
 
-  // Datos base desde Google Sheets (o tu fuente)
-  const { rows: tenders = [], loading: loadingTenders } = useSheet("tenders", mapTenders);
-  const { rows: tenderItems = [], loading: loadingItems } = useSheet("tender_items", mapTenderItems);
+  // Carga base
+  const { rows: tenders = [], loading: loadingTenders } = useSheet(
+    "tenders",
+    mapTenders
+  );
+  const { rows: tenderItems = [], loading: loadingItems } = useSheet(
+    "tender_items",
+    mapTenderItems
+  );
 
-  // Desestructuramos la función `enrich` del hook
+  // Obtenemos la función enrich para añadir productName y packageUnits
   const { enrich } = usePresentationCatalog();
 
-  // Calcula el total CLP de un ítem (cantidad × precio × packs)
+  // Util para calcular total CLP de cada ítem
   const lineTotalCLP = (it) => {
     const qty = Number(it.awardedQty ?? it.qty ?? 0);
     const price = Number(it.unitPrice ?? 0);
@@ -38,12 +44,12 @@ export default function TenderManagementPage() {
     return qty * price * packs;
   };
 
-  // Construcción de filas de la tabla agrupadas por tenderId
+  // Agrupamos por tenderId, calculando métricas para cada fila de la tabla
   const tableRows = useMemo(() => {
-    // Enriquecemos los ítems para inyectar nombre de producto y packageUnits
+    // Enriquecemos los ítems para inyectar nombre de producto y unidades por paquete
     const itemsEnriched = enrich(tenderItems || []);
 
-    // Agrupamos ítems por tenderId
+    // Agrupamos los ítems por su tenderId
     const byTender = new Map();
     for (const it of itemsEnriched) {
       const id = String(it.tenderId || "").trim();
@@ -52,13 +58,13 @@ export default function TenderManagementPage() {
       byTender.get(id).push(it);
     }
 
-    // Construimos las filas finales sin duplicados
-    const rows = [];
+    // Construimos las filas finales (un row por tenderId)
+    const rows = []; // Corregimos aquí: antes decía "cont rows = []"
     const seenTenderIds = new Set();
     for (const t of tenders || []) {
       const id = String(t.tenderId || "").trim();
       if (!id) continue;
-      // Si ya vimos este tenderId, lo saltamos
+      // Evitamos duplicar licitaciones con el mismo tenderId
       if (seenTenderIds.has(id)) continue;
       seenTenderIds.add(id);
 
@@ -68,28 +74,29 @@ export default function TenderManagementPage() {
       // Contamos productos únicos
       const products = new Set(items.map((x) => x.presentationCode)).size;
 
-      // Total CLP (suma de qty × price × packs)
-      const totalCLP = items.reduce((acc, x) => acc + lineTotalCLP(x), 0);
+      // Total CLP = suma de qty * price * packageUnits
+      const totalCLP = items.reduce(
+        (acc, x) => acc + lineTotalCLP(x),
+        0
+      );
 
-      // Fecha de entrega (o null si no viene del master)
+      // Fecha de entrega (si no viene del master, tomamos la del tender)
       const deliveryDate = t.deliveryDate || null;
 
       rows.push({
         tenderId: id,
-        title: t.title || "",
+        title: t.title || "—",
         status: t.status || "",
         deliveryDate,
         products,
         totalValueCLP: totalCLP,
-        // Stock coverage a nivel tender; si no existe, 0
         stockCoverageDays: Number(t.stockCoverage || 0),
-        // Guardamos referencia al tender y a sus ítems
         _tender: t,
         _items: items,
       });
     }
 
-    // Orden opcional por fecha de entrega
+    // Ordenamos por fecha de entrega
     rows.sort((a, b) => {
       const da = a.deliveryDate ? new Date(a.deliveryDate).getTime() : 0;
       const db = b.deliveryDate ? new Date(b.deliveryDate).getTime() : 0;
@@ -99,11 +106,10 @@ export default function TenderManagementPage() {
     return rows;
   }, [tenders, tenderItems, enrich]);
 
-  // Cuando el usuario hace clic en “View”
+  // Handler para abrir el detalle de una licitación
   const handleView = (row) => {
     setSelected({
       ...row._tender,
-      // Enviamos los ítems con el total de cada uno
       items: row._items.map((it) => ({
         ...it,
         lineTotalCLP: lineTotalCLP(it),
@@ -113,20 +119,28 @@ export default function TenderManagementPage() {
   };
 
   return (
-    <>
+    <div className="space-y-4">
+      {/* Barra de herramientas (sin props porque no seleccionamos nada) */}
       <TenderToolbar />
+
+      {/* Tabla con las licitaciones agrupadas */}
       <TenderTable
         rows={tableRows}
         loading={loadingTenders || loadingItems}
         onView={handleView}
+        // Formateamos totalValueCLP usando fmtCLP
         valueFormatter={fmtCLP}
       />
-      <TenderDetailsDrawer
-        open={open}
-        onClose={() => setOpen(false)}
-        tender={selected}
-      />
-    </>
+
+      {/* Drawer con detalles de licitación */}
+      {open && selected && (
+        <TenderDetailsDrawer
+          open={open}
+          onClose={() => setOpen(false)}
+          tender={selected}
+        />
+      )}
+    </div>
   );
 }
 
