@@ -46,7 +46,6 @@ export const mapTenders = (row = {}) => {
 };
 
 /** ================ TENDER ITEMS ===================== */
-/** ================ TENDER ITEMS ===================== */
 /* Columnas típicas: tender_number|tender_id, presentation_code,
    awarded_qty, unit_price, currency, (opt) stock_coverage_days,
    (opt) contract_start, contract_end  */
@@ -172,12 +171,35 @@ export const mapImportItems = (row = {}) => {
 };
 
 /** ====================== DEMAND ====================== */
+// Modificado para incluir todas las columnas necesarias
 export const mapDemand = (row = {}) => {
   return {
+    // Identificador temporal (mes), por ejemplo “2025-01”
     monthOfSupply: str(pick(row, ["month_of_supply", "month"]) || ""),
+    // Código de presentación o SKU
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
+    // Unidades pronosticadas (forecast)
     forecastUnits: toNumber(pick(row, ["forecast_units", "forecast", "units"])),
+    // Unidades históricas
     historicalUnits: toNumber(pick(row, ["historical_units", "history_units", "hist_units"])),
+    // Stock actual
+    currentStockUnits: toNumber(
+      pick(row, ["current_stock_units", "currentStockUnits", "stock_units"])
+    ),
+    // Demanda mensual (puede coincidir con forecast)
+    monthlyDemandUnits: toNumber(
+      pick(row, ["monthly_demand_units", "monthlyDemandUnits", "demand_units"])
+    ),
+    // Tamaño del paquete (unidades por empaque)
+    packageSize: toNumber(pick(row, ["package_size", "packageSize", "pkg_size"])),
+    // Orden sugerida para cubrir la demanda
+    suggestedOrder: toNumber(
+      pick(row, ["suggested_order", "suggestedOrder", "order"])
+    ),
+    // Estado de abastecimiento (critical, urgent, normal, optimal)
+    status: str(pick(row, ["status"])) || "",
+    // Días de suministro disponibles (si tu hoja lo incluye)
+    daysSupply: toNumber(pick(row, ["days_supply", "daysSupply"]) || null),
     _raw: row,
   };
 };
@@ -200,4 +222,5 @@ export const mapCommunications = (row = {}) => {
 
 /** ================ Export utils ====================== */
 export const _utils = { str, toNumber, toDateISO, pick };
+
 
