@@ -1,8 +1,26 @@
-.DS_Store
+# Node & environment
 node_modules
-.idea
-package-lock.json
+.DS_Store
+
+# Production build
 /build
+/.next/
+dist/
+vercel/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# IDEs and logs
 .vscode/
 .idea/
-vite.config.*s.*
+
+# lockfiles (do not ignore)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Vite config backups
+vite.config.*.s.*
