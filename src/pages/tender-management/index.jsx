@@ -11,7 +11,11 @@ import TenderDetailsDrawer from "./components/TenderDetailsDrawer";
 
 function fmtCLP(n) {
   const v = Number.isFinite(+n) ? +n : 0;
-  return new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", minimumFractionDigits: 0 }).format(v);
+  return new Intl.NumberFormat("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    minimumFractionDigits: 0,
+  }).format(v);
 }
 
 export default function TenderManagementPage() {
@@ -22,9 +26,9 @@ export default function TenderManagementPage() {
   const { rows: tenders = [], loading: loadingTenders } = useSheet("tenders", mapTenders);
   const { rows: tenderItems = [], loading: loadingItems } = useSheet("tender_items", mapTenderItems);
 
-  const { enrich } = usePresentationCatalog();
+  const enrich = usePresentationCatalog();
 
-  // ====== Util común (idéntico a Overview del modal) ======
+  // Util para calcular total CLP por item
   const lineTotalCLP = (it) => {
     const qty = Number(it.awardedQty ?? it.qty ?? 0);
     const price = Number(it.unitPrice ?? 0);
@@ -32,12 +36,12 @@ export default function TenderManagementPage() {
     return qty * price * packs;
   };
 
-  // ====== Grouping por tenderId y cálculo de métricas ======
+  // Agrupa por tenderId y calcula métricas
   const tableRows = useMemo(() => {
-    // enriquecemos para inyectar productName y packageUnits
+    // enriquecer items con nombre de producto y packageUnits
     const itemsEnriched = enrich(tenderItems || []);
 
-    // agrupamos por tenderId
+    // agrupar por tenderId
     const byTender = new Map();
     for (const it of itemsEnriched) {
       const id = String(it.tenderId || "").trim();
@@ -46,42 +50,35 @@ export default function TenderManagementPage() {
       byTender.get(id).push(it);
     }
 
-    // construimos filas finales
-    cont rows = [];
+    // construir filas finales sin duplicados
+    const rows = [];
     const seenTenderIds = new Set();
     for (const t of tenders || []) {
       const id = String(t.tenderId || "").trim();
       if (!id) continue;
-          if (seenTenderIds.has(id)) continue;
-    seenTenderIds.add(id);
+      if (seenTenderIds.has(id)) continue;
+      seenTenderIds.add(id);
 
       const items = byTender.get(id) || [];
 
-      // productos únicos
       const products = new Set(items.map((x) => x.presentationCode)).size;
-
-      // total CLP consistente con Overview (qty * price * packageUnits)
       const totalCLP = items.reduce((acc, x) => acc + lineTotalCLP(x), 0);
-
-      // entrega (si no viene del master, tomamos la del tender)
       const deliveryDate = t.deliveryDate || null;
 
       rows.push({
         tenderId: id,
-        title: t.title || "—",
+        title: t.title || "",
         status: t.status || "",
         deliveryDate,
         products,
-        // lo pasamos ya en número; la celda se encarga del formateo
         totalValueCLP: totalCLP,
-        // (si tienes stockCoverage a nivel tender, mantenlo; si no, 0)
         stockCoverageDays: Number(t.stockCoverage || 0),
         _tender: t,
         _items: items,
       });
     }
 
-    // orden opcional por fecha
+    // ordenar opcionalmente por fecha de entrega
     rows.sort((a, b) => {
       const da = a.deliveryDate ? new Date(a.deliveryDate).getTime() : 0;
       const db = b.deliveryDate ? new Date(b.deliveryDate).getTime() : 0;
@@ -97,33 +94,22 @@ export default function TenderManagementPage() {
       ...row._tender,
       items: row._items.map((it) => ({
         ...it,
-        lineTotalCLP: lineTotalCLP(it), // lo mismo que en Overview
+        lineTotalCLP: lineTotalCLP(it),
       })),
     });
     setOpen(true);
   };
 
   return (
-    <div className="space-y-4">
+    <>
       <TenderToolbar />
-
-      {/* Tabla */}
       <TenderTable
         rows={tableRows}
         loading={loadingTenders || loadingItems}
         onView={handleView}
-        // la tabla debe mostrar totalValueCLP -> formatear con fmtCLP
         valueFormatter={fmtCLP}
       />
-
-      {/* Drawer de detalles */}
-      {open && selected && (
-        <TenderDetailsDrawer
-          open={open}
-          onClose={() => setOpen(false)}
-          tender={selected}
-        />
-      )}
-    </div>
+      <TenderDetailsDrawer open={open} onClose={() => setOpen(false)} tender={selected} />
+    </>
   );
 }
