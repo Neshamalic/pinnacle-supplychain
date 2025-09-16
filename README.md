@@ -1,107 +1,68 @@
-# React
+# Pinnacle Supply Chain Dashboard
 
-A modern React-based project utilizing the latest frontend technologies and tools for building responsive web applications.
+Este repositorio contiene el código fuente de un tablero de control para la cadena de suministro de Pinnacle Chile SpA. La aplicación está construida con **React**, **Vite**, **Tailwind CSS**, **Redux Toolkit** y **Supabase**, y se despliega en Vercel. El tablero permite visualizar y gestionar licitaciones, órdenes de compra, importaciones y métricas de demanda/stock.
 
-## 🚀 Features
+## Características
 
-- **React 18** - React version with improved rendering and concurrent features
-- **Vite** - Lightning-fast build tool and development server
-- **Redux Toolkit** - State management with simplified Redux setup
-- **TailwindCSS** - Utility-first CSS framework with extensive customization
-- **React Router v6** - Declarative routing for React applications
-- **Data Visualization** - Integrated D3.js and Recharts for powerful data visualization
-- **Form Management** - React Hook Form for efficient form handling
-- **Animation** - Framer Motion for smooth UI animations
-- **Testing** - Jest and React Testing Library setup
+- **Gestión de licitaciones**: crear y seguir licitaciones (tenders) con su estado, fechas y detalles asociados.
+- **Órdenes de compra**: importar y mostrar órdenes de compra desde Google Sheets, incluyendo cantidades, fechas de entrega y estados.
+- **Módulo de importaciones**: seguimiento de embarques con un timeline y estados (QC, aduana, transporte, entregado), además de documentación (invoice, B/L).
+- **Demanda y stock**: cálculo de *days of supply* y alertas de inventario bajo.
+- **Internacionalización (i18n)**: soporte para español e inglés mediante archivos de traducción en `src/i18n`.
+- **Capa de API centralizada**: manejo de llamadas HTTP y estados de carga/error en `src/api`.
+- **Gestión de estado con Redux Toolkit**.
+- **Diseño responsive** con Tailwind CSS y animaciones con Framer Motion.
 
-## 📋 Prerequisites
+## Estructura del proyecto
 
-- Node.js (v14.x or higher)
-- npm or yarn
+- **`src/`**: Código fuente principal.
+  - **`components/`**: Componentes reutilizables.
+  - **`pages/`**: Vistas principales (licitaciones, importaciones, órdenes, demanda/stock).
+  - **`api/`**: Funciones para interactuar con Supabase, Google Sheets y otros servicios.
+  - **`i18n/`**: Archivos de traducción `es.json` y `en.json`.
+  - **`constants/`**: Valores estáticos (por ejemplo, enumeración de estados).
+- **`public/`**: Archivos estáticos.
+- **`.env.example`**: Plantilla de variables de entorno.
 
-## 🛠️ Installation
+## Configuración y ejecución
 
-1. Install dependencies:
+1. **Clonar el repositorio**:
+
+   ```bash
+   git clone https://github.com/Neshamalic/pinnacle-supplychain.git
+   cd pinnacle-supplychain
+   ```
+
+2. **Instalar dependencias**:
+
    ```bash
    npm install
-   # or
-   yarn install
    ```
-   
-2. Start the development server:
+
+3. **Configurar variables de entorno**:
+
+   Copia el archivo `.env.example` a `.env.local` y completa los valores de `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, etc.
+
+4. **Ejecutar en modo desarrollo**:
+
    ```bash
-   npm start
-   # or
-   yarn start
+   npm run dev
    ```
 
-## 📁 Project Structure
+5. **Compilar para producción**:
 
-```
-react_app/
-├── public/             # Static assets
-├── src/
-│   ├── components/     # Reusable UI components
-│   ├── pages/          # Page components
-│   ├── styles/         # Global styles and Tailwind configuration
-│   ├── App.jsx         # Main application component
-│   ├── Routes.jsx      # Application routes
-│   └── index.jsx       # Application entry point
-├── .env                # Environment variables
-├── index.html          # HTML template
-├── package.json        # Project dependencies and scripts
-├── tailwind.config.js  # Tailwind CSS configuration
-└── vite.config.js      # Vite configuration
-```
+   ```bash
+   npm run build
+   ```
 
-## 🧩 Adding Routes
+## Contribuir
 
-To add new routes to the application, update the `Routes.jsx` file:
+Los PRs son bienvenidos. Por favor:
+- Utiliza una rama para tu cambio (`git checkout -b feature/mi-mejora`).
+- Asegúrate de que el proyecto compila sin errores.
+- Sigue las convenciones de código y estilos establecidos (ESLint/Prettier).
+- Incluye pruebas si agregas lógica importante.
 
-```jsx
-import { useRoutes } from "react-router-dom";
-import HomePage from "pages/HomePage";
-import AboutPage from "pages/AboutPage";
+## Licencia
 
-const ProjectRoutes = () => {
-  let element = useRoutes([
-    { path: "/", element: <HomePage /> },
-    { path: "/about", element: <AboutPage /> },
-    // Add more routes as needed
-  ]);
-
-  return element;
-};
-```
-
-## 🎨 Styling
-
-This project uses Tailwind CSS for styling. The configuration includes:
-
-- Forms plugin for form styling
-- Typography plugin for text styling
-- Aspect ratio plugin for responsive elements
-- Container queries for component-specific responsive design
-- Fluid typography for responsive text
-- Animation utilities
-
-## 📱 Responsive Design
-
-The app is built with responsive design using Tailwind CSS breakpoints.
-
-
-## 📦 Deployment
-
-Build the application for production:
-
-```bash
-npm run build
-```
-
-## 🙏 Acknowledgments
-
-- Built with [Rocket.new](https://rocket.new)
-- Powered by React and Vite
-- Styled with Tailwind CSS
-
-Built with ❤️ on Rocket.new
+Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo `LICENSE` para más información.
