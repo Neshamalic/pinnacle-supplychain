@@ -47,10 +47,13 @@ export default function TenderManagementPage() {
     }
 
     // construimos filas finales
-    const rows = [];
+    cont rows = [];
+    const seenTenderIds = new Set();
     for (const t of tenders || []) {
       const id = String(t.tenderId || "").trim();
       if (!id) continue;
+          if (seenTenderIds.has(id)) continue;
+    seenTenderIds.add(id);
 
       const items = byTender.get(id) || [];
 
