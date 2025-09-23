@@ -6,13 +6,14 @@ import {
   mapImportItems,
 } from "@/lib/adapters";
 import { usePresentationCatalog } from "@/lib/catalog";
+// Importaciones correctas de Dialog y Button
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  Button,
-} from "@/components/ui";
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 /* Formateador USD */
 const fmtUSD = (n) =>
@@ -228,3 +229,4 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     </Dialog>
   );
 }
+
