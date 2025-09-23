@@ -1,303 +1,217 @@
 // src/pages/purchase-order-tracking/index.jsx
-import React from "react";
-import { Eye, Edit } from "lucide-react";
-import { useSheet } from "@/lib/sheetsApi";
-import { mapPurchaseOrders } from "@/lib/adapters";
-import { cn } from "@/lib/utils";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-  Button,
-  Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Card,
-  CardHeader,
-  CardTitle,
-  CardContent,
-} from "@/components/ui";
-import OrderDetailsModal from "./components/OrderDetailsModal";
+import { useEffect, useMemo, useState } from 'react';
+import { API_BASE, fetchJSON, postJSON, formatDate, badgeClass } from '../../lib/utils';
+import OrderDetailsModal from './components/OrderDetailsModal';
 
-/* Normaliza texto a minúsculas y sin espacios */
-const norm = (v) => (v || "").toString().toLowerCase().trim();
+function EditOrderModal({ open, onClose, order, onSaved }) {
+  const [manufacturing_status, setManufacturing] = useState(order?.manufacturing_status || '');
+  const [transport_type, setTransport] = useState(order?.transport_type || '');
 
-/* Formateador de fecha (dd-mm-aaaa) */
-function fmtDate(d) {
-  if (!d) return "";
-  const date = new Date(d);
-  return date.toLocaleDateString("es-CL", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-}
-
-/* Badge de estado de fabricación */
-function mfBadge(status) {
-  const s = (status || "").toLowerCase();
-  const colors = {
-    pending: "bg-orange-100 text-orange-700",
-    "in process": "bg-yellow-100 text-yellow-700",
-    ready: "bg-blue-100 text-blue-700",
-    shipped: "bg-purple-100 text-purple-700",
-    cancelled: "bg-red-100 text-red-700",
-    complete: "bg-green-100 text-green-700",
-  };
-  const color = colors[s] || "bg-gray-100 text-gray-700";
-  return (
-    <span className={cn("px-2 py-0.5 rounded text-xs font-medium", color)}>
-      {status || "—"}
-    </span>
-  );
-}
-
-/* Badge de tipo de transporte */
-function transportBadge(type) {
-  const s = (type || "").toLowerCase();
-  const colors = {
-    air: "bg-cyan-100 text-cyan-700",
-    sea: "bg-blue-100 text-blue-700",
-    road: "bg-green-100 text-green-700",
-  };
-  const color = colors[s] || "bg-gray-100 text-gray-700";
-  return (
-    <span className={cn("px-2 py-0.5 rounded text-xs font-medium", color)}>
-      {type || "—"}
-    </span>
-  );
-}
-
-export default function PurchaseOrderTracking() {
-  const [manufacturingFilter, setManufacturingFilter] = React.useState("");
-  const [search, setSearch] = React.useState("");
-  const [selected, setSelected] = React.useState(null);
-  const [showFilters, setShowFilters] = React.useState(false);
-
-  // Obtener datos de purchase_orders
-  const { rows: purchaseOrders = [] } = useSheet(
-    "purchase_orders",
-    mapPurchaseOrders
-  );
-
-  // Agrupar por poNumber
-  const groups = React.useMemo(() => {
-    const map = new Map();
-    for (const r of purchaseOrders) {
-      const key = norm(r.poNumber);
-      if (!key) continue;
-      if (!map.has(key)) {
-        map.set(key, {
-          poNumber: r.poNumber,
-          tenderRef: r.tenderRef,
-          manufacturingStatus: r.manufacturingStatus,
-          transportType: r.transportType,
-          costUsd: 0,
-          createdDate: r.createdDate,
-          _rows: [],
-        });
-      }
-      const g = map.get(key);
-      g.costUsd += r.costUsd || 0;
-      if (!g.manufacturingStatus && r.manufacturingStatus)
-        g.manufacturingStatus = r.manufacturingStatus;
-      if (!g.transportType && r.transportType)
-        g.transportType = r.transportType;
-      if (
-        r.createdDate &&
-        (!g.createdDate ||
-          new Date(r.createdDate) < new Date(g.createdDate))
-      ) {
-        g.createdDate = r.createdDate;
-      }
-      g._rows.push(r);
+  useEffect(() => {
+    if (open) {
+      setManufacturing(order?.manufacturing_status || '');
+      setTransport(order?.transport_type || '');
     }
-    return [...map.values()];
-  }, [purchaseOrders]);
+  }, [open, order]);
 
-  // Filtrar por manufactura y búsqueda
-  const filtered = React.useMemo(() => {
-    return groups
-      .filter((g) =>
-        manufacturingFilter ? g.manufacturingStatus === manufacturingFilter : true
-      )
-      .filter((g) => {
-        const q = norm(search);
-        return (
-          q === "" ||
-          norm(g.poNumber).includes(q) ||
-          norm(g.tenderRef).includes(q)
-        );
-      });
-  }, [groups, manufacturingFilter, search]);
+  if (!open) return null;
 
-  // KPIs
-  const kpis = React.useMemo(() => {
-    const total = groups.length;
-    const inProcess = groups.filter(
-      (g) => g.manufacturingStatus === "in process"
-    ).length;
-    const ready = groups.filter(
-      (g) => g.manufacturingStatus === "ready"
-    ).length;
-    const shipped = groups.filter(
-      (g) => g.manufacturingStatus === "shipped"
-    ).length;
-    return { total, inProcess, ready, shipped };
-  }, [groups]);
-
-  // Abrir modal
-  const openDetails = (g) => {
-    setSelected({
-      poNumber: g.poNumber,
-      tenderRef: g.tenderRef,
-      manufacturingStatus: g.manufacturingStatus,
-      transportType: g.transportType,
-      createdDate: g.createdDate,
-      ...g._rows[0],
-    });
-  };
+  async function handleSave() {
+    // Actualiza en la hoja "purchase_orders" usando la clave po_number
+    // (tal como permite tu Apps Script con action=update y KEYS.purchase_orders = ['po_number'])
+    const body = {
+      route: 'write',
+      action: 'update',
+      name: 'purchase_orders',
+      row: {
+        po_number: order.po_number,
+        manufacturing_status,
+        transport_type,
+      },
+    };
+    const res = await postJSON(API_BASE, body);
+    if (!res?.ok) throw new Error(res?.error || 'Update failed');
+    onSaved({ manufacturing_status, transport_type });
+    onClose();
+  }
 
   return (
-    <>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold">Purchase Order Tracking</h2>
-        <Button variant="ghost" onClick={() => {}}>
-          Refresh
-        </Button>
-      </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+        <h2 className="mb-4 text-xl font-semibold">Edit Order – {order?.po_number}</h2>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Total Orders</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{kpis.total}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>In Process</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{kpis.inProcess}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Ready</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{kpis.ready}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Shipped</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{kpis.shipped}</div>
-          </CardContent>
-        </Card>
-      </div>
+        <div className="mb-3">
+          <label className="mb-1 block text-sm font-medium">Manufacturing Status</label>
+          <select
+            value={manufacturing_status}
+            onChange={e => setManufacturing(e.target.value)}
+            className="w-full rounded-lg border p-2"
+          >
+            <option value="">(select)</option>
+            <option value="planned">planned</option>
+            <option value="in_process">in_process</option>
+            <option value="ready">ready</option>
+            <option value="shipped">shipped</option>
+          </select>
+        </div>
 
-      <div className="flex items-center gap-4 mb-4 flex-wrap">
-        <Input
+        <div className="mb-6">
+          <label className="mb-1 block text-sm font-medium">Transport Type</label>
+          <select
+            value={transport_type}
+            onChange={e => setTransport(e.target.value)}
+            className="w-full rounded-lg border p-2"
+          >
+            <option value="">(select)</option>
+            <option value="air">air</option>
+            <option value="sea">sea</option>
+            <option value="courier">courier</option>
+          </select>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
+          <button onClick={handleSave} className="rounded-lg bg-blue-600 px-4 py-2 text-white">Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function PurchaseOrderTrackingPage() {
+  const [orders, setOrders] = useState([]);
+  const [query, setQuery] = useState('');
+  const [filterManufacturing, setFilterManufacturing] = useState('all');
+
+  const [selected, setSelected] = useState(null);
+  const [showDetails, setShowDetails] = useState(false);
+
+  const [editOrder, setEditOrder] = useState(null);
+  const [showEdit, setShowEdit] = useState(false);
+
+  async function load() {
+    // Carga hoja purchase_orders
+    const url = `${API_BASE}?route=table&name=purchase_orders`;
+    const res = await fetchJSON(url);
+    if (!res?.ok) throw new Error(res?.error || 'Error loading purchase_orders');
+    setOrders(res.rows || []);
+  }
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const filtered = useMemo(() => {
+    return (orders || []).filter(o => {
+      const matchesText =
+        !query ||
+        String(o.po_number || '').toLowerCase().includes(query.toLowerCase()) ||
+        String(o.tender_ref || '').toLowerCase().includes(query.toLowerCase());
+
+      const matchesM =
+        filterManufacturing === 'all' ||
+        String(o.manufacturing_status || '').toLowerCase() === filterManufacturing;
+
+      return matchesText && matchesM;
+    });
+  }, [orders, query, filterManufacturing]);
+
+  return (
+    <div className="p-6">
+      <h1 className="mb-2 text-2xl font-semibold">Purchase Order Tracking</h1>
+      <p className="mb-6 text-gray-600">Monitor production status and shipment coordination for orders to India</p>
+
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <input
           type="text"
           placeholder="Search by PO number or tender ref..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="max-w-md"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          className="w-full rounded-lg border p-2"
         />
-        <Select
-          value={manufacturingFilter}
-          onValueChange={(v) => setManufacturingFilter(v)}
+
+        <select
+          className="rounded-lg border p-2"
+          value={filterManufacturing}
+          onChange={e => setFilterManufacturing(e.target.value)}
         >
-          <SelectTrigger className="w-48">
-            <SelectValue placeholder="Manufacturing (all)" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">All</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="in process">In Process</SelectItem>
-            <SelectItem value="ready">Ready</SelectItem>
-            <SelectItem value="shipped">Shipped</SelectItem>
-            <SelectItem value="complete">Complete</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button
-          variant="link"
-          onClick={() => setShowFilters((prev) => !prev)}
-        >
-          Show More Filters
-        </Button>
-        {showFilters && (
-          <Button
-            variant="link"
-            onClick={() => {
-              setManufacturingFilter("");
-              setSearch("");
-            }}
-          >
-            Clear Filters
-          </Button>
-        )}
+          <option value="all">Manufacturing (all)</option>
+          <option value="planned">planned</option>
+          <option value="in_process">in_process</option>
+          <option value="ready">ready</option>
+          <option value="shipped">shipped</option>
+        </select>
+
+        <button onClick={() => load()} className="rounded-lg border px-4 py-2">Refresh</button>
       </div>
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>PO Number</TableHead>
-            <TableHead>Tender Ref</TableHead>
-            <TableHead>Manufacturing</TableHead>
-            <TableHead>Transport</TableHead>
-            <TableHead>Created Date</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {filtered.map((g) => (
-            <TableRow key={g.poNumber}>
-              <TableCell>{g.poNumber}</TableCell>
-              <TableCell>{g.tenderRef}</TableCell>
-              <TableCell>{mfBadge(g.manufacturingStatus)}</TableCell>
-              <TableCell>{transportBadge(g.transportType)}</TableCell>
-              <TableCell>{fmtDate(g.createdDate)}</TableCell>
-              <TableCell className="text-right space-x-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openDetails(g)}
-                >
-                  <Eye className="w-4 h-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openDetails(g)}
-                >
-                  <Edit className="w-4 h-4" />
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <div className="overflow-x-auto rounded-xl border">
+        <table className="min-w-full">
+          <thead className="bg-gray-50 text-left text-sm text-gray-700">
+            <tr>
+              <th className="px-4 py-3">PO Number</th>
+              <th className="px-4 py-3">Tender Ref</th>
+              <th className="px-4 py-3">Manufacturing</th>
+              <th className="px-4 py-3">Created Date</th>
+              <th className="px-4 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {filtered.map((o) => (
+              <tr key={o.po_number} className="text-sm">
+                <td className="px-4 py-3 font-medium">{o.po_number}</td>
+                <td className="px-4 py-3">{o.tender_ref}</td>
+                <td className="px-4 py-3">
+                  <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeClass('manufacturing', o.manufacturing_status)}`}>
+                    {o.manufacturing_status || '—'}
+                  </span>
+                </td>
+                <td className="px-4 py-3">{formatDate(o.created_date)}</td>
+                <td className="px-4 py-3 text-right">
+                  <button
+                    className="mr-2 rounded-lg border px-3 py-1.5"
+                    onClick={() => { setSelected(o); setShowDetails(true); }}
+                  >
+                    View
+                  </button>
+                  <button
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-white"
+                    onClick={() => { setEditOrder(o); setShowEdit(true); }}
+                  >
+                    Edit
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr>
+                <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>No orders found…</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
-      {selected && (
+      {/* Modals */}
+      {showDetails && selected && (
         <OrderDetailsModal
-          open={!!selected}
-          onClose={() => setSelected(null)}
+          open={showDetails}
+          onClose={() => setShowDetails(false)}
           order={selected}
         />
       )}
-    </>
+
+      {showEdit && editOrder && (
+        <EditOrderModal
+          open={showEdit}
+          onClose={() => setShowEdit(false)}
+          order={editOrder}
+          onSaved={(patch) => {
+            // actualiza el estado local después de guardar
+            setOrders(prev => prev.map(p => p.po_number === editOrder.po_number ? { ...p, ...patch } : p));
+          }}
+        />
+      )}
+    </div>
   );
 }
