@@ -1,15 +1,18 @@
+// src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import React from "react";
 import { useSheet } from "@/lib/sheetsApi";
 import {
   mapPurchaseOrderItems,
   mapImportItems,
-  mapPresentationMaster,
 } from "@/lib/adapters";
 import { usePresentationCatalog } from "@/lib/catalog";
-import { Button, Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui";
-import { mfBadge, transportBadge } from "../index.jsx"; // importa las funciones desde index
-import { Badge } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 /* Formateador USD (igual al de index) */
 const fmtUSD = (n) =>
@@ -19,19 +22,61 @@ const fmtUSD = (n) =>
     minimumFractionDigits: 2,
   }).format(n || 0);
 
+/* Badge con colores para estados de fabricación */
+const mfBadge = (status) => {
+  const s = (status || "").toLowerCase();
+  const colors = {
+    pending: "bg-orange-100 text-orange-700",
+    ready: "bg-blue-100 text-blue-700",
+    "in process": "bg-yellow-100 text-yellow-700",
+    shipped: "bg-purple-100 text-purple-700",
+    cancelled: "bg-red-100 text-red-700",
+    complete: "bg-green-100 text-green-700",
+  };
+  const color = colors[s] || "bg-gray-100 text-gray-700";
+  return (
+    <span
+      className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}
+    >
+      {status || "—"}
+    </span>
+  );
+};
+
+/* Badge con colores para tipos de transporte */
+const transportBadge = (type) => {
+  const s = (type || "").toLowerCase();
+  const colors = {
+    air: "bg-cyan-100 text-cyan-700",
+    sea: "bg-blue-100 text-blue-700",
+    road: "bg-green-100 text-green-700",
+  };
+  const color = colors[s] || "bg-gray-100 text-gray-700";
+  return (
+    <span
+      className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}
+    >
+      {type || "—"}
+    </span>
+  );
+};
+
 export default function OrderDetailsModal({ open, onClose, order }) {
   // Cargar líneas de la orden y partidas importadas
   const { rows: poItems = [] } = useSheet(
     "purchase_order_items",
     mapPurchaseOrderItems
   );
-  const { rows: importItems = [] } = useSheet("import_items", mapImportItems);
+  const { rows: importItems = [] } = useSheet(
+    "import_items",
+    mapImportItems
+  );
   const { enrich } = usePresentationCatalog();
 
   // Filtra ítems de esta orden y añade nombre de producto y packageUnits
   const items = React.useMemo(() => {
-    // Enriquecer con catálogo
     const bySku = {};
+    // Enriquecer con catálogo
     enrich(
       poItems.filter((it) => it.poNumber === order.poNumber)
     ).forEach((it) => {
@@ -117,72 +162,73 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                   <div className="font-medium">
                     {it.presentationCode} &bull; {it.productName}
                   </div>
-                  <div className="text-sm text-muted-foreground">
-                    {it.packageUnits} units/pack
-                  </div>
-                  {/* Cajas Requested/Imported/Remaining */}
-                  <div className="flex space-x-2 mt-2">
-                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                      <div className="text-xxs uppercase text-muted-foreground">
-                        Requested
-                      </div>
+                    <div className="text-sm text-muted-foreground">
+                      {it.packageUnits} units/pack
+                    </div>
+                    {/* Cajas Requested/Imported/Remaining */}
+                    <div className="flex space-x-2 mt-2">
+                      <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
+                        <div className="text-xxs uppercase text-muted-foreground">
+                          Requested
+                        </div>
                         <div className="font-semibold text-sm">
-                        {it.requestedQty}
+                          {it.requestedQty}
+                        </div>
+                      </div>
+                      <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
+                        <div className="text-xxs uppercase text-muted-foreground">
+                          Imported
+                        </div>
+                        <div className="font-semibold text-sm">
+                          {it.importedQty}
+                        </div>
+                      </div>
+                      <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
+                        <div className="text-xxs uppercase text-muted-foreground">
+                          Remaining
+                        </div>
+                        <div className="font-semibold text-sm">
+                          {it.remainingQty}
+                        </div>
                       </div>
                     </div>
-                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                      <div className="text-xxs uppercase text-muted-foreground">
-                        Imported
-                      </div>
-                      <div className="font-semibold text-sm">
-                        {it.importedQty}
-                      </div>
+                  </div>
+                  {/* Costo unitario */}
+                  <div className="flex flex-col items-end">
+                    <div className="text-xxs text-muted-foreground">
+                      Unit
                     </div>
-                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                      <div className="text-xxs uppercase text-muted-foreground">
-                        Remaining
-                      </div>
-                      <div className="font-semibold text-sm">
-                        {it.remainingQty}
-                      </div>
+                    <div className="font-semibold text-sm">
+                      {fmtUSD(it.unitPrice)}
                     </div>
                   </div>
                 </div>
-                {/* Costo unitario */}
-                <div className="flex flex-col items-end">
-                  <div className="text-xxs text-muted-foreground">
-                    Unit
-                  </div>
-                  <div className="font-semibold text-sm">
-                    {fmtUSD(it.unitPrice)}
-                  </div>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
 
-        {/* Sección de comunicaciones */}
-        <div className="mt-6">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="font-semibold">
-              Communications
-            </h4>
-            <Button size="sm" variant="outline">
-              New Communication
-            </Button>
+          {/* Sección de comunicaciones (sin cambios por ahora) */}
+          <div className="mt-6">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-semibold">
+                Communications
+              </h4>
+              <Button size="sm" variant="outline">
+                New Communication
+              </Button>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              No communications.
+            </div>
           </div>
-          {/* Aquí iría el listado de comunicaciones (no lo modificamos) */}
-          <div className="text-sm text-muted-foreground">
-            No communications.
-          </div>
-        </div>
 
-        {/* Botón cerrar */}
-        <div className="mt-6 text-right">
-          <Button onClick={onClose}>Close</Button>
-        </div>
-      </DialogContent>
+          {/* Botón cerrar */}
+          <div className="mt-6 text-right">
+            <Button onClick={onClose}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
+
