@@ -1,232 +1,117 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
-import React from "react";
-import { useSheet } from "@/lib/sheetsApi";
-import {
-  mapPurchaseOrderItems,
-  mapImportItems,
-} from "@/lib/adapters";
-import { usePresentationCatalog } from "@/lib/catalog";
-// Importaciones correctas de Dialog y Button
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-
-/* Formateador USD */
-const fmtUSD = (n) =>
-  new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-  }).format(n || 0);
-
-/* Badge con colores para estados de fabricación */
-const mfBadge = (status) => {
-  const s = (status || "").toLowerCase();
-  const colors = {
-    pending: "bg-orange-100 text-orange-700",
-    "in process": "bg-yellow-100 text-yellow-700",
-    ready: "bg-blue-100 text-blue-700",
-    shipped: "bg-purple-100 text-purple-700",
-    cancelled: "bg-red-100 text-red-700",
-    complete: "bg-green-100 text-green-700",
-  };
-  const color = colors[s] || "bg-gray-100 text-gray-700";
-  return (
-    <span
-      className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}
-    >
-      {status || "—"}
-    </span>
-  );
-};
-
-/* Badge con colores para tipos de transporte */
-const transportBadge = (type) => {
-  const s = (type || "").toLowerCase();
-  const colors = {
-    air: "bg-cyan-100 text-cyan-700",
-    sea: "bg-blue-100 text-blue-700",
-    road: "bg-green-100 text-green-700",
-  };
-  const color = colors[s] || "bg-gray-100 text-gray-700";
-  return (
-    <span
-      className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}
-    >
-      {type || "—"}
-    </span>
-  );
-};
+import { useEffect, useState } from 'react';
+import { API_BASE, fetchJSON, formatNumber, formatCurrency, badgeClass } from '../../../lib/utils';
 
 export default function OrderDetailsModal({ open, onClose, order }) {
-  // Cargar líneas de la orden y partidas importadas
-  const { rows: poItems = [] } = useSheet(
-    "purchase_order_items",
-    mapPurchaseOrderItems
-  );
-  const { rows: importItems = [] } = useSheet(
-    "import_items",
-    mapImportItems
-  );
-  const { enrich } = usePresentationCatalog();
+  const [items, setItems] = useState([]);
+  const po = order || {};
 
-  // Agrupar productos por código y calcular solicitados/importados/restantes
-  const items = React.useMemo(() => {
-    const bySku = {};
-    enrich(
-      poItems.filter((it) => it.poNumber === order.poNumber)
-    ).forEach((it) => {
-      const key = it.presentationCode;
-      if (!bySku[key]) {
-        bySku[key] = {
-          presentationCode: it.presentationCode,
-          productName: it.productName,
-          packageUnits: it.packageUnits,
-          unitPrice: it.unitPrice,
-          requestedQty: it.qty,
-          importedQty: 0,
-          remainingQty: it.qty,
-        };
-      }
-    });
+  useEffect(() => {
+    if (!open || !po?.po_number) return;
+    async function loadItems() {
+      // Trae toda la tabla purchase_order_items y filtra por po_number
+      const url = `${API_BASE}?route=table&name=purchase_order_items`;
+      const res = await fetchJSON(url);
+      if (!res?.ok) throw new Error(res?.error || 'Error loading purchase_order_items');
 
-    importItems
-      .filter((imp) => imp.poNumber === order.poNumber)
-      .forEach((imp) => {
-        const key = imp.presentationCode;
-        if (bySku[key]) {
-          bySku[key].importedQty += imp.qty;
-          bySku[key].remainingQty = Math.max(
-            bySku[key].requestedQty - bySku[key].importedQty,
-            0
-          );
-        }
-      });
+      const rows = (res.rows || []).filter(r => String(r.po_number) === String(po.po_number));
+      setItems(rows);
+    }
+    loadItems().catch(console.error);
+  }, [open, po?.po_number]);
 
-    return Object.values(bySku);
-  }, [poItems, importItems, enrich, order.poNumber]);
+  if (!open) return null;
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>
-            Order Details – {order.poNumber}
-          </DialogTitle>
-          <div className="text-sm text-muted-foreground">
-            Tender Ref: {order.tenderRef}
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4 sm:items-center">
+      <div className="w-full max-w-3xl rounded-xl bg-white shadow-xl">
+        {/* Header */}
+        <div className="flex items-start justify-between border-b p-5">
+          <div>
+            <h2 className="text-xl font-semibold">Order Details – {po.po_number}</h2>
+            <div className="mt-1 text-sm text-gray-600">Tender Ref: {po.tender_ref || '—'}</div>
           </div>
-        </DialogHeader>
+          <button onClick={onClose} className="rounded-lg p-2 text-gray-500 hover:bg-gray-100">✕</button>
+        </div>
 
-        {/* Información general */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-          <div>
-            <div className="text-xs text-muted-foreground uppercase mb-1">
-              Manufacturing
+        {/* Status row */}
+        <div className="grid gap-3 border-b p-5 sm:grid-cols-3">
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-gray-500">Manufacturing</div>
+            <div className="mt-1">
+              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeClass('manufacturing', po.manufacturing_status)}`}>
+                {po.manufacturing_status || '—'}
+              </span>
             </div>
-            {mfBadge(order.manufacturingStatus)}
           </div>
-          <div>
-            <div className="text-xs text-muted-foreground uppercase mb-1">
-              Transport
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-gray-500">Transport</div>
+            <div className="mt-1">
+              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeClass('transport', po.transport_type)}`}>
+                {po.transport_type || '—'}
+              </span>
             </div>
-            {transportBadge(order.transportType)}
           </div>
-          <div>
-            <div className="text-xs text-muted-foreground uppercase mb-1">
-              Created
-            </div>
-            {order.createdDate
-              ? new Date(order.createdDate).toLocaleDateString("es-CL")
-              : "—"}
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-gray-500">Created</div>
+            <div className="mt-1 text-sm">{po.created_date || '—'}</div>
           </div>
         </div>
 
-        {/* Lista de productos */}
-        <div className="mt-6">
-          <h4 className="font-semibold mb-4">
-            Products in PO
-          </h4>
-          <div className="space-y-4">
-            {items.map((it) => (
-              <div
-                key={it.presentationCode}
-                className="p-4 border border-gray-200 rounded-lg flex justify-between items-start"
-              >
-                <div>
-                  <div className="font-medium">
-                    {it.presentationCode} &bull; {it.productName}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {it.packageUnits} units/pack
-                  </div>
-                  {/* Cajas Requested/Imported/Remaining */}
-                  <div className="flex space-x-2 mt-2">
-                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                      <div className="text-xxs uppercase text-muted-foreground">
-                        Requested
-                      </div>
-                      <div className="font-semibold text-sm">
-                        {it.requestedQty}
-                      </div>
+        {/* Items */}
+        <div className="space-y-3 p-5">
+          <h3 className="text-base font-semibold">Products in PO</h3>
+
+          {items.map((it) => {
+            const requested = Number(it.requested_qty || 0);
+            const imported = Number(it.imported_qty || 0);
+            const remaining = requested - imported;
+
+            return (
+              <div key={`${it.po_number}-${it.presentation_code}`} className="rounded-lg border p-4">
+                <div className="mb-2 flex items-start justify-between">
+                  <div>
+                    <div className="font-medium">
+                      {String(it.product_name || it.presentation_name || 'Product')} • {String(it.pack_size || '').trim()}
                     </div>
-                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                      <div className="text-xxs uppercase text-muted-foreground">
-                        Imported
-                      </div>
-                      <div className="font-semibold text-sm">
-                        {it.importedQty}
-                      </div>
-                    </div>
-                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                      <div className="text-xxs uppercase text-muted-foreground">
-                        Remaining
-                      </div>
-                      <div className="font-semibold text-sm">
-                        {it.remainingQty}
-                      </div>
+                    <div className="text-xs text-gray-500">
+                      {it.presentation_code ? `Code: ${it.presentation_code}` : null}
                     </div>
                   </div>
+                  <div className="text-sm font-medium">{formatCurrency(it.unit_cost || 0)}</div>
                 </div>
-                {/* Costo unitario */}
-                <div className="flex flex-col items-end">
-                  <div className="text-xxs text-muted-foreground">
-                    Unit
+
+                {/* KPI boxes */}
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border p-3">
+                    <div className="text-xs text-gray-500">Requested</div>
+                    <div className="text-2xl font-semibold">{formatNumber(requested)}</div>
                   </div>
-                  <div className="font-semibold text-sm">
-                    {fmtUSD(it.unitPrice)}
+                  <div className="rounded-xl border p-3">
+                    <div className="text-xs text-gray-500">Imported</div>
+                    <div className="text-2xl font-semibold">{formatNumber(imported)}</div>
+                  </div>
+                  <div className="rounded-xl border p-3">
+                    <div className="text-xs text-gray-500">Remaining</div>
+                    <div className="text-2xl font-semibold">{formatNumber(Math.max(remaining, 0))}</div>
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
+
+          {items.length === 0 && (
+            <div className="rounded-lg border p-4 text-gray-500">No items for this PO…</div>
+          )}
         </div>
 
-        {/* Sección de comunicaciones */}
-        <div className="mt-6">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="font-semibold">
-              Communications
-            </h4>
-            <Button size="sm" variant="outline">
-              New Communication
-            </Button>
-          </div>
-          <div className="text-sm text-muted-foreground">
-            No communications.
-          </div>
+        {/* Footer */}
+        <div className="flex items-center justify-between border-t p-5">
+          <div className="text-sm text-gray-500">Communications</div>
+          <button className="rounded-lg bg-blue-600 px-4 py-2 text-white">+ New Communication</button>
         </div>
-
-        {/* Botón cerrar */}
-        <div className="mt-6 text-right">
-          <Button onClick={onClose}>Close</Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }
 
