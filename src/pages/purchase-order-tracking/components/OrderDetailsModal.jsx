@@ -144,3 +144,50 @@ export default function OrderDetailsModal({ open, onClose, order }) {
         {/* Items */}
         <div className="space-y-3 p-5">
           <h3 className="text-base font-semibold">Products in PO</h3>
+
+          {items.map((it) => (
+            <div key={it.key} className="rounded-lg border p-4">
+              <div className="mb-2 flex items-start justify-between">
+                <div>
+                  <div className="font-medium">
+                    {it.product_name} {it.pack_label ? `• ${it.pack_label}` : ''}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {it.presentation_code ? `Code: ${it.presentation_code}` : null}
+                  </div>
+                </div>
+                <div className="text-sm font-medium">{formatCurrency(it.unit_cost)}</div>
+              </div>
+
+              {/* KPI boxes */}
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border p-3">
+                  <div className="text-xs text-gray-500">Requested</div>
+                  <div className="text-2xl font-semibold">{formatNumber(it.requested)}</div>
+                </div>
+                <div className="rounded-xl border p-3">
+                  <div className="text-xs text-gray-500">Imported</div>
+                  <div className="text-2xl font-semibold">{formatNumber(it.imported)}</div>
+                </div>
+                <div className="rounded-xl border p-3">
+                  <div className="text-xs text-gray-500">Remaining</div>
+                  <div className="text-2xl font-semibold">{formatNumber(it.remaining)}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {items.length === 0 && (
+            <div className="rounded-lg border p-4 text-gray-500">No items for this PO…</div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between border-t p-5">
+          <div className="text-sm text-gray-500">Communications</div>
+          <button className="rounded-lg bg-blue-600 px-4 py-2 text-white">+ New Communication</button>
+        </div>
+      </div>
+    </div>
+  );
+}
