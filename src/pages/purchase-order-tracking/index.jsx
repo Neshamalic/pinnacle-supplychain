@@ -1,39 +1,33 @@
+// src/pages/purchase-order-tracking/index.jsx
 import React from "react";
-import { Eye, Edit, RefreshCcw, Search, ShoppingCart } from "lucide-react";
+import { Eye, Edit } from "lucide-react";
 import { useSheet } from "@/lib/sheetsApi";
-import {
-  mapPurchaseOrders,
-  mapTenderItems,
-  mapTenders,
-  mapPurchaseOrderItems,
-} from "@/lib/adapters";
-import { usePresentationCatalog } from "@/lib/catalog";
+import { mapPurchaseOrders } from "@/lib/adapters";
 import { cn } from "@/lib/utils";
 import {
-  Badge,
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
 } from "@/components/ui";
 
+/* Función para normalizar texto (minúsculas, quitar espacios) */
 const norm = (v) => (v || "").toString().toLowerCase().trim();
 
-/* Ya dispones de un formateador de USD (fmtUSD); aquí añadimos un formateador de fecha */
+/* Formateador de fecha: “dd-mm-aaaa” en formato chileno */
 function fmtDate(d) {
   if (!d) return "";
   const date = new Date(d);
@@ -44,8 +38,8 @@ function fmtDate(d) {
   });
 }
 
-/* Para colorear los estados de fabricación */
-const mfBadge = (status) => {
+/* Badge con colores para estados de fabricación */
+function mfBadge(status) {
   const s = (status || "").toLowerCase();
   const colors = {
     pending: "bg-orange-100 text-orange-700",
@@ -57,13 +51,13 @@ const mfBadge = (status) => {
   const color = colors[s] || "bg-gray-100 text-gray-700";
   return (
     <span className={cn("px-2 py-0.5 rounded text-xs font-medium", color)}>
-      {status}
+      {status || "—"}
     </span>
   );
-};
+}
 
-/* Para colorear los tipos de transporte (air, sea, land) */
-const transportBadge = (type) => {
+/* Badge con colores para tipos de transporte */
+function transportBadge(type) {
   const s = (type || "").toLowerCase();
   const colors = {
     air: "bg-cyan-100 text-cyan-700",
@@ -73,10 +67,10 @@ const transportBadge = (type) => {
   const color = colors[s] || "bg-gray-100 text-gray-700";
   return (
     <span className={cn("px-2 py-0.5 rounded text-xs font-medium", color)}>
-      {type}
+      {type || "—"}
     </span>
   );
-};
+}
 
 export default function PurchaseOrderTracking() {
   const [manufacturingFilter, setManufacturingFilter] = React.useState("");
@@ -89,7 +83,7 @@ export default function PurchaseOrderTracking() {
     mapPurchaseOrders
   );
 
-  /* Agrupamos por poNumber y acumulamos campos */
+  /* Agrupamos las órdenes por poNumber y guardamos la fecha de creación */
   const groups = React.useMemo(() => {
     const map = new Map();
     for (const r of purchaseOrders) {
@@ -100,7 +94,6 @@ export default function PurchaseOrderTracking() {
           poNumber: r.poNumber,
           tenderRef: r.tenderRef,
           manufacturingStatus: r.manufacturingStatus,
-          qcStatus: r.qcStatus,
           transportType: r.transportType,
           costUsd: 0,
           createdDate: r.createdDate,
@@ -109,12 +102,9 @@ export default function PurchaseOrderTracking() {
       }
       const g = map.get(key);
       g.costUsd += r.costUsd || 0;
-      // Conservamos el primer manufacturingStatus/transportType no vacío
       if (!g.manufacturingStatus && r.manufacturingStatus)
         g.manufacturingStatus = r.manufacturingStatus;
-      if (!g.transportType && r.transportType)
-        g.transportType = r.transportType;
-      // Si la fecha de creación es menor (más antigua), la mantenemos
+      if (!g.transportType && r.transportType) g.transportType = r.transportType;
       if (
         r.createdDate &&
         (!g.createdDate ||
@@ -127,11 +117,13 @@ export default function PurchaseOrderTracking() {
     return [...map.values()];
   }, [purchaseOrders]);
 
-  /* Filtros y búsqueda */
+  /* Filtros por búsqueda y estado de fabricación */
   const filtered = React.useMemo(() => {
     return groups
       .filter((g) =>
-        manufacturingFilter ? g.manufacturingStatus === manufacturingFilter : true
+        manufacturingFilter
+          ? g.manufacturingStatus === manufacturingFilter
+          : true
       )
       .filter((g) => {
         const q = norm(search);
@@ -143,7 +135,7 @@ export default function PurchaseOrderTracking() {
       });
   }, [groups, manufacturingFilter, search]);
 
-  /* KPIs (pueden mantenerse con lógica actual) */
+  /* Métricas rápidas para las tarjetas (pueden ajustarse según necesidades) */
   const kpis = React.useMemo(() => {
     const total = groups.length;
     const inProcess = groups.filter(
@@ -152,12 +144,7 @@ export default function PurchaseOrderTracking() {
     const ready = groups.filter((g) => g.manufacturingStatus === "ready").length;
     const shipped = groups.filter((g) => g.manufacturingStatus === "shipped")
       .length;
-    const avgProduction =
-      groups.reduce(
-        (acc, g) => acc + (g.productionDays ? g.productionDays : 0),
-        0
-      ) / (groups.length || 1);
-    return { total, inProcess, ready, shipped, avgProduction };
+    return { total, inProcess, ready, shipped };
   }, [groups]);
 
   /* Abre el modal de detalles */
@@ -168,7 +155,6 @@ export default function PurchaseOrderTracking() {
       manufacturingStatus: g.manufacturingStatus,
       transportType: g.transportType,
       createdDate: g.createdDate,
-      // pasamos el primer registro para unitPrice y demás
       ...g._rows[0],
     });
   };
@@ -181,14 +167,14 @@ export default function PurchaseOrderTracking() {
           variant="ghost"
           iconName="RefreshCcw"
           onClick={() => {
-            /* podrías volver a cargar useSheet aquí */
+            // Podrías forzar la recarga de datos aquí si fuera necesario
           }}
         >
           Refresh
         </Button>
       </div>
 
-      {/* KPIs */}
+      {/* Tarjetas de KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <Card>
           <CardHeader>
@@ -224,7 +210,7 @@ export default function PurchaseOrderTracking() {
         </Card>
       </div>
 
-      {/* Filtros */}
+      {/* Búsqueda y filtros */}
       <div className="flex items-center gap-4 mb-4 flex-wrap">
         <Input
           type="text"
@@ -243,6 +229,7 @@ export default function PurchaseOrderTracking() {
           <SelectContent>
             <SelectItem value="">All</SelectItem>
             <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="in process">In Process</SelectItem>
             <SelectItem value="ready">Ready</SelectItem>
             <SelectItem value="shipped">Shipped</SelectItem>
             <SelectItem value="complete">Complete</SelectItem>
@@ -267,7 +254,7 @@ export default function PurchaseOrderTracking() {
         )}
       </div>
 
-      {/* Tabla */}
+      {/* Tabla de órdenes */}
       <Table>
         <TableHeader>
           <TableRow>
@@ -296,7 +283,7 @@ export default function PurchaseOrderTracking() {
                 >
                   <Eye className="w-4 h-4" />
                 </Button>
-                {/* Botón Edit: por ahora abre el mismo modal en modo lectura, se puede ocultar si no hay lógica de edición */}
+                {/* El botón Edit abre el mismo modal de detalles; puedes quitarlo si no vas a editar */}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -322,3 +309,6 @@ export default function PurchaseOrderTracking() {
     </>
   );
 }
+
+/* Exportamos los badges por si en algún momento quieres reutilizarlos en otros componentes */
+export { mfBadge, transportBadge };
