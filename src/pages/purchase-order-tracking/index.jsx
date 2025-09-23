@@ -5,14 +5,12 @@ import { useSheet } from "@/lib/sheetsApi";
 import { mapPurchaseOrders } from "@/lib/adapters";
 import { cn } from "@/lib/utils";
 import {
-  // Tablas y celdas
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
-  // Controles de interfaz
   Button,
   Input,
   Select,
@@ -20,19 +18,17 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  // Tarjetas para KPIs
   Card,
   CardHeader,
   CardTitle,
   CardContent,
-  Dialog,
 } from "@/components/ui";
 import OrderDetailsModal from "./components/OrderDetailsModal";
 
-/* Función para normalizar texto (minúsculas, quitar espacios) */
+/* Normaliza texto a minúsculas y sin espacios */
 const norm = (v) => (v || "").toString().toLowerCase().trim();
 
-/* Formateador de fecha: “dd‑mm‑aaaa” en formato chileno */
+/* Formateador de fecha (dd-mm-aaaa) */
 function fmtDate(d) {
   if (!d) return "";
   const date = new Date(d);
@@ -43,7 +39,7 @@ function fmtDate(d) {
   });
 }
 
-/* Badge con colores para estados de fabricación */
+/* Badge de estado de fabricación */
 function mfBadge(status) {
   const s = (status || "").toLowerCase();
   const colors = {
@@ -62,7 +58,7 @@ function mfBadge(status) {
   );
 }
 
-/* Badge con colores para tipos de transporte */
+/* Badge de tipo de transporte */
 function transportBadge(type) {
   const s = (type || "").toLowerCase();
   const colors = {
@@ -84,13 +80,13 @@ export default function PurchaseOrderTracking() {
   const [selected, setSelected] = React.useState(null);
   const [showFilters, setShowFilters] = React.useState(false);
 
-  // Leer purchase_orders
+  // Obtener datos de purchase_orders
   const { rows: purchaseOrders = [] } = useSheet(
     "purchase_orders",
     mapPurchaseOrders
   );
 
-  /* Agrupar por poNumber y acumular campos clave */
+  // Agrupar por poNumber
   const groups = React.useMemo(() => {
     const map = new Map();
     for (const r of purchaseOrders) {
@@ -111,11 +107,12 @@ export default function PurchaseOrderTracking() {
       g.costUsd += r.costUsd || 0;
       if (!g.manufacturingStatus && r.manufacturingStatus)
         g.manufacturingStatus = r.manufacturingStatus;
-      if (!g.transportType && r.transportType) g.transportType = r.transportType;
-      // Mantener la fecha de creación más antigua (si hubiera varias)
+      if (!g.transportType && r.transportType)
+        g.transportType = r.transportType;
       if (
         r.createdDate &&
-        (!g.createdDate || new Date(r.createdDate) < new Date(g.createdDate))
+        (!g.createdDate ||
+          new Date(r.createdDate) < new Date(g.createdDate))
       ) {
         g.createdDate = r.createdDate;
       }
@@ -124,7 +121,7 @@ export default function PurchaseOrderTracking() {
     return [...map.values()];
   }, [purchaseOrders]);
 
-  /* Filtrar por estado de fabricación y texto de búsqueda */
+  // Filtrar por manufactura y búsqueda
   const filtered = React.useMemo(() => {
     return groups
       .filter((g) =>
@@ -140,20 +137,22 @@ export default function PurchaseOrderTracking() {
       });
   }, [groups, manufacturingFilter, search]);
 
-  /* KPIs: total, en proceso, listos y enviados */
+  // KPIs
   const kpis = React.useMemo(() => {
     const total = groups.length;
     const inProcess = groups.filter(
       (g) => g.manufacturingStatus === "in process"
     ).length;
-    const ready = groups.filter((g) => g.manufacturingStatus === "ready").length;
+    const ready = groups.filter(
+      (g) => g.manufacturingStatus === "ready"
+    ).length;
     const shipped = groups.filter(
       (g) => g.manufacturingStatus === "shipped"
     ).length;
     return { total, inProcess, ready, shipped };
   }, [groups]);
 
-  /* Abrir modal de detalles */
+  // Abrir modal
   const openDetails = (g) => {
     setSelected({
       poNumber: g.poNumber,
@@ -161,13 +160,12 @@ export default function PurchaseOrderTracking() {
       manufacturingStatus: g.manufacturingStatus,
       transportType: g.transportType,
       createdDate: g.createdDate,
-      ...g._rows[0], // El primer registro para unitPrice, etc.
+      ...g._rows[0],
     });
   };
 
   return (
     <>
-      {/* Encabezado */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Purchase Order Tracking</h2>
         <Button variant="ghost" onClick={() => {}}>
@@ -175,7 +173,6 @@ export default function PurchaseOrderTracking() {
         </Button>
       </div>
 
-      {/* Tarjetas de métricas */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <Card>
           <CardHeader>
@@ -211,7 +208,6 @@ export default function PurchaseOrderTracking() {
         </Card>
       </div>
 
-      {/* Barra de búsqueda y filtros */}
       <div className="flex items-center gap-4 mb-4 flex-wrap">
         <Input
           type="text"
@@ -255,7 +251,6 @@ export default function PurchaseOrderTracking() {
         )}
       </div>
 
-      {/* Tabla de órdenes */}
       <Table>
         <TableHeader>
           <TableRow>
@@ -296,7 +291,6 @@ export default function PurchaseOrderTracking() {
         </TableBody>
       </Table>
 
-      {/* Modal de detalles */}
       {selected && (
         <OrderDetailsModal
           open={!!selected}
