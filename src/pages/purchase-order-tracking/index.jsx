@@ -1,13 +1,20 @@
 // src/pages/purchase-order-tracking/index.jsx
 import { useEffect, useMemo, useState } from 'react';
-import { API_BASE, fetchJSON, formatDate, badgeClass } from '../../lib/utils';
+import { API_BASE, fetchJSON, formatDate } from '../../lib/utils';
 import OrderDetailsModal from './components/OrderDetailsModal';
+
+function EyeIcon({ className = 'h-4 w-4' }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M1.5 12s3.75-7.5 10.5-7.5S22.5 12 22.5 12s-3.75 7.5-10.5 7.5S1.5 12 1.5 12Z" stroke="currentColor" strokeWidth="1.5"/>
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5"/>
+    </svg>
+  );
+}
 
 export default function PurchaseOrderTrackingPage() {
   const [orders, setOrders] = useState([]);
   const [query, setQuery] = useState('');
-  const [filterManufacturing, setFilterManufacturing] = useState('all');
-
   const [selected, setSelected] = useState(null);
   const [showDetails, setShowDetails] = useState(false);
 
@@ -22,36 +29,37 @@ export default function PurchaseOrderTrackingPage() {
     load().catch(console.error);
   }, []);
 
-  // 👉 Agrupar por po_number (una fila por PO). Tomamos la primera ocurrencia.
-  const grouped = useMemo(() => {
+  // Agrupar por po_number (una fila por PO)
+  const rows = useMemo(() => {
     const map = new Map();
     for (const o of orders || []) {
-      const key = String(o.po_number || '').trim();
-      if (!key) continue;
-      if (!map.has(key)) map.set(key, o);
+      const k = String(o.po_number || '').trim();
+      if (!k) continue;
+      if (!map.has(k)) map.set(k, o);
     }
     return Array.from(map.values());
   }, [orders]);
 
+  // Filtrado por texto (po_number o tender_ref)
   const filtered = useMemo(() => {
-    return (grouped || []).filter(o => {
-      const matchesText =
-        !query ||
-        String(o.po_number || '').toLowerCase().includes(query.toLowerCase()) ||
-        String(o.tender_ref || '').toLowerCase().includes(query.toLowerCase());
-      const matchesM =
-        filterManufacturing === 'all' ||
-        String(o.manufacturing_status || '').toLowerCase() === filterManufacturing;
-      return matchesText && matchesM;
+    const q = query.trim().toLowerCase();
+    return (rows || []).filter(o => {
+      if (!q) return true;
+      return (
+        String(o.po_number || '').toLowerCase().includes(q) ||
+        String(o.tender_ref || '').toLowerCase().includes(q)
+      );
     });
-  }, [grouped, query, filterManufacturing]);
+  }, [rows, query]);
 
   return (
     <div className="p-6">
-      <h1 className="mb-2 text-2xl font-semibold">Purchase Order Tracking</h1>
-      <p className="mb-6 text-gray-600">Monitor production status and shipment coordination for orders to India</p>
+      <div className="mb-4">
+        <h1 className="text-2xl font-semibold">Purchase Order Tracking</h1>
+        <p className="text-gray-600">Monitor production status and shipment coordination for orders to India</p>
+      </div>
 
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+      <div className="mb-4 flex items-center gap-3">
         <input
           type="text"
           placeholder="Search by PO number or tender ref..."
@@ -59,76 +67,51 @@ export default function PurchaseOrderTrackingPage() {
           onChange={e => setQuery(e.target.value)}
           className="w-full rounded-lg border p-2"
         />
-
-        {/* 👉 Select limpio: 'All' por defecto, sin texto sobrepuesto */}
-        <select
-          className="rounded-lg border p-2"
-          value={filterManufacturing}
-          onChange={e => setFilterManufacturing(e.target.value)}
-          aria-label="Manufacturing status filter"
-          title="Manufacturing status"
-        >
-          <option value="all">All</option>
-          <option value="planned">planned</option>
-          <option value="in_process">in_process</option>
-          <option value="ready">ready</option>
-          <option value="shipped">shipped</option>
-        </select>
-
         <button onClick={() => load()} className="rounded-lg border px-4 py-2">Refresh</button>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border">
+      <div className="overflow-x-auto rounded-xl border border-indigo-100 bg-indigo-50/40">
         <table className="min-w-full">
-          <thead className="bg-gray-50 text-left text-sm text-gray-700">
+          <thead className="bg-indigo-50 text-left text-sm text-slate-700">
             <tr>
               <th className="px-4 py-3">PO Number</th>
               <th className="px-4 py-3">Tender Ref</th>
-              <th className="px-4 py-3">Manufacturing</th>
               <th className="px-4 py-3">Created Date</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y">
-            {filtered.map((o) => (
-              <tr key={o.po_number} className="text-sm">
-                <td className="px-4 py-3 font-medium">{o.po_number}</td>
-                <td className="px-4 py-3">{o.tender_ref}</td>
-                <td className="px-4 py-3">
-                  <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeClass('manufacturing', o.manufacturing_status)}`}>
-                    {o.manufacturing_status || '—'}
-                  </span>
-                </td>
+          <tbody className="divide-y divide-indigo-100">
+            {filtered.map(o => (
+              <tr key={o.po_number} className="text-sm hover:bg-white">
+                <td className="px-4 py-3 font-semibold text-slate-800">{o.po_number}</td>
+                <td className="px-4 py-3 text-slate-700">{o.tender_ref}</td>
                 <td className="px-4 py-3">{formatDate(o.created_date)}</td>
                 <td className="px-4 py-3 text-right">
                   <button
-                    className="rounded-lg border px-3 py-1.5"
+                    className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 text-slate-700 shadow-sm ring-1 ring-indigo-200 hover:ring-indigo-300"
                     onClick={() => { setSelected(o); setShowDetails(true); }}
+                    title="View details"
                   >
-                    View
+                    <EyeIcon /> <span>View</span>
                   </button>
                 </td>
               </tr>
             ))}
+
             {filtered.length === 0 && (
               <tr>
-                <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>No orders found…</td>
+                <td className="px-4 py-6 text-center text-gray-500" colSpan={4}>No orders found…</td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Modal con detalles y edición interna */}
       {showDetails && selected && (
         <OrderDetailsModal
           open={showDetails}
           onClose={() => setShowDetails(false)}
           order={selected}
-          onOrderUpdated={(patch) => {
-            // Actualizar en pantalla el estado del PO si se edita dentro del modal
-            setOrders(prev => prev.map(p => p.po_number === selected.po_number ? { ...p, ...patch } : p));
-          }}
         />
       )}
     </div>
