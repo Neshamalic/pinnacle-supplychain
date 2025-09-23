@@ -11,10 +11,10 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+  Button,
+} from "@/components/ui";
 
-/* Formateador USD (igual al de index) */
+/* Formateador USD */
 const fmtUSD = (n) =>
   new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -27,8 +27,8 @@ const mfBadge = (status) => {
   const s = (status || "").toLowerCase();
   const colors = {
     pending: "bg-orange-100 text-orange-700",
-    ready: "bg-blue-100 text-blue-700",
     "in process": "bg-yellow-100 text-yellow-700",
+    ready: "bg-blue-100 text-blue-700",
     shipped: "bg-purple-100 text-purple-700",
     cancelled: "bg-red-100 text-red-700",
     complete: "bg-green-100 text-green-700",
@@ -73,10 +73,9 @@ export default function OrderDetailsModal({ open, onClose, order }) {
   );
   const { enrich } = usePresentationCatalog();
 
-  // Filtra ítems de esta orden y añade nombre de producto y packageUnits
+  // Agrupar productos por código y calcular solicitados/importados/restantes
   const items = React.useMemo(() => {
     const bySku = {};
-    // Enriquecer con catálogo
     enrich(
       poItems.filter((it) => it.poNumber === order.poNumber)
     ).forEach((it) => {
@@ -94,7 +93,6 @@ export default function OrderDetailsModal({ open, onClose, order }) {
       }
     });
 
-    // Suma importados por código
     importItems
       .filter((imp) => imp.poNumber === order.poNumber)
       .forEach((imp) => {
@@ -123,7 +121,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           </div>
         </DialogHeader>
 
-        {/* Info general */}
+        {/* Información general */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
           <div>
             <div className="text-xs text-muted-foreground uppercase mb-1">
@@ -162,73 +160,71 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                   <div className="font-medium">
                     {it.presentationCode} &bull; {it.productName}
                   </div>
-                    <div className="text-sm text-muted-foreground">
-                      {it.packageUnits} units/pack
-                    </div>
-                    {/* Cajas Requested/Imported/Remaining */}
-                    <div className="flex space-x-2 mt-2">
-                      <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                        <div className="text-xxs uppercase text-muted-foreground">
-                          Requested
-                        </div>
-                        <div className="font-semibold text-sm">
-                          {it.requestedQty}
-                        </div>
-                      </div>
-                      <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                        <div className="text-xxs uppercase text-muted-foreground">
-                          Imported
-                        </div>
-                        <div className="font-semibold text-sm">
-                          {it.importedQty}
-                        </div>
-                      </div>
-                      <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
-                        <div className="text-xxs uppercase text-muted-foreground">
-                          Remaining
-                        </div>
-                        <div className="font-semibold text-sm">
-                          {it.remainingQty}
-                        </div>
-                      </div>
-                    </div>
+                  <div className="text-sm text-muted-foreground">
+                    {it.packageUnits} units/pack
                   </div>
-                  {/* Costo unitario */}
-                  <div className="flex flex-col items-end">
-                    <div className="text-xxs text-muted-foreground">
-                      Unit
+                  {/* Cajas Requested/Imported/Remaining */}
+                  <div className="flex space-x-2 mt-2">
+                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
+                      <div className="text-xxs uppercase text-muted-foreground">
+                        Requested
+                      </div>
+                      <div className="font-semibold text-sm">
+                        {it.requestedQty}
+                      </div>
                     </div>
-                    <div className="font-semibold text-sm">
-                      {fmtUSD(it.unitPrice)}
+                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
+                      <div className="text-xxs uppercase text-muted-foreground">
+                        Imported
+                      </div>
+                      <div className="font-semibold text-sm">
+                        {it.importedQty}
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 border border-gray-200 rounded-md p-2">
+                      <div className="text-xxs uppercase text-muted-foreground">
+                        Remaining
+                      </div>
+                      <div className="font-semibold text-sm">
+                        {it.remainingQty}
+                      </div>
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
+                {/* Costo unitario */}
+                <div className="flex flex-col items-end">
+                  <div className="text-xxs text-muted-foreground">
+                    Unit
+                  </div>
+                  <div className="font-semibold text-sm">
+                    {fmtUSD(it.unitPrice)}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
+        </div>
 
-          {/* Sección de comunicaciones (sin cambios por ahora) */}
-          <div className="mt-6">
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="font-semibold">
-                Communications
-              </h4>
-              <Button size="sm" variant="outline">
-                New Communication
-              </Button>
-            </div>
-            <div className="text-sm text-muted-foreground">
-              No communications.
-            </div>
+        {/* Sección de comunicaciones */}
+        <div className="mt-6">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="font-semibold">
+              Communications
+            </h4>
+            <Button size="sm" variant="outline">
+              New Communication
+            </Button>
           </div>
+          <div className="text-sm text-muted-foreground">
+            No communications.
+          </div>
+        </div>
 
-          {/* Botón cerrar */}
-          <div className="mt-6 text-right">
-            <Button onClick={onClose}>Close</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        {/* Botón cerrar */}
+        <div className="mt-6 text-right">
+          <Button onClick={onClose}>Close</Button>
+        </div>
+      </DialogContent>
     </Dialog>
   );
 }
-
