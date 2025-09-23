@@ -15,71 +15,49 @@ const fmtDate = (iso) => {
   if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
 };
-
 const Pill = ({ children, tone = "muted" }) => {
   const color =
-    tone === "green"
-      ? "bg-emerald-100 text-emerald-700"
-      : tone === "yellow"
-      ? "bg-amber-100 text-amber-700"
-      : tone === "blue"
-      ? "bg-sky-100 text-sky-700"
-      : tone === "red"
-      ? "bg-rose-100 text-rose-700"
-      : "bg-muted text-foreground/70";
-  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${color}`}>{children}</span>;
+    tone === "green" ? "bg-emerald-100 text-emerald-700" :
+    tone === "yellow" ? "bg-amber-100 text-amber-700" :
+    tone === "blue" ? "bg-sky-100 text-sky-700" :
+    "bg-slate-100 text-slate-700";
+  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${color}`}>{children || "—"}</span>;
 };
 
 export default function ImportDetailsDrawer(props) {
-  // Compatibilidad con distintos nombres de props en tu app
   const isOpen = props.isOpen ?? props.open ?? false;
-  const imp =
-    props.importRow ||
-    props.importData ||
-    props.import ||
-    props.shipment ||
-    props.data ||
-    props.row ||
-    null;
-  const onClose = props.onClose || props.close || (() => {});
-
-  const [tab, setTab] = useState("overview");
+  const imp = props.importRow || props.importData || props.import || props.row || null;
+  const onClose = props.onClose || (() => {});
+  const [tab, setTab] = useState("items");
   const [openNewComm, setOpenNewComm] = useState(false);
 
-  // Para refrescar la lista al guardar una nueva comunicación
+  // Para refrescar lista de communications tras guardar
   const { refetch: refetchComms } = useSheet("communications", mapCommunications);
 
   if (!isOpen || !imp) return null;
 
-  /* 1) Import items (hoja: import_items) */
-  const { rows: allImportItems = [], loading } = useSheet("import_items", mapImportItems);
-
-  /* 2) Filtrado por prioridad: shipmentId -> ociNumber -> poNumber */
-  const itemsRaw = useMemo(() => {
-    const list = [];
-    const sid = imp.shipmentId || imp.shipment_id || imp.shipmentID;
-    const oci = imp.ociNumber || imp.oci_number || imp.oci;
-    const po  = imp.poNumber  || imp.po_number  || imp.po;
-    for (const r of allImportItems || []) {
-      if (sid && (r.shipmentId === sid || r.shipment_id === sid)) { list.push(r); continue; }
-      if (!sid && oci && (r.ociNumber === oci || r.oci_number === oci)) { list.push(r); continue; }
-      if (!sid && !oci && po && (r.poNumber === po || r.po_number === po)) { list.push(r); continue; }
-    }
-    return list;
-  }, [allImportItems, imp]);
-
-  /* 3) Enriquecer con product master (product_name y package_units) */
-  const { enrich } = usePresentationCatalog();
-  const items = useMemo(() => enrich(itemsRaw), [itemsRaw, enrich]); // añade productName/packageUnits según tu catálogo
+  // Import items (por shipment_id)
+  const { rows: allItems = [], loading } = useSheet("import_items", mapImportItems);
 
   const shipmentId = imp.shipmentId || imp.shipment_id || "";
-  const ociNumber  = imp.ociNumber  || imp.oci_number  || "—";
-  const poNumber   = imp.poNumber   || imp.po_number   || "—";
+  const eta = imp.eta || imp.arrivalDate;
+  const transport = imp.transportType || imp.transport_type;
+  const importStatus = imp.importStatus || imp.status;
+  const qcStatus = imp.qcStatus || imp.qc_status;
+  const customsStatus = imp.customsStatus || imp.customs_status;
+  const location = imp.location || imp.destination;
 
-  const qcTone = (s) =>
-    (s || "").toLowerCase() === "approved" ? "green" :
-    (s || "").toLowerCase().includes("progress") || (s || "").toLowerCase().includes("pending") ? "yellow" :
-    "muted";
+  // Filtra ítems de esta importación
+  const rawItems = useMemo(() => {
+    return (allItems || []).filter((r) => {
+      const sid = r.shipmentId || r.shipment_id;
+      return String(sid) === String(shipmentId);
+    });
+  }, [allItems, shipmentId]);
+
+  // Enriquecer con catálogo (nombre de producto y units/pack)
+  const { enrich } = usePresentationCatalog();
+  const items = useMemo(() => enrich(rawItems), [rawItems, enrich]);
 
   const handleSavedComm = async () => {
     if (typeof refetchComms === "function") await refetchComms();
@@ -93,29 +71,28 @@ export default function ImportDetailsDrawer(props) {
         <div className="flex items-center justify-between p-4 border-b border-border">
           <div>
             <div className="text-xl font-semibold text-foreground">Import Details</div>
-            <div className="text-sm text-muted-foreground">Shipment ID: {shipmentId || "—"}</div>
+            <div className="text-sm text-muted-foreground">
+              Shipment ID: {shipmentId || "—"}
+            </div>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
             <Icon name="X" size={18} />
           </Button>
         </div>
 
-        {/* Top info cards */}
+        {/* Top info (común a todos los items) */}
         <div className="grid gap-3 p-4 border-b border-border bg-muted/20 md:grid-cols-3">
-          <InfoCard label="OCI Number" value={ociNumber} />
-          <InfoCard label="PO Number" value={poNumber} />
-          <InfoCard label="ETA" value={fmtDate(imp.eta || imp.arrivalDate)} />
-          <InfoCard label="Transport" value={<Pill tone="blue">{imp.transportType || "—"}</Pill>} />
-          <InfoCard label="Import Status" value={<Pill tone="blue">{imp.importStatus || imp.status || "—"}</Pill>} />
-          <InfoCard label="QC Status" value={<Pill tone={qcTone(imp.qcStatus)}>{imp.qcStatus || "—"}</Pill>} />
-          <InfoCard label="Customs" value={<Pill tone="yellow">{imp.customsStatus || "—"}</Pill>} />
-          <InfoCard label="Location" value={imp.location || imp.destination || "—"} />
+          <InfoCard label="ETA" value={fmtDate(eta)} />
+          <InfoCard label="Transport" value={<Pill tone="blue">{transport}</Pill>} />
+          <InfoCard label="Import Status" value={<Pill tone="blue">{importStatus}</Pill>} />
+          <InfoCard label="QC Status" value={<Pill tone="green">{qcStatus}</Pill>} />
+          <InfoCard label="Customs" value={<Pill tone="yellow">{customsStatus}</Pill>} />
+          <InfoCard label="Location" value={location || "—"} />
         </div>
 
         {/* Tabs */}
         <div className="flex items-center gap-1 border-b border-border px-4">
           {[
-            ["overview", "Overview", "Info"],
             ["items", "Items", "Package"],
             ["communications", "Communications", "MessageCircle"],
           ].map(([key, label, icon]) => (
@@ -134,36 +111,48 @@ export default function ImportDetailsDrawer(props) {
 
         {/* Content */}
         <div className="p-4 overflow-y-auto h-[calc(100%-210px)]">
-          {tab === "overview" && (
-            <div className="rounded-lg border p-4 bg-background">
-              <div className="text-sm text-muted-foreground">
-                Resumen del embarque y estados. Usa las otras pestañas para ver el detalle de ítems y el historial de comunicaciones.
-              </div>
-            </div>
-          )}
-
           {tab === "items" && (
             <div className="space-y-3">
-              {(items || []).map((it, idx) => (
-                <div key={idx} className="bg-muted rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-medium text-foreground">
-                        {it.productName || it.presentationCode || "Product"}
-                        {it.packageUnits ? (
-                          <span className="text-muted-foreground"> • {it.packageUnits} units/pack</span>
-                        ) : null}
+              {(items || []).map((it, idx) => {
+                const oci = it.ociNumber || it.oci_number;
+                const po = it.poNumber || it.po_number;
+                const qc = it.qcStatus || it.qc_status;
+                const lot = it.lotNumber || it.lot_number;
+                const qty = it.qty || it.quantity;
+                const unit = it.unitPriceUsd || it.unit_price_usd || it.unit_price;
+                const expiry = it.expiryDate || it.expiry_date;
+                return (
+                  <div key={idx} className="rounded-lg border bg-muted p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-medium text-foreground">
+                          {it.productName || it.presentationCode || "Product"}
+                          {it.packageUnits ? (
+                            <span className="text-muted-foreground"> • {it.packageUnits} units/pack</span>
+                          ) : null}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Code: {it.presentationCode || "—"}
+                          {lot ? <> • Lot: {lot}</> : null}
+                          {expiry ? <> • Exp: {fmtDate(expiry)}</> : null}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        Code: {it.presentationCode || "—"} {it.lotNumber ? `• Lot: ${it.lotNumber}` : ""}
+                      <div className="text-right text-sm text-muted-foreground">
+                        Qty: <span className="font-medium">{qty || 0}</span>
                       </div>
                     </div>
-                    <div className="text-right text-sm text-muted-foreground">
-                      Qty: <span className="font-medium">{it.qty || 0}</span>
+
+                    <div className="mt-2 grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
+                      <Field label="OCI Number" value={oci} />
+                      <Field label="PO Number" value={po} />
+                      <Field label="QC Status" value={<Pill tone="green">{qc}</Pill>} />
+                      <Field label="Unit Price (USD)" value={unit ?? "—"} />
+                      <Field label="Lot Number" value={lot} />
+                      <Field label="Expiry" value={fmtDate(expiry)} />
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {loading && <div className="text-sm text-muted-foreground">Loading items…</div>}
               {!loading && (items || []).length === 0 && (
                 <div className="text-sm text-muted-foreground">No items found.</div>
@@ -179,7 +168,6 @@ export default function ImportDetailsDrawer(props) {
                   Add
                 </Button>
               </div>
-              {/* Lista de comunicaciones para ESTE import */}
               <CommunicationList linkedType="import" linkedId={shipmentId} />
             </div>
           )}
@@ -205,6 +193,15 @@ function InfoCard({ label, value }) {
     <div className="rounded-lg border p-3 bg-background">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="text-sm font-medium">{value ?? "—"}</div>
+    </div>
+  );
+}
+
+function Field({ label, value }) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-sm">{value ?? "—"}</div>
     </div>
   );
 }
