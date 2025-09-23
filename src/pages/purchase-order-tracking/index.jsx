@@ -1,82 +1,7 @@
 // src/pages/purchase-order-tracking/index.jsx
 import { useEffect, useMemo, useState } from 'react';
-import { API_BASE, fetchJSON, postJSON, formatDate, badgeClass } from '../../lib/utils';
+import { API_BASE, fetchJSON, formatDate, badgeClass } from '../../lib/utils';
 import OrderDetailsModal from './components/OrderDetailsModal';
-
-function EditOrderModal({ open, onClose, order, onSaved }) {
-  const [manufacturing_status, setManufacturing] = useState(order?.manufacturing_status || '');
-  const [transport_type, setTransport] = useState(order?.transport_type || '');
-
-  useEffect(() => {
-    if (open) {
-      setManufacturing(order?.manufacturing_status || '');
-      setTransport(order?.transport_type || '');
-    }
-  }, [open, order]);
-
-  if (!open) return null;
-
-  async function handleSave() {
-    // Actualiza en la hoja "purchase_orders" usando la clave po_number
-    // (tal como permite tu Apps Script con action=update y KEYS.purchase_orders = ['po_number'])
-    const body = {
-      route: 'write',
-      action: 'update',
-      name: 'purchase_orders',
-      row: {
-        po_number: order.po_number,
-        manufacturing_status,
-        transport_type,
-      },
-    };
-    const res = await postJSON(API_BASE, body);
-    if (!res?.ok) throw new Error(res?.error || 'Update failed');
-    onSaved({ manufacturing_status, transport_type });
-    onClose();
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
-        <h2 className="mb-4 text-xl font-semibold">Edit Order – {order?.po_number}</h2>
-
-        <div className="mb-3">
-          <label className="mb-1 block text-sm font-medium">Manufacturing Status</label>
-          <select
-            value={manufacturing_status}
-            onChange={e => setManufacturing(e.target.value)}
-            className="w-full rounded-lg border p-2"
-          >
-            <option value="">(select)</option>
-            <option value="planned">planned</option>
-            <option value="in_process">in_process</option>
-            <option value="ready">ready</option>
-            <option value="shipped">shipped</option>
-          </select>
-        </div>
-
-        <div className="mb-6">
-          <label className="mb-1 block text-sm font-medium">Transport Type</label>
-          <select
-            value={transport_type}
-            onChange={e => setTransport(e.target.value)}
-            className="w-full rounded-lg border p-2"
-          >
-            <option value="">(select)</option>
-            <option value="air">air</option>
-            <option value="sea">sea</option>
-            <option value="courier">courier</option>
-          </select>
-        </div>
-
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
-          <button onClick={handleSave} className="rounded-lg bg-blue-600 px-4 py-2 text-white">Save</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function PurchaseOrderTrackingPage() {
   const [orders, setOrders] = useState([]);
@@ -86,11 +11,7 @@ export default function PurchaseOrderTrackingPage() {
   const [selected, setSelected] = useState(null);
   const [showDetails, setShowDetails] = useState(false);
 
-  const [editOrder, setEditOrder] = useState(null);
-  const [showEdit, setShowEdit] = useState(false);
-
   async function load() {
-    // Carga hoja purchase_orders
     const url = `${API_BASE}?route=table&name=purchase_orders`;
     const res = await fetchJSON(url);
     if (!res?.ok) throw new Error(res?.error || 'Error loading purchase_orders');
@@ -101,20 +22,29 @@ export default function PurchaseOrderTrackingPage() {
     load().catch(console.error);
   }, []);
 
+  // 👉 Agrupar por po_number (una fila por PO). Tomamos la primera ocurrencia.
+  const grouped = useMemo(() => {
+    const map = new Map();
+    for (const o of orders || []) {
+      const key = String(o.po_number || '').trim();
+      if (!key) continue;
+      if (!map.has(key)) map.set(key, o);
+    }
+    return Array.from(map.values());
+  }, [orders]);
+
   const filtered = useMemo(() => {
-    return (orders || []).filter(o => {
+    return (grouped || []).filter(o => {
       const matchesText =
         !query ||
         String(o.po_number || '').toLowerCase().includes(query.toLowerCase()) ||
         String(o.tender_ref || '').toLowerCase().includes(query.toLowerCase());
-
       const matchesM =
         filterManufacturing === 'all' ||
         String(o.manufacturing_status || '').toLowerCase() === filterManufacturing;
-
       return matchesText && matchesM;
     });
-  }, [orders, query, filterManufacturing]);
+  }, [grouped, query, filterManufacturing]);
 
   return (
     <div className="p-6">
@@ -130,12 +60,15 @@ export default function PurchaseOrderTrackingPage() {
           className="w-full rounded-lg border p-2"
         />
 
+        {/* 👉 Select limpio: 'All' por defecto, sin texto sobrepuesto */}
         <select
           className="rounded-lg border p-2"
           value={filterManufacturing}
           onChange={e => setFilterManufacturing(e.target.value)}
+          aria-label="Manufacturing status filter"
+          title="Manufacturing status"
         >
-          <option value="all">Manufacturing (all)</option>
+          <option value="all">All</option>
           <option value="planned">planned</option>
           <option value="in_process">in_process</option>
           <option value="ready">ready</option>
@@ -169,16 +102,10 @@ export default function PurchaseOrderTrackingPage() {
                 <td className="px-4 py-3">{formatDate(o.created_date)}</td>
                 <td className="px-4 py-3 text-right">
                   <button
-                    className="mr-2 rounded-lg border px-3 py-1.5"
+                    className="rounded-lg border px-3 py-1.5"
                     onClick={() => { setSelected(o); setShowDetails(true); }}
                   >
                     View
-                  </button>
-                  <button
-                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-white"
-                    onClick={() => { setEditOrder(o); setShowEdit(true); }}
-                  >
-                    Edit
                   </button>
                 </td>
               </tr>
@@ -192,23 +119,15 @@ export default function PurchaseOrderTrackingPage() {
         </table>
       </div>
 
-      {/* Modals */}
+      {/* Modal con detalles y edición interna */}
       {showDetails && selected && (
         <OrderDetailsModal
           open={showDetails}
           onClose={() => setShowDetails(false)}
           order={selected}
-        />
-      )}
-
-      {showEdit && editOrder && (
-        <EditOrderModal
-          open={showEdit}
-          onClose={() => setShowEdit(false)}
-          order={editOrder}
-          onSaved={(patch) => {
-            // actualiza el estado local después de guardar
-            setOrders(prev => prev.map(p => p.po_number === editOrder.po_number ? { ...p, ...patch } : p));
+          onOrderUpdated={(patch) => {
+            // Actualizar en pantalla el estado del PO si se edita dentro del modal
+            setOrders(prev => prev.map(p => p.po_number === selected.po_number ? { ...p, ...patch } : p));
           }}
         />
       )}
