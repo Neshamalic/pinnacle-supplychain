@@ -188,7 +188,7 @@ function NewCommunicationModal({ open, onClose, poNumber, onCreated }) {
             <label className="mb-1 block text-sm font-medium">Participants</label>
             <input
               className="w-full rounded-lg border p-2"
-              placeholder="juan@…, boris@…"
+              placeholder="name1@…, name2@…"
               value={participants}
               onChange={e => setParticipants(e.target.value)}
             />
