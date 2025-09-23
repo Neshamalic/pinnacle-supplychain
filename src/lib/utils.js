@@ -1,7 +1,7 @@
 // src/lib/utils.js
 
 // ⛳️ Pega aquí tu URL de Apps Script desplegada como "Web App" (termina en /exec)
-export const API_BASE = 'https://script.google.com/macros/s/PEGAR_AQUI_TU_URL/exec';
+export const API_BASE = 'https://script.google.com/macros/s/AKfycbwYoCEaDNboehUNuDGnbxegzONKRHL0uqS9_0BEP56nOKgiGvo6uuN_z0AaYht2q4Ua/exec';
 
 // Utilidad para pedir JSON (GET) y manejar errores simples
 export async function fetchJSON(url) {
