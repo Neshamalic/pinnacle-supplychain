@@ -10,7 +10,7 @@ import {
   badgeClass,
 } from '../../../lib/utils';
 
-// ===== util: escoger el último registro de 'imports' por PO =====
+/* ========= util: último registro de 'imports' por PO ========= */
 function pickLatestImport(rows) {
   if (!rows || rows.length === 0) return null;
   const dateFields = [
@@ -32,40 +32,180 @@ function pickLatestImport(rows) {
   return scored[0].row;
 }
 
-// ===== modal: crear comunicación =====
+/* ========= modal: crear comunicación (según tu esquema) ========= */
 function NewCommunicationModal({ open, onClose, poNumber, onCreated }) {
-  const [note, setNote] = useState('');
+  const [type, setType] = useState('Meeting'); // Meeting, Mail, Call, Whatsapp, Other
+  const [subject, setSubject] = useState('');
+  const [participants, setParticipants] = useState('');
+  const [content, setContent] = useState('');
+
+  const [linkedType, setLinkedType] = useState('PO'); // Product | PO | Import | Tender
+  const [linkedId, setLinkedId] = useState('');
+  const [linkedOptions, setLinkedOptions] = useState([]);
+  const [loadingLinked, setLoadingLinked] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    // cargar opciones según linkedType
+    async function loadLinked() {
+      setLoadingLinked(true);
+      try {
+        let res, options = [];
+        if (linkedType === 'Product') {
+          res = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`);
+          if (res?.ok) {
+            const names = (res.rows || [])
+              .map(r => r.product_name)
+              .filter(Boolean);
+            // quitar duplicados y ordenar
+            options = Array.from(new Set(names)).sort((a,b)=>String(a).localeCompare(String(b)));
+          }
+        } else if (linkedType === 'PO') {
+          res = await fetchJSON(`${API_BASE}?route=table&name=purchase_order_items`);
+          if (res?.ok) {
+            const ids = (res.rows || [])
+              .map(r => r.po_number)
+              .filter(Boolean);
+            options = Array.from(new Set(ids)).sort();
+          }
+        } else if (linkedType === 'Tender') {
+          res = await fetchJSON(`${API_BASE}?route=table&name=tender_items`);
+          if (res?.ok) {
+            const ids = (res.rows || [])
+              .map(r => r.tender_id)
+              .filter(Boolean);
+            options = Array.from(new Set(ids)).sort();
+          }
+        } else if (linkedType === 'Import') {
+          res = await fetchJSON(`${API_BASE}?route=table&name=imports`);
+          if (res?.ok) {
+            const ids = (res.rows || [])
+              .map(r => r.shipment_id)
+              .filter(Boolean);
+            options = Array.from(new Set(ids)).sort();
+          }
+        }
+        setLinkedOptions(options);
+        setLinkedId(options[0] || '');
+      } catch (e) {
+        console.error(e);
+        setLinkedOptions([]);
+        setLinkedId('');
+      } finally {
+        setLoadingLinked(false);
+      }
+    }
+    loadLinked();
+  }, [open, linkedType]);
+
   if (!open) return null;
 
   async function handleSave() {
-    const body = {
+    const row = {
+      created_date: new Date().toISOString(),    // ISO automático
+      type: (type || '').trim(),                 // Meeting | Mail | Call | Whatsapp | Other
+      subject: (subject || '').trim(),
+      participants: (participants || '').trim(),
+      content: (content || '').trim(),
+      linked_type: (linkedType || '').trim(),    // Product | PO | Import | Tender
+      linked_id: (linkedId || '').trim(),        // según selección dependiente
+      unread: true,
+      preview: (content || '').slice(0, 160),
+    };
+
+    const res = await postJSON(API_BASE, {
       route: 'write',
       action: 'create',
       name: 'communications',
-      row: {
-        po_number: poNumber,
-        created_at: new Date().toISOString(),
-        note: note || '',
-      },
-    };
-    const res = await postJSON(API_BASE, body);
+      row,
+    });
     if (!res?.ok) throw new Error(res?.error || 'Create failed');
-    setNote('');
-    onCreated?.();
+
+    onCreated?.(row);
+    // limpiar y cerrar
+    setSubject(''); setParticipants(''); setContent('');
     onClose();
   }
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl ring-1 ring-slate-200">
-        <h3 className="mb-4 text-lg font-semibold">New Communication – {poNumber}</h3>
-        <textarea
-          rows={6}
-          value={note}
-          onChange={e => setNote(e.target.value)}
-          placeholder="Describe acuerdos, compromisos o hitos…"
-          className="w-full rounded-xl border p-3"
-        />
+      <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl ring-1 ring-slate-200">
+        <h3 className="mb-4 text-lg font-semibold">New Communication</h3>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium">Type</label>
+            <select className="w-full rounded-lg border p-2" value={type} onChange={e => setType(e.target.value)}>
+              <option>Meeting</option>
+              <option>Mail</option>
+              <option>Call</option>
+              <option>Whatsapp</option>
+              <option>Other</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-medium">Linked Type</label>
+            <select
+              className="w-full rounded-lg border p-2"
+              value={linkedType}
+              onChange={e => setLinkedType(e.target.value)}
+            >
+              <option>Product</option>
+              <option>PO</option>
+              <option>Import</option>
+              <option>Tender</option>
+            </select>
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-sm font-medium">Linked ID</label>
+            <select
+              className="w-full rounded-lg border p-2"
+              value={linkedId}
+              onChange={e => setLinkedId(e.target.value)}
+              disabled={loadingLinked}
+            >
+              {linkedOptions.length === 0 && <option value="">(no options)</option>}
+              {linkedOptions.map(opt => (
+                <option key={String(opt)} value={String(opt)}>{String(opt)}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              {linkedType === 'Product' && 'Se muestran nombres de producto (product_name).'}
+              {linkedType === 'PO' && 'Se muestran números de PO (po_number).'}
+              {linkedType === 'Import' && 'Se muestran shipment_id.'}
+              {linkedType === 'Tender' && 'Se muestran tender_id.'}
+            </p>
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-sm font-medium">Subject</label>
+            <input className="w-full rounded-lg border p-2" value={subject} onChange={e => setSubject(e.target.value)} />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-sm font-medium">Participants</label>
+            <input
+              className="w-full rounded-lg border p-2"
+              placeholder="juan@…, boris@…"
+              value={participants}
+              onChange={e => setParticipants(e.target.value)}
+            />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-sm font-medium">Content</label>
+            <textarea
+              rows={6}
+              className="w-full rounded-lg border p-3"
+              value={content}
+              onChange={e => setContent(e.target.value)}
+              placeholder="Describe acuerdos, compromisos o hitos…"
+            />
+          </div>
+        </div>
+
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
           <button onClick={handleSave} className="rounded-lg bg-blue-600 px-4 py-2 text-white">Save</button>
@@ -75,7 +215,7 @@ function NewCommunicationModal({ open, onClose, poNumber, onCreated }) {
   );
 }
 
-// ===== modal: editar ítem (qty, unit cost, import status & transport) =====
+/* ========= modal: editar ítem (qty, unit cost, import status & transport) ========= */
 function EditItemModal({ open, onClose, item, onSaved }) {
   const [qty, setQty] = useState(item?.requested ?? 0);
   const [unitCost, setUnitCost] = useState(item?.unit_cost ?? 0);
@@ -178,12 +318,13 @@ function EditItemModal({ open, onClose, item, onSaved }) {
   );
 }
 
-// ===== modal principal =====
+/* ======================== modal principal ======================== */
 export default function OrderDetailsModal({ open, onClose, order }) {
   const [poItems, setPoItems] = useState([]);             // purchase_order_items
-  const [impItems, setImpItems] = useState([]);           // import_items (para calcular imported por producto)
+  const [impItems, setImpItems] = useState([]);           // import_items (qty importado por producto)
   const [presentations, setPresentations] = useState([]); // product_presentation_master
-  const [importsByPO, setImportsByPO] = useState([]);     // imports (para estado/transport por PO)
+  const [importsByPO, setImportsByPO] = useState([]);     // imports (para status/transport por PO)
+
   const [editingItem, setEditingItem] = useState(null);
   const [showComm, setShowComm] = useState(false);
 
@@ -193,21 +334,21 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     if (!open || !po?.po_number) return;
 
     async function loadAll() {
-      // a) Ítems del PO
+      // Ítems del PO
       const resPOI = await fetchJSON(`${API_BASE}?route=table&name=purchase_order_items`);
       if (!resPOI?.ok) throw new Error(resPOI?.error || 'Error loading purchase_order_items');
       const poi = (resPOI.rows || []).filter(r => String(r.po_number) === String(po.po_number));
 
-      // b) Importaciones asociadas al PO (import_items)
+      // Import_items (para imported por presentación)
       const resIMP = await fetchJSON(`${API_BASE}?route=table&name=import_items`);
       if (!resIMP?.ok) throw new Error(resIMP?.error || 'Error loading import_items');
       const imps = (resIMP.rows || []).filter(r => String(r.po_number) === String(po.po_number));
 
-      // c) Maestra de presentaciones
+      // Maestra de presentaciones
       const resPPM = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`);
       if (!resPPM?.ok) throw new Error(resPPM?.error || 'Error loading product_presentation_master');
 
-      // d) Tabla imports (status y transport del PO)
+      // Tabla imports (status/transport por PO)
       const resImports = await fetchJSON(`${API_BASE}?route=table&name=imports`);
       if (!resImports?.ok) throw new Error(resImports?.error || 'Error loading imports');
       const importsFiltered = (resImports.rows || []).filter(
@@ -263,7 +404,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
         unit_cost: unitCost,
         import_status: importStatusForPO,
         transport: transportForPO,
-        oci_number_for_po: ociNumberForPO, // necesario para actualizar 'imports'
+        oci_number_for_po: ociNumberForPO, // para actualizar 'imports' en edición
       };
     });
   }, [
@@ -376,16 +517,14 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           onClose={() => setEditingItem(null)}
           item={editingItem}
           onSaved={(patch) => {
-            // reflejar cambios locales
-            // (qty/unit cost en purchase_order_items + import_status/transport en imports)
-            // 1) update poItems cache
+            // actualizar caches locales
             setPoItems(prev => prev.map(r =>
               String(r.po_number) === String(editingItem.po_number) &&
               String(r.presentation_code) === String(editingItem.presentation_code)
                 ? { ...r, qty: patch.requested, unit_price_usd: patch.unit_cost }
                 : r
             ));
-            // 2) update imports cache (solo visual; el POST ya lo hizo)
+            // actualizar estado visual de imports
             setImportsByPO(prev => {
               if (!Array.isArray(prev)) return prev;
               return prev.map(r =>
@@ -404,7 +543,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           open={showComm}
           onClose={() => setShowComm(false)}
           poNumber={po.po_number}
-          onCreated={() => { /* opcional: podríamos listar comunicaciones más adelante */ }}
+          onCreated={() => { /* más adelante podemos listar comunicaciones aquí */ }}
         />
       )}
     </div>
