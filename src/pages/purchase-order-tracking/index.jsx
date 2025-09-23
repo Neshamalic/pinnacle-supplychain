@@ -5,12 +5,14 @@ import { useSheet } from "@/lib/sheetsApi";
 import { mapPurchaseOrders } from "@/lib/adapters";
 import { cn } from "@/lib/utils";
 import {
+  // Tablas y celdas
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
+  // Controles de interfaz
   Button,
   Input,
   Select,
@@ -18,16 +20,19 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  // Tarjetas para KPIs
   Card,
   CardHeader,
   CardTitle,
   CardContent,
+  Dialog,
 } from "@/components/ui";
+import OrderDetailsModal from "./components/OrderDetailsModal";
 
 /* Función para normalizar texto (minúsculas, quitar espacios) */
 const norm = (v) => (v || "").toString().toLowerCase().trim();
 
-/* Formateador de fecha: “dd-mm-aaaa” en formato chileno */
+/* Formateador de fecha: “dd‑mm‑aaaa” en formato chileno */
 function fmtDate(d) {
   if (!d) return "";
   const date = new Date(d);
@@ -43,6 +48,7 @@ function mfBadge(status) {
   const s = (status || "").toLowerCase();
   const colors = {
     pending: "bg-orange-100 text-orange-700",
+    "in process": "bg-yellow-100 text-yellow-700",
     ready: "bg-blue-100 text-blue-700",
     shipped: "bg-purple-100 text-purple-700",
     cancelled: "bg-red-100 text-red-700",
@@ -78,12 +84,13 @@ export default function PurchaseOrderTracking() {
   const [selected, setSelected] = React.useState(null);
   const [showFilters, setShowFilters] = React.useState(false);
 
-  const { rows: purchaseOrders = [], loading } = useSheet(
+  // Leer purchase_orders
+  const { rows: purchaseOrders = [] } = useSheet(
     "purchase_orders",
     mapPurchaseOrders
   );
 
-  /* Agrupamos las órdenes por poNumber y guardamos la fecha de creación */
+  /* Agrupar por poNumber y acumular campos clave */
   const groups = React.useMemo(() => {
     const map = new Map();
     for (const r of purchaseOrders) {
@@ -105,10 +112,10 @@ export default function PurchaseOrderTracking() {
       if (!g.manufacturingStatus && r.manufacturingStatus)
         g.manufacturingStatus = r.manufacturingStatus;
       if (!g.transportType && r.transportType) g.transportType = r.transportType;
+      // Mantener la fecha de creación más antigua (si hubiera varias)
       if (
         r.createdDate &&
-        (!g.createdDate ||
-          new Date(r.createdDate) < new Date(g.createdDate))
+        (!g.createdDate || new Date(r.createdDate) < new Date(g.createdDate))
       ) {
         g.createdDate = r.createdDate;
       }
@@ -117,13 +124,11 @@ export default function PurchaseOrderTracking() {
     return [...map.values()];
   }, [purchaseOrders]);
 
-  /* Filtros por búsqueda y estado de fabricación */
+  /* Filtrar por estado de fabricación y texto de búsqueda */
   const filtered = React.useMemo(() => {
     return groups
       .filter((g) =>
-        manufacturingFilter
-          ? g.manufacturingStatus === manufacturingFilter
-          : true
+        manufacturingFilter ? g.manufacturingStatus === manufacturingFilter : true
       )
       .filter((g) => {
         const q = norm(search);
@@ -135,19 +140,20 @@ export default function PurchaseOrderTracking() {
       });
   }, [groups, manufacturingFilter, search]);
 
-  /* Métricas rápidas para las tarjetas (pueden ajustarse según necesidades) */
+  /* KPIs: total, en proceso, listos y enviados */
   const kpis = React.useMemo(() => {
     const total = groups.length;
     const inProcess = groups.filter(
       (g) => g.manufacturingStatus === "in process"
     ).length;
     const ready = groups.filter((g) => g.manufacturingStatus === "ready").length;
-    const shipped = groups.filter((g) => g.manufacturingStatus === "shipped")
-      .length;
+    const shipped = groups.filter(
+      (g) => g.manufacturingStatus === "shipped"
+    ).length;
     return { total, inProcess, ready, shipped };
   }, [groups]);
 
-  /* Abre el modal de detalles */
+  /* Abrir modal de detalles */
   const openDetails = (g) => {
     setSelected({
       poNumber: g.poNumber,
@@ -155,26 +161,21 @@ export default function PurchaseOrderTracking() {
       manufacturingStatus: g.manufacturingStatus,
       transportType: g.transportType,
       createdDate: g.createdDate,
-      ...g._rows[0],
+      ...g._rows[0], // El primer registro para unitPrice, etc.
     });
   };
 
   return (
     <>
+      {/* Encabezado */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Purchase Order Tracking</h2>
-        <Button
-          variant="ghost"
-          iconName="RefreshCcw"
-          onClick={() => {
-            // Podrías forzar la recarga de datos aquí si fuera necesario
-          }}
-        >
+        <Button variant="ghost" onClick={() => {}}>
           Refresh
         </Button>
       </div>
 
-      {/* Tarjetas de KPIs */}
+      {/* Tarjetas de métricas */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <Card>
           <CardHeader>
@@ -210,7 +211,7 @@ export default function PurchaseOrderTracking() {
         </Card>
       </div>
 
-      {/* Búsqueda y filtros */}
+      {/* Barra de búsqueda y filtros */}
       <div className="flex items-center gap-4 mb-4 flex-wrap">
         <Input
           type="text"
@@ -278,16 +279,13 @@ export default function PurchaseOrderTracking() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  iconOnly
                   onClick={() => openDetails(g)}
                 >
                   <Eye className="w-4 h-4" />
                 </Button>
-                {/* El botón Edit abre el mismo modal de detalles; puedes quitarlo si no vas a editar */}
                 <Button
                   variant="ghost"
                   size="sm"
-                  iconOnly
                   onClick={() => openDetails(g)}
                 >
                   <Edit className="w-4 h-4" />
@@ -298,7 +296,7 @@ export default function PurchaseOrderTracking() {
         </TableBody>
       </Table>
 
-      {/* Modal de Detalles */}
+      {/* Modal de detalles */}
       {selected && (
         <OrderDetailsModal
           open={!!selected}
@@ -309,6 +307,3 @@ export default function PurchaseOrderTracking() {
     </>
   );
 }
-
-/* Exportamos los badges por si en algún momento quieres reutilizarlos en otros componentes */
-export { mfBadge, transportBadge };
