@@ -46,9 +46,6 @@ export const mapTenders = (row = {}) => {
 };
 
 /** ================ TENDER ITEMS ===================== */
-/* Columnas típicas: tender_number|tender_id, presentation_code,
-   awarded_qty, unit_price, currency, (opt) stock_coverage_days,
-   (opt) contract_start, contract_end  */
 export const mapTenderItems = (row = {}) => {
   const tenderId = str(pick(row, ["tender_number", "tender_id", "tender"]));
   const qty = toNumber(pick(row, ["awarded_qty", "awarded_quantity", "qty", "quantity"]));
@@ -64,7 +61,6 @@ export const mapTenderItems = (row = {}) => {
   ]);
   const stockCoverageDays = sc === undefined ? undefined : toNumber(sc);
 
-  // Período de contrato (para filtros)
   const contractStart = pick(row, ["contract_start", "contractStart", "start_date"]);
   const contractEnd = pick(row, ["contract_end", "contractEnd", "end_date"]);
 
@@ -134,12 +130,10 @@ export const mapPurchaseOrderItems = (row = {}) => {
 
 /** ===================== IMPORTS ====================== */
 export const mapImports = (row = {}) => {
-  // ID de shipment normalizado
   const shipmentId = str(pick(row, ["shipment_id", "shipment", "shipmentId", "id"]) || "");
   const oci = str(pick(row, ["oci_number", "oci"]) || "");
   const po = str(pick(row, ["po_number", "po"]) || "");
 
-  // Normalización de estado
   let importStatus = str(pick(row, ["import_status", "status", "customs_status"]) || "").toLowerCase();
   if (importStatus === "in customs" || importStatus === "customs") importStatus = "transit";
   if (importStatus === "cleared" || importStatus === "arrived") importStatus = "warehouse";
@@ -151,7 +145,7 @@ export const mapImports = (row = {}) => {
     poNumber: po,
     transportType: str(pick(row, ["transport_type", "transport", "mode"]) || "").toLowerCase(),
     eta: toDateISO(pick(row, ["eta", "arrival_date", "arrival"])),
-    importStatus, // 'transit' | 'warehouse' | etc.
+    importStatus,
     qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
     customsStatus: str(pick(row, ["customs_status", "customs", "in_customs"]) || "").toLowerCase(),
     location: str(pick(row, ["location", "warehouse", "site", "port"]) || ""),
@@ -163,7 +157,6 @@ export const mapImports = (row = {}) => {
 
 /** ================== IMPORT ITEMS ==================== */
 export const mapImportItems = (row = {}) => {
-  // ¡IMPORTANTE!: incluir shipmentId para poder filtrar correctamente en el Drawer
   const shipmentId = str(pick(row, ["shipment_id", "shipmentId", "shipment", "ShipmentId"]) || "");
 
   const normalized = {
@@ -182,7 +175,6 @@ export const mapImportItems = (row = {}) => {
     _raw: row,
   };
 
-  // Alias para compatibilidad con componentes existentes
   return {
     ...normalized,
     unit_price_usd: normalized.unitPrice,
@@ -193,34 +185,21 @@ export const mapImportItems = (row = {}) => {
 };
 
 /** ====================== DEMAND ====================== */
-// Modificado para incluir todas las columnas necesarias
 export const mapDemand = (row = {}) => {
   return {
-    // Identificador temporal (mes), por ejemplo “2025-01”
     monthOfSupply: str(pick(row, ["month_of_supply", "month"]) || ""),
-    // Código de presentación o SKU
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
-    // Unidades pronosticadas (forecast)
     forecastUnits: toNumber(pick(row, ["forecast_units", "forecast", "units"])),
-    // Unidades históricas
     historicalUnits: toNumber(pick(row, ["historical_units", "history_units", "hist_units"])),
-    // Stock actual
     currentStockUnits: toNumber(
       pick(row, ["current_stock_units", "currentStockUnits", "stock_units"])
     ),
-    // Demanda mensual (puede coincidir con forecast)
     monthlyDemandUnits: toNumber(
       pick(row, ["monthly_demand_units", "monthlyDemandUnits", "demand_units"])
     ),
-    // Tamaño del paquete (unidades por empaque)
     packageSize: toNumber(pick(row, ["package_size", "packageSize", "pkg_size"])),
-    // Orden sugerida para cubrir la demanda
-    suggestedOrder: toNumber(
-      pick(row, ["suggested_order", "suggestedOrder", "order"])
-    ),
-    // Estado de abastecimiento (critical, urgent, normal, optimal)
+    suggestedOrder: toNumber(pick(row, ["suggested_order", "suggestedOrder", "order"])),
     status: str(pick(row, ["status"])) || "",
-    // Días de suministro disponibles (si tu hoja lo incluye)
     daysSupply: toNumber(pick(row, ["days_supply", "daysSupply"]) || null),
     _raw: row,
   };
@@ -235,6 +214,13 @@ export const mapCommunications = (row = {}) => {
   // linked_type esperado: "orders" | "imports" | "tender"
   const linkedType = str(pick(row, ["linked_type", "entity_type", "link_type"]) || "").toLowerCase();
 
+  // Parseo robusto de booleanos (unread / deleted)
+  const parseBool = (v) => {
+    if (typeof v === "boolean") return v;
+    const s = String(v ?? "").trim().toLowerCase();
+    return s === "true" || s === "1" || s === "yes";
+  };
+
   return {
     id: str(pick(row, ["id", "comm_id"]) || ""),
     createdDate: toDateISO(pick(row, ["created_date", "date", "created"])),
@@ -245,10 +231,12 @@ export const mapCommunications = (row = {}) => {
     preview,
     linked_type: linkedType,
     linked_id: str(pick(row, ["linked_id", "entity_id", "link_id"]) || ""),
-    unread: String(pick(row, ["unread", "is_unread"])) === "true" ? true : !!pick(row, ["unread"]),
+    unread: parseBool(pick(row, ["unread", "is_unread"])),
+    deleted: parseBool(pick(row, ["deleted", "is_deleted", "archived"])),
     _raw: row,
   };
 };
 
 /** ================ Export utils ====================== */
 export const _utils = { str, toNumber, toDateISO, pick };
+
