@@ -2,40 +2,42 @@
 import React, { useMemo } from "react";
 import { useSheet } from "@/lib/sheetsApi";
 import { mapCommunications } from "@/lib/adapters";
+import CommunicationEntry from "./CommunicationEntry";
 import { formatDate } from "@/lib/utils";
-import CommunicationEntry from "./CommunicationEntry.jsx";
 
-function groupByDate(rows) {
-  const m = new Map();
-  for (const r of rows) {
-    const day = String(r.createdDate || "").slice(0, 10);
-    if (!m.has(day)) m.set(day, []);
-    m.get(day).push(r);
-  }
-  return Array.from(m.entries()).sort(([a],[b]) => b.localeCompare(a));
+function groupByDay(list) {
+  const map = new Map();
+  list.forEach(item => {
+    const k = (item.createdDate || "").slice(0, 10); // YYYY-MM-DD
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(item);
+  });
+  return Array.from(map.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([key, items]) => ({ day: key, items }));
 }
 
 export default function CommunicationTimeline() {
   const { rows = [], loading, refetch } = useSheet("communications", mapCommunications);
 
-  const grouped = useMemo(() => {
-    const list = (rows || [])
-      .filter(r => !r.deleted)
+  const groups = useMemo(() => {
+    const clean = (rows || [])
+      .filter(r => !r.deleted) // << filtra borrados
       .sort((a, b) => (b.createdDate || "").localeCompare(a.createdDate || ""));
-    return groupByDate(list);
+    return groupByDay(clean);
   }, [rows]);
 
-  if (loading) return <div className="text-sm text-muted-foreground">Cargando…</div>;
-  if (!grouped.length) return <div>No hay comunicaciones.</div>;
+  if (loading) return <div className="text-sm text-muted-foreground">Cargando comunicaciones…</div>;
+  if (!groups.length) return <div className="text-sm text-muted-foreground">No hay comunicaciones registradas.</div>;
 
   return (
     <div className="space-y-6">
-      {grouped.map(([day, list]) => (
+      {groups.map(({ day, items }) => (
         <div key={day}>
-          <div className="text-xs text-muted-foreground mb-2">{formatDate(day)}</div>
+          <div className="text-xs font-medium text-muted-foreground mb-2">{formatDate(day)}</div>
           <div className="space-y-2">
-            {list.map(c => (
-              <CommunicationEntry key={c.id || c.createdDate + c.subject} comm={c} onChange={refetch} />
+            {items.map((it) => (
+              <CommunicationEntry key={it.id || it.createdDate + it.subject} comm={it} onChange={refetch} />
             ))}
           </div>
         </div>
