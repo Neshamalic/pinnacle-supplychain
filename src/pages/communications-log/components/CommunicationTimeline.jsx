@@ -1,46 +1,46 @@
 // src/pages/communications-log/components/CommunicationTimeline.jsx
-import React, { useMemo } from "react";
+import React, { useEffect, useState } from "react";
 import { useSheet } from "@/lib/sheetsApi";
 import { mapCommunications } from "@/lib/adapters";
-import CommunicationEntry from "./CommunicationEntry";
-import { formatDate } from "@/lib/utils";
-
-function groupByDay(list) {
-  const map = new Map();
-  list.forEach(item => {
-    const k = (item.createdDate || "").slice(0, 10); // YYYY-MM-DD
-    if (!map.has(k)) map.set(k, []);
-    map.get(k).push(item);
-  });
-  return Array.from(map.entries())
-    .sort((a, b) => b[0].localeCompare(a[0]))
-    .map(([key, items]) => ({ day: key, items }));
-}
+import CommunicationEntry from "./CommunicationEntry.jsx";
 
 export default function CommunicationTimeline() {
-  const { rows = [], loading, refetch } = useSheet("communications", mapCommunications);
+  const { rows, loading, refetch } = useSheet("communications", mapCommunications);
+  const [items, setItems] = useState([]);
 
-  const groups = useMemo(() => {
-    const clean = (rows || [])
-      .filter(r => !r.deleted) // << filtra borrados
-      .sort((a, b) => (b.createdDate || "").localeCompare(a.createdDate || ""));
-    return groupByDay(clean);
+  useEffect(() => {
+    // Orden por fecha DESC
+    const list = [...(rows || [])].sort((a, b) => {
+      const ta = new Date(a.createdDate || 0).getTime();
+      const tb = new Date(b.createdDate || 0).getTime();
+      return tb - ta;
+    });
+    setItems(list);
   }, [rows]);
 
-  if (loading) return <div className="text-sm text-muted-foreground">Cargando comunicaciones…</div>;
-  if (!groups.length) return <div className="text-sm text-muted-foreground">No hay comunicaciones registradas.</div>;
+  const handleDeleted = (row) => {
+    setItems((arr) => arr.filter((x) => x !== row));
+  };
+
+  const handleRestored = (row) => {
+    setItems((arr) => (arr.includes(row) ? arr : [row, ...arr]));
+  };
+
+  const empty = !loading && items.length === 0;
 
   return (
-    <div className="space-y-6">
-      {groups.map(({ day, items }) => (
-        <div key={day}>
-          <div className="text-xs font-medium text-muted-foreground mb-2">{formatDate(day)}</div>
-          <div className="space-y-2">
-            {items.map((it) => (
-              <CommunicationEntry key={it.id || it.createdDate + it.subject} comm={it} onChange={refetch} />
-            ))}
-          </div>
-        </div>
+    <div className="space-y-3">
+      {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
+      {empty && <div className="text-sm text-muted-foreground">No communications found.</div>}
+
+      {items.map((comm) => (
+        <CommunicationEntry
+          key={`${comm.id || "noid"}_${comm.createdDate || ""}_${comm.subject || ""}`}
+          comm={comm}
+          onDeleted={handleDeleted}
+          onRestored={handleRestored}
+          onChange={refetch}
+        />
       ))}
     </div>
   );
