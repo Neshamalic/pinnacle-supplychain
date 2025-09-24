@@ -8,79 +8,57 @@ import { usePresentationCatalog } from "@/lib/catalog";
 import CommunicationList from "@/components/CommunicationList";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
 
-const cx = (...c) => c.filter(Boolean).join(" ");
-const fmtDate = (iso) => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? "—"
-    : new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
+const fmtDate = (v) => {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("es-CL", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+};
+const Pill = ({ children, tone = "slate" }) => {
+  const tones = {
+    blue: "bg-blue-100 text-blue-700",
+    amber: "bg-amber-100 text-amber-700",
+    green: "bg-green-100 text-green-700",
+    slate: "bg-slate-100 text-slate-700",
+    gray: "bg-gray-100 text-gray-700",
+  };
+  return <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${tones[tone] || tones.slate}`}>{children}</span>;
 };
 
-const tonePill = (t) => {
-  const v = String(t || "").toLowerCase();
-  if (v.includes("warehouse")) return "bg-emerald-100 text-emerald-700 ring-emerald-200";
-  if (v.includes("transit")) return "bg-amber-100 text-amber-800 ring-amber-200";
-  if (v === "air") return "bg-sky-100 text-sky-700 ring-sky-200";
-  if (v === "sea") return "bg-indigo-100 text-indigo-700 ring-indigo-200";
-  if (v.includes("approved")) return "bg-emerald-100 text-emerald-700 ring-emerald-200";
-  if (v.includes("pending") || v.includes("progress")) return "bg-amber-100 text-amber-800 ring-amber-200";
-  if (v.includes("rejected") || v.includes("fail")) return "bg-rose-100 text-rose-700 ring-rose-200";
-  return "bg-slate-100 text-slate-700 ring-slate-200";
-};
-
-const Pill = ({ children }) => (
-  <span className={cx("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1", tonePill(children))}>
-    {children || "—"}
-  </span>
-);
-
-function InfoCard({ label, value }) {
-  return (
-    <div className="rounded-lg border p-3 bg-background">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-sm font-medium">{value ?? "—"}</div>
-    </div>
-  );
-}
-function Field({ label, value }) {
-  return (
-    <div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-sm">{value ?? "—"}</div>
-    </div>
-  );
-}
-
-export default function ImportDetailsDrawer({ isOpen, onClose, importRow }) {
+export default function ImportDetailsDrawer({ open, onClose, importRow }) {
   const imp = importRow || {};
   const [tab, setTab] = useState("items");
   const [openNewComm, setOpenNewComm] = useState(false);
 
-  const shipmentId = String(imp?.shipmentId || "").trim();
+  // 1) Items desde la hoja import_items
+  const { rows: allItems = [], loading } = useSheet("import_items", mapImportItems);
+  // 2) Filtrar por OCI o PO del shipment seleccionado
+  const itemsFiltered = useMemo(() => {
+    const oci = (imp.ociNumber || "").trim();
+    const po  = (imp.poNumber  || "").trim();
+    return (allItems || []).filter(r =>
+      (oci && r.ociNumber === oci) || (po && r.poNumber === po)
+    );
+  }, [allItems, imp.ociNumber, imp.poNumber]);
 
-  // Leemos items desde varios posibles nombres de hoja
-  const { rows: itemsA = [], loading: la } = useSheet("import_items", mapImportItems);
-  const { rows: itemsB = [], loading: lb } = useSheet("imports_items", mapImportItems);
-  const { rows: itemsC = [], loading: lc } = useSheet("Import Items", mapImportItems);
-
-  const allRawItems = useMemo(() => [...itemsA, ...itemsB, ...itemsC], [itemsA, itemsB, itemsC]);
-  const loading = la || lb || lc;
-
+  // 3) Enriquecer con nombre de producto / unidades por pack
   const { enrich } = usePresentationCatalog();
-  const items = useMemo(() => {
-    const filtered = allRawItems.filter((r) => String(r.shipmentId || "").trim() === shipmentId);
-    return enrich(filtered);
-  }, [allRawItems, shipmentId, enrich]);
+  const items = useMemo(() => enrich(itemsFiltered), [itemsFiltered, enrich]);
 
-  // refrescar Communications tras guardar
-  const { refetch: refetchComms } = useSheet("communications", () => ({}));
+  // Para refrescar communications tras guardar
+  const { refetch: refetchComms } = useSheet("communications", mapCommunications);
   const handleSavedComm = async () => {
     if (typeof refetchComms === "function") await refetchComms();
     setOpenNewComm(false);
   };
 
-  if (!isOpen) return null;
+  if (!open) return null;
+
+  const oci = imp.ociNumber || "—";
+  const po  = imp.poNumber  || "—";
+  const eta = fmtDate(imp.eta);
+  const transport = (imp.transportType || "").toLowerCase();
+  const importStatus = (imp.importStatus || "").toLowerCase();
 
   return (
     <div className="fixed inset-0 z-[2100] bg-black/40 flex justify-end">
@@ -89,24 +67,28 @@ export default function ImportDetailsDrawer({ isOpen, onClose, importRow }) {
         <div className="flex items-center justify-between p-4 border-b border-border">
           <div>
             <div className="text-xl font-semibold text-foreground">Import Details</div>
-            <div className="text-sm text-muted-foreground">Shipment ID: {shipmentId || "—"}</div>
+            <div className="text-sm text-muted-foreground">
+              Shipment ID: {imp.shipmentId || "—"}
+            </div>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
             <Icon name="X" size={18} />
           </Button>
         </div>
 
-        {/* Info común */}
+        {/* Info cards top */}
         <div className="grid gap-3 p-4 border-b border-border bg-muted/20 md:grid-cols-3">
-          <InfoCard label="ETA" value={fmtDate(imp?.eta)} />
-          <InfoCard label="Transport" value={<Pill>{imp?.transportType}</Pill>} />
-          <InfoCard label="Import Status" value={<Pill>{imp?.importStatus}</Pill>} />
+          <InfoCard label="OCI Number" value={oci} />
+          <InfoCard label="PO Number" value={po} />
+          <InfoCard label="ETA" value={eta} />
+          <InfoCard label="Transport" value={<Pill tone={transport === "air" ? "blue" : transport === "sea" ? "slate" : "gray"}>{transport || "—"}</Pill>} />
+          <InfoCard label="Import Status" value={<Pill tone={importStatus === "transit" ? "amber" : importStatus === "warehouse" ? "slate" : "gray"}>{importStatus || "—"}</Pill>} />
         </div>
 
         {/* Tabs */}
         <div className="flex items-center gap-1 border-b border-border px-4">
           {[
-            ["items", "Items", "Package"],
+            ["items", "Items", "Cube"],
             ["communications", "Communications", "MessageCircle"],
           ].map(([key, label, icon]) => (
             <button
@@ -125,80 +107,80 @@ export default function ImportDetailsDrawer({ isOpen, onClose, importRow }) {
         {/* Content */}
         <div className="p-4 overflow-y-auto h-[calc(100%-210px)]">
           {tab === "items" && (
-            <div className="space-y-3">
-              {(items || []).map((it, idx) => {
-                const oci  = it.ociNumber;
-                const po   = it.poNumber;
-                const qc   = it.qcStatus;
-                const lot  = it.lotNumber;
-                const qty  = it.qty;
-                const unit = it.unitPrice;
-                const cur  = it.currency || "USD";
-                const exp  = it.expiryDate;
-
-                return (
-                  <div key={idx} className="rounded-lg border bg-muted p-4">
+            <>
+              {loading && <div className="text-sm text-muted-foreground">Loading items…</div>}
+              {!loading && items.length === 0 && (
+                <div className="text-sm text-muted-foreground">No items found for this shipment.</div>
+              )}
+              <div className="space-y-3">
+                {items.map((it, idx) => (
+                  <div key={idx} className="bg-muted rounded-lg p-4">
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-medium text-foreground">
-                          {it.productName || it.presentationCode || "Product"}
-                          {it.packageUnits ? (
-                            <span className="text-muted-foreground"> • {it.packageUnits} units/pack</span>
-                          ) : null}
+                          {it.productName || it.presentationCode}
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          Code: {it.presentationCode || "—"}
-                          {lot ? <> • Lot: {lot}</> : null}
-                          {exp ? <> • Exp: {fmtDate(exp)}</> : null}
-                        </div>
+                        <div className="text-xs text-muted-foreground">{it.presentationCode}</div>
                       </div>
                       <div className="text-right text-sm text-muted-foreground">
-                        Qty: <span className="font-medium">{qty || 0}</span>
+                        {it.currency} {it.unitPrice ?? 0}
                       </div>
                     </div>
 
                     <div className="mt-2 grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
-                      <Field label="OCI Number" value={oci} />
-                      <Field label="PO Number" value={po} />
-                      <Field label="QC Status" value={<Pill>{qc}</Pill>} />
-                      <Field label="Unit Price" value={`${cur} ${Number(unit || 0).toFixed(2)}`} />
-                      <Field label="Lot Number" value={lot} />
-                      <Field label="Expiry" value={fmtDate(exp)} />
+                      <Field label="OCI">{it.ociNumber || "—"}</Field>
+                      <Field label="PO">{it.poNumber || "—"}</Field>
+                      <Field label="QC Status"><Pill tone="green">{it.qcStatus || "—"}</Pill></Field>
+                      <Field label="Lot">{it.lotNumber || "—"}</Field>
+                      <Field label="Qty">{it.qty ?? 0}</Field>
+                      <Field label="Unit Price">{it.currency} {it.unitPrice ?? 0}</Field>
                     </div>
                   </div>
-                );
-              })}
-              {loading && <div className="text-sm text-muted-foreground">Loading items…</div>}
-              {!loading && (items || []).length === 0 && (
-                <div className="text-sm text-muted-foreground">No items found.</div>
-              )}
-            </div>
+                ))}
+              </div>
+            </>
           )}
 
           {tab === "communications" && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-medium">Communication History</div>
-                <Button size="sm" iconName="Plus" onClick={() => setOpenNewComm(true)}>
-                  Add
-                </Button>
+                <Button size="sm" iconName="Plus" onClick={() => setOpenNewComm(true)}>Add</Button>
               </div>
-              <CommunicationList linkedType="import" linkedId={shipmentId} />
+              <CommunicationList linkedType="import" linkedId={imp.shipmentId || ""} />
             </div>
           )}
         </div>
       </div>
 
-      {/* Modal New Communication (pre-relleno) */}
+      {/* Modal Nueva Comunicación (prefilled) */}
       {openNewComm && (
         <NewCommunicationModal
           open={openNewComm}
           onClose={() => setOpenNewComm(false)}
           onSaved={handleSavedComm}
-          defaultLinkedType="Imports"
-          defaultLinkedId={shipmentId}
+          defaultLinkedType="import"
+          defaultLinkedId={imp.shipmentId || ""}
         />
       )}
     </div>
   );
 }
+
+function InfoCard({ label, value }) {
+  return (
+    <div className="rounded-lg border p-3 bg-muted/30">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-sm font-medium">{value}</div>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="font-medium">{children}</div>
+    </div>
+  );
+}
+
