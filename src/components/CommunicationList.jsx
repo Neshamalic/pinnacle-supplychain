@@ -6,7 +6,7 @@ import { useSheet } from "@/lib/sheetsApi";
 import { mapCommunications } from "@/lib/adapters";
 import { API_BASE, postJSON, fetchJSON, formatDate } from "@/lib/utils";
 
-/* ---------------- helpers ---------------- */
+/* ------------- helpers ------------- */
 const normalizeLinkedType = (t) => {
   const v = String(t || "").toLowerCase().trim();
   if (["order", "po", "purchase_order", "orders"].includes(v)) return "orders";
@@ -14,6 +14,19 @@ const normalizeLinkedType = (t) => {
   if (["tender", "tenders"].includes(v)) return "tender";
   return v;
 };
+
+const applyFilter = (list, type, id) => {
+  const lt = normalizeLinkedType(type);
+  if (!lt && !id) return list;
+  let out = list;
+  if (lt) out = out.filter((c) => normalizeLinkedType(c.linked_type) === lt);
+  if (id) {
+    const lid = String(id).trim();
+    out = out.filter((c) => String(c.linked_id || "").trim() === lid);
+  }
+  return out;
+};
+
 const typeIcon = (t) => {
   const v = String(t || "").toLowerCase();
   if (v === "mail" || v === "email") return "Mail";
@@ -22,6 +35,7 @@ const typeIcon = (t) => {
   if (v === "whatsapp") return "MessageCircle";
   return "FileText";
 };
+
 const entityBadge = (linkedType) => {
   const lt = normalizeLinkedType(linkedType);
   if (lt === "tender") return { cls: "bg-purple-100 text-purple-800", label: "Tender" };
@@ -29,6 +43,7 @@ const entityBadge = (linkedType) => {
   if (lt === "imports") return { cls: "bg-emerald-100 text-emerald-800", label: "Imports" };
   return { cls: "bg-gray-100 text-gray-800", label: lt || "—" };
 };
+
 const unreadBadge = (unread) =>
   unread ? (
     <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
@@ -42,18 +57,17 @@ const COMMS_CACHE = (() => {
   return window.__COMMS_CACHE;
 })();
 
-/* ---------------- component ---------------- */
+/* ------------- component ------------- */
 export default function CommunicationList({
-  linkedType, // "tender" | "orders" | "imports" (alias ok)
-  linkedId,   // opcional; si no llega, se filtra solo por tipo
+  linkedType, // "tender" | "orders" | "imports"
+  linkedId,   // opcional
   emptyMessage = "No communications yet.",
 }) {
   const normType = normalizeLinkedType(linkedType);
 
-  // Hook genérico (carga toda la hoja; lo usaremos solo si no hay filtro server)
+  // Hook genérico (toda la hoja) — fallback si el server no filtra
   const { rows = [], loading: loadingAll, error } = useSheet("communications", mapCommunications);
 
-  // Estado local
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -67,29 +81,13 @@ export default function CommunicationList({
   useEffect(() => {
     let abort = false;
 
-    // clave de cache: tipo + (id o asterisco si no hay id)
-    const key =
-      normType ? `${normType}:${String(linkedId || "*").trim()}` : null;
-
-    const cacheHit = () => {
-      if (!key) return null;
-      const entry = COMMS_CACHE.byKey[key];
-      if (entry && Date.now() - entry.ts < 120000) return entry.rows;
-      return null;
-    };
+    const key = normType ? `${normType}:${String(linkedId || "*").trim()}` : null;
 
     const load = async () => {
       setLoading(true);
       setVisible(PAGE);
 
-      // 1) cache
-      const cached = cacheHit();
-      if (cached && !abort) {
-        setItems(cached);
-        setLoading(false);
-      }
-
-      // 2) server-side filtering cuando hay linkedType (con o sin id)
+      // 1) intentar server con filtros (lt/lid)
       if (normType) {
         try {
           const params = new URLSearchParams({
@@ -100,48 +98,29 @@ export default function CommunicationList({
           if (linkedId) params.set("lid", String(linkedId).trim());
 
           const res = await fetchJSON(`${API_BASE}?${params.toString()}`);
-          if (!abort && res?.ok) {
-            const rows = (res.rows || []).map(mapCommunications);
-            setItems(rows);
-            if (key) COMMS_CACHE.byKey[key] = { rows, ts: Date.now() };
+          if (!abort && res?.ok && Array.isArray(res.rows)) {
+            // SIEMPRE filtra también en el cliente, por si el server no filtró
+            const mapped = res.rows.map(mapCommunications);
+            const filtered = applyFilter(mapped, normType, linkedId);
+            setItems(filtered);
+            if (key) COMMS_CACHE.byKey[key] = { rows: filtered, ts: Date.now() };
             setLoading(false);
             return;
           }
         } catch {
-          // seguimos con fallback
+          // sigue al fallback
         }
       }
 
-      // 3) fallback: usar hoja completa del hook y filtrar en el cliente
+      // 2) fallback: hoja completa del hook
       const all = (rows || []).map((r) => r);
       if (!abort) {
-        let filtered = all;
-        if (normType && linkedId) {
-          filtered = all.filter(
-            (c) =>
-              normalizeLinkedType(c.linked_type) === normType &&
-              String(c.linked_id || "").trim() === String(linkedId || "").trim()
-          );
-        } else if (normType) {
-          // ← NUEVO: si no hay id, filtrar por tipo
-          filtered = all.filter(
-            (c) => normalizeLinkedType(c.linked_type) === normType
-          );
-        }
-        setItems(filtered);
+        const filtered = applyFilter(all, normType, linkedId);
         if (key) COMMS_CACHE.byKey[key] = { rows: filtered, ts: Date.now() };
+        setItems(filtered);
         setLoading(false);
       }
     };
-
-    // cache global para vista “sin filtro”
-    if (!normType) {
-      const entry = COMMS_CACHE.all;
-      if (entry && Date.now() - entry.ts < 120000) {
-        setItems(entry.rows);
-        setLoading(false);
-      }
-    }
 
     load();
     return () => {
@@ -158,6 +137,7 @@ export default function CommunicationList({
     );
     const current = (items || []).find((x) => x.id === id);
     if (current && current.unread && !current._expanded) {
+      // marcar como leído en UI + server
       setItems((prev) => prev.map((c) => (c.id === id ? { ...c, unread: false } : c)));
       try {
         await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
@@ -260,7 +240,7 @@ export default function CommunicationList({
             </div>
 
             {/* body colapsable */}
-            <div className="mt-3 text-sm relative">
+            <div className="mt-3 text-sm">
               <div
                 className={expanded ? "whitespace-pre-wrap" : "whitespace-pre-wrap overflow-hidden"}
                 style={expanded ? {} : { maxHeight: 72 }}
