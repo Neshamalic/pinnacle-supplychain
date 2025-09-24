@@ -45,35 +45,36 @@ const COMMS_CACHE = (() => {
 /* ---------------- component ---------------- */
 export default function CommunicationList({
   linkedType, // "tender" | "orders" | "imports" (alias ok)
-  linkedId,
+  linkedId,   // opcional; si no llega, se filtra solo por tipo
   emptyMessage = "No communications yet.",
 }) {
   const normType = normalizeLinkedType(linkedType);
 
-  // Hook genérico (carga toda la hoja; lo usaremos sólo si no hay filtro)
+  // Hook genérico (carga toda la hoja; lo usaremos solo si no hay filtro server)
   const { rows = [], loading: loadingAll, error } = useSheet("communications", mapCommunications);
 
   // Estado local
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Paginación “Load more”
+  // Paginación
   const PAGE = 20;
   const [visible, setVisible] = useState(PAGE);
 
   // Undo delete
   const undoRef = useRef(null);
 
-  // 1) Carga optimizada: si hay contexto, pedimos al server SOLO esas filas
   useEffect(() => {
     let abort = false;
 
-    const key = normType && linkedId ? `${normType}:${linkedId}` : null;
+    // clave de cache: tipo + (id o asterisco si no hay id)
+    const key =
+      normType ? `${normType}:${String(linkedId || "*").trim()}` : null;
 
-    const fromCache = () => {
+    const cacheHit = () => {
       if (!key) return null;
       const entry = COMMS_CACHE.byKey[key];
-      if (entry && Date.now() - entry.ts < 120000) return entry.rows; // 2 min TTL
+      if (entry && Date.now() - entry.ts < 120000) return entry.rows;
       return null;
     };
 
@@ -81,54 +82,60 @@ export default function CommunicationList({
       setLoading(true);
       setVisible(PAGE);
 
-      // si hay cache inmediato
-      const cached = fromCache();
+      // 1) cache
+      const cached = cacheHit();
       if (cached && !abort) {
         setItems(cached);
         setLoading(false);
       }
 
-      // si tenemos contexto, pedimos filtrado al Apps Script (rápido)
-      if (normType && linkedId) {
+      // 2) server-side filtering cuando hay linkedType (con o sin id)
+      if (normType) {
         try {
-          const res = await fetchJSON(
-            `${API_BASE}?route=table&name=communications&lt=${encodeURIComponent(
-              normType
-            )}&lid=${encodeURIComponent(linkedId)}`
-          );
+          const params = new URLSearchParams({
+            route: "table",
+            name: "communications",
+            lt: normType,
+          });
+          if (linkedId) params.set("lid", String(linkedId).trim());
+
+          const res = await fetchJSON(`${API_BASE}?${params.toString()}`);
           if (!abort && res?.ok) {
             const rows = (res.rows || []).map(mapCommunications);
             setItems(rows);
-            COMMS_CACHE.byKey[key] = { rows, ts: Date.now() };
+            if (key) COMMS_CACHE.byKey[key] = { rows, ts: Date.now() };
             setLoading(false);
             return;
           }
         } catch {
-          // si falla, seguimos con el hook genérico
+          // seguimos con fallback
         }
       }
 
-      // fallback: usamos la tabla completa (hook) y filtramos
+      // 3) fallback: usar hoja completa del hook y filtrar en el cliente
       const all = (rows || []).map((r) => r);
       if (!abort) {
+        let filtered = all;
         if (normType && linkedId) {
-          const filtered = all.filter(
+          filtered = all.filter(
             (c) =>
               normalizeLinkedType(c.linked_type) === normType &&
               String(c.linked_id || "").trim() === String(linkedId || "").trim()
           );
-          setItems(filtered);
-          if (key) COMMS_CACHE.byKey[key] = { rows: filtered, ts: Date.now() };
-        } else {
-          setItems(all);
-          COMMS_CACHE.all = { rows: all, ts: Date.now() };
+        } else if (normType) {
+          // ← NUEVO: si no hay id, filtrar por tipo
+          filtered = all.filter(
+            (c) => normalizeLinkedType(c.linked_type) === normType
+          );
         }
+        setItems(filtered);
+        if (key) COMMS_CACHE.byKey[key] = { rows: filtered, ts: Date.now() };
         setLoading(false);
       }
     };
 
-    // Primera carga rápida desde cache “global”
-    if (!normType || !linkedId) {
+    // cache global para vista “sin filtro”
+    if (!normType) {
       const entry = COMMS_CACHE.all;
       if (entry && Date.now() - entry.ts < 120000) {
         setItems(entry.rows);
@@ -143,7 +150,6 @@ export default function CommunicationList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [normType, linkedId, rows]);
 
-  // “Load more”
   const visibleItems = useMemo(() => items.slice(0, visible), [items, visible]);
 
   const handleToggleExpand = async (id) => {
@@ -152,7 +158,6 @@ export default function CommunicationList({
     );
     const current = (items || []).find((x) => x.id === id);
     if (current && current.unread && !current._expanded) {
-      // marcar leído
       setItems((prev) => prev.map((c) => (c.id === id ? { ...c, unread: false } : c)));
       try {
         await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
@@ -165,32 +170,30 @@ export default function CommunicationList({
     }
   };
 
-  const handleDelete = async (item, idxInList) => {
+  const handleDelete = async (item) => {
     if (!item?.id) {
       alert('No se puede eliminar: falta "id" en esa fila de la planilla.');
       return;
     }
     if (!window.confirm("Are you sure you want to delete?")) return;
 
-    // optimista
-    const globalIndex = items.findIndex((x) => x.id === item.id);
+    const idx = items.findIndex((x) => x.id === item.id);
     setItems((prev) => prev.filter((x) => x.id !== item.id));
     if (undoRef.current?.timer) clearTimeout(undoRef.current.timer);
     const timer = setTimeout(() => (undoRef.current = null), 5000);
-    undoRef.current = { item, index: globalIndex, timer };
+    undoRef.current = { item, index: idx, timer };
 
     try {
       await postJSON(`${API_BASE}?route=write&action=delete&name=communications`, {
         where: { id: item.id },
       });
     } catch {
-      // revert si falló
       if (undoRef.current?.timer) clearTimeout(undoRef.current.timer);
       undoRef.current = null;
       setItems((prev) => {
-        const clone = prev.slice();
-        clone.splice(globalIndex, 0, item);
-        return clone;
+        const c = prev.slice();
+        c.splice(idx, 0, item);
+        return c;
       });
       alert("No se pudo eliminar. Intenta nuevamente.");
     }
@@ -202,9 +205,9 @@ export default function CommunicationList({
     if (timer) clearTimeout(timer);
     undoRef.current = null;
     setItems((prev) => {
-      const clone = prev.slice();
-      clone.splice(index, 0, item);
-      return clone;
+      const c = prev.slice();
+      c.splice(index, 0, item);
+      return c;
     });
   };
 
@@ -249,46 +252,34 @@ export default function CommunicationList({
                   variant="destructive"
                   size="sm"
                   iconName="Trash2"
-                  onClick={() => handleDelete(c, i)}
+                  onClick={() => handleDelete(c)}
                 >
                   Delete
                 </Button>
               </div>
             </div>
 
-            {/* body con “Show more/less” (colapsable real) */}
+            {/* body colapsable */}
             <div className="mt-3 text-sm relative">
               <div
                 className={expanded ? "whitespace-pre-wrap" : "whitespace-pre-wrap overflow-hidden"}
-                style={expanded ? {} : { maxHeight: 72 }} // ~3 líneas
+                style={expanded ? {} : { maxHeight: 72 }}
               >
                 {expanded ? (c.content || "—") : (c.preview || "—")}
               </div>
 
-              {!expanded && (c.content || "").length > (c.preview || "").length ? (
+              {(c.content || "").length > (c.preview || "").length ? (
                 <div className="mt-2">
                   <button
                     className="text-primary text-sm underline underline-offset-2"
                     onClick={() => handleToggleExpand(c.id)}
                   >
-                    Show more
+                    {expanded ? "Show less" : "Show more"}
                   </button>
                 </div>
-              ) : (
-                (c.content || "").length > 0 && (
-                  <div className="mt-2">
-                    <button
-                      className="text-primary text-sm underline underline-offset-2"
-                      onClick={() => handleToggleExpand(c.id)}
-                    >
-                      Show less
-                    </button>
-                  </div>
-                )
-              )}
+              ) : null}
             </div>
 
-            {/* pie: link info */}
             {c.linked_type && c.linked_id ? (
               <div className="mt-3 text-xs text-muted-foreground">
                 Linked: {normalizeLinkedType(c.linked_type)} • {c.linked_id}
@@ -298,7 +289,6 @@ export default function CommunicationList({
         );
       })}
 
-      {/* Load more */}
       {visible < items.length ? (
         <div className="flex justify-center">
           <Button variant="secondary" onClick={() => setVisible((v) => v + PAGE)}>
@@ -307,7 +297,6 @@ export default function CommunicationList({
         </div>
       ) : null}
 
-      {/* barra de undo */}
       {undoRef.current ? (
         <div className="sticky bottom-4 z-[5] mx-auto w-fit rounded-full bg-neutral-800/90 px-3 py-1.5 text-sm text-white shadow-lg">
           Deleted.{" "}
