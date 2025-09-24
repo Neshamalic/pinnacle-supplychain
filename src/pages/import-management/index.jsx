@@ -1,226 +1,257 @@
 // src/pages/import-management/index.jsx
 import React, { useMemo, useState } from "react";
+import { Eye, RefreshCcw, Package, Truck } from "lucide-react";
 import Button from "@/components/ui/Button";
-import Icon from "@/components/AppIcon";
 import { useSheet } from "@/lib/sheetsApi";
 import { mapImports, mapImportItems } from "@/lib/adapters";
-import ImportDetailsDrawer from "./components/ImportDetailsDrawer.jsx";
+import ImportDetailsDrawer from "./components/ImportDetailsDrawer";
 
-/* ---- helpers UI ---- */
-const cx = (...cls) => cls.filter(Boolean).join(" ");
-
-const Pill = ({ tone = "slate", children }) => {
-  const tones = {
-    slate: "bg-slate-100 text-slate-700 ring-slate-200",
-    sky: "bg-sky-100 text-sky-700 ring-sky-200",
-    indigo: "bg-indigo-100 text-indigo-700 ring-indigo-200",
-    emerald: "bg-emerald-100 text-emerald-700 ring-emerald-200",
-    amber: "bg-amber-100 text-amber-800 ring-amber-200",
-    rose: "bg-rose-100 text-rose-700 ring-rose-200",
-  };
-  return (
-    <span className={cx(
-      "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1",
-      tones[tone] || tones.slate
-    )}>
-      {children || "—"}
-    </span>
-  );
+// helpers “for dummies”
+const fmtDate = (v) => {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("es-CL", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+};
+const tone = (t) => ({
+  slab: "rounded-xl shadow-sm border",
+  pill: "inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium",
+  tones: {
+    blue: "bg-blue-100 text-blue-700",
+    amber: "bg-amber-100 text-amber-700",
+    green: "bg-green-100 text-green-700",
+    slate: "bg-slate-100 text-slate-700",
+    gray: "bg-gray-100 text-gray-700",
+  },
+});
+const pillTransport = (s = "") => {
+  const { pill, tones } = tone();
+  const x = s.toLowerCase();
+  const cls = x === "air" ? tones.blue : x === "sea" ? tones.slate : tones.gray;
+  return <span className={`${pill} ${cls}`}>{s || "—"}</span>;
+};
+const pillStatus = (s = "") => {
+  const { pill, tones } = tone();
+  const x = s.toLowerCase();
+  const cls =
+    x === "transit" ? tones.amber :
+    x === "warehouse" ? tones.slate :
+    x === "delivered" || x === "arrived" ? tones.green :
+    tones.gray;
+  return <span className={`${pill} ${cls}`}>{s || "—"}</span>;
 };
 
-const StatCard = ({ icon, label, value, tone }) => {
-  const tones = {
-    indigo: "bg-indigo-50 border-indigo-200 text-indigo-900",
-    sky: "bg-sky-50 border-sky-200 text-sky-900",
-    emerald: "bg-emerald-50 border-emerald-200 text-emerald-900",
-  };
-  return (
-    <div className={cx(
-      "flex flex-1 min-w-[240px] items-center gap-3 rounded-2xl border px-5 py-4 shadow-sm",
-      tones[tone] || tones.indigo
-    )}>
-      <div className="rounded-xl bg-white/70 p-2">
-        <Icon name={icon} size={20} />
-      </div>
-      <div>
-        <div className="text-xs/5 opacity-80">{label}</div>
-        <div className="text-2xl font-semibold">{value ?? 0}</div>
-      </div>
-    </div>
-  );
-};
-
-/* ---- helpers datos ---- */
-const normId = (v) => String(v || "").trim();
-const statusTone = (s) => {
-  const t = String(s || "").toLowerCase();
-  if (t.includes("warehouse")) return "emerald";
-  if (t.includes("transit")) return "amber";
-  return "slate";
-};
-const transportTone = (t) => {
-  const v = String(t || "").toLowerCase();
-  if (v === "air") return "sky";
-  if (v === "sea") return "indigo";
-  return "slate";
-};
-
-export default function ImportManagementPage() {
-  // Fuente de verdad: SOLO 'imports'
-  const { rows: imports = [], loading, error, refetch, refresh } = useSheet("imports", mapImports);
-  // Usamos import_items sólo para contar productos por shipment (sin crear filas)
-  const { rows: itemsA = [] } = useSheet("import_items", mapImportItems);
+export default function ImportManagement() {
+  // 1) Leemos “imports” y “import_items”
+  const { rows: importsRaw = [], loading, error, reload } = useSheet("imports", mapImports);
+  const { rows: importItems = [] } = useSheet("import_items", mapImportItems);
 
   const [q, setQ] = useState("");
-  const [selected, setSelected] = useState(null);
+  const [openDrawer, setOpenDrawer] = useState(false);
+  const [selectedRow, setSelectedRow] = useState(null);
 
-  const doRefresh = async () => {
-    if (typeof refetch === "function") await refetch();
-    else if (typeof refresh === "function") await refresh();
+  // 2) Index de items por OCI/PO (sirve para contar productos y filtrar fantasmas)
+  const itemsByOci = useMemo(() => {
+    const m = new Map();
+    for (const r of importItems) {
+      const key = (r.ociNumber || "").trim();
+      if (!key) continue;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(r);
+    }
+    return m;
+  }, [importItems]);
+
+  const itemsByPo = useMemo(() => {
+    const m = new Map();
+    for (const r of importItems) {
+      const key = (r.poNumber || "").trim();
+      if (!key) continue;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(r);
+    }
+    return m;
+  }, [importItems]);
+
+  // 3) Agrupar por shipmentId y descartar “fantasmas”
+  const shipments = useMemo(() => {
+    const byShip = new Map();
+
+    for (const row of importsRaw) {
+      const sid = (row.shipmentId || "").trim();
+      const oci = (row.ociNumber || "").trim();
+      const po  = (row.poNumber  || "").trim();
+
+      // ¿Tiene al menos un item asociado por OCI o PO?
+      const itemCount =
+        (oci && itemsByOci.get(oci)?.length) ? itemsByOci.get(oci).length :
+        (po  && itemsByPo.get(po)?.length)  ? itemsByPo.get(po).length  : 0;
+
+      // Si no hay items y tampoco OCI/PO, lo consideramos “fantasma” y lo omitimos
+      if (!itemCount && !oci && !po) continue;
+
+      if (!byShip.has(sid)) {
+        byShip.set(sid, {
+          id: sid || oci || po || "—",
+          shipmentId: sid,
+          transportType: row.transportType || "",
+          importStatus: row.importStatus || "",
+          eta: row.eta || "",
+          productCount: itemCount,
+        });
+      } else {
+        // Merge simple: conservar primer valor y completar campos vacíos
+        const agg = byShip.get(sid);
+        agg.transportType ||= row.transportType || "";
+        agg.importStatus ||= row.importStatus || "";
+        agg.eta ||= row.eta || "";
+        // si en otra fila de mismo shipment encontramos más items, sumar máximo
+        agg.productCount = Math.max(agg.productCount, itemCount);
+      }
+    }
+
+    // Buscar texto
+    let list = Array.from(byShip.values());
+    if (q.trim()) {
+      const s = q.trim().toLowerCase();
+      list = list.filter(r => (r.shipmentId || "").toLowerCase().includes(s));
+    }
+    // Ordenar por shipmentId
+    list.sort((a,b) => (a.shipmentId || "").localeCompare(b.shipmentId || ""));
+    return list;
+  }, [importsRaw, itemsByOci, itemsByPo, q]);
+
+  // 4) Métricas (cards)
+  const metrics = useMemo(() => {
+    const total = shipments.length;
+    const transit = shipments.filter(r => (r.importStatus || "").toLowerCase() === "transit").length;
+    const warehouse = shipments.filter(r => (r.importStatus || "").toLowerCase() === "warehouse").length;
+    return { total, transit, warehouse };
+  }, [shipments]);
+
+  const openDetails = (row) => {
+    setSelectedRow(row);
+    setOpenDrawer(true);
   };
 
-  // Conjunto de productos por shipment (unique presentationCode/productName)
-  const productCountByShipment = useMemo(() => {
-    const map = new Map();
-    for (const it of itemsA) {
-      const sid = normId(it.shipmentId);
-      if (!sid) continue;
-      if (!map.has(sid)) map.set(sid, new Set());
-      const key = normId(it.presentationCode || it.productName || it.lotNumber);
-      if (key) map.get(sid).add(key);
-    }
-    const out = {};
-    for (const [sid, set] of map.entries()) out[sid] = set.size;
-    return out;
-  }, [itemsA]);
-
-  // Agrupar por shipmentId usando SOLO lo que existe en imports
-  const grouped = useMemo(() => {
-    // Dedupe por shipmentId (si hay múltiples filas en imports)
-    const byId = new Map();
-    for (const r of imports) {
-      const sid = normId(r.shipmentId);
-      if (!sid) continue;               // si no hay shipmentId, no lo mostramos
-      if (!byId.has(sid)) byId.set(sid, []);
-      byId.get(sid).push(r);
-    }
-
-    const result = [];
-    for (const [sid, arr] of byId.entries()) {
-      // Escoger primer valor no vacío por campo
-      const choose = (k) => arr.find((x) => normId(x[k])).?.[k] ?? "";
-      result.push({
-        shipmentId: sid,
-        transportType: choose("transportType"),
-        importStatus: choose("importStatus"),
-        eta: choose("eta"),
-        productCount: productCountByShipment[sid] ?? 0,
-      });
-    }
-
-    // filtro por búsqueda
-    const s = q.toLowerCase().trim();
-    const filtered = s
-      ? result.filter((r) =>
-          [r.shipmentId, r.transportType, r.importStatus].some((x) =>
-            String(x || "").toLowerCase().includes(s)
-          )
-        )
-      : result;
-
-    // Orden por Shipment ID
-    filtered.sort((a, b) => String(a.shipmentId).localeCompare(String(b.shipmentId)));
-    return filtered;
-  }, [imports, q, productCountByShipment]);
-
-  // KPIs
-  const total = grouped.length;
-  const inTransit = grouped.filter((r) => String(r.importStatus || "").toLowerCase().includes("transit")).length;
-  const warehouse = grouped.filter((r) => String(r.importStatus || "").toLowerCase().includes("warehouse")).length;
-
   return (
-    <div className="p-6">
-      <div className="mb-1 text-2xl font-semibold">Import Management</div>
-      <p className="mb-5 text-gray-600">Track incoming shipments from suppliers and customs status.</p>
-
-      {/* KPI cards (coloreadas y grandes) */}
-      <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-3">
-        <StatCard icon="PackageSearch" label="Total Shipments" value={total} tone="indigo" />
-        <StatCard icon="Plane" label="In Transit" value={inTransit} tone="sky" />
-        <StatCard icon="Warehouse" label="Warehouse" value={warehouse} tone="emerald" />
-      </div>
-
-      {/* Buscador + Refresh */}
-      <div className="mb-3 flex items-center gap-3">
-        <input
-          className="w-full rounded-xl border px-3 py-2"
-          placeholder="Search shipments by Shipment ID..."
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <Button variant="secondary" onClick={doRefresh} className="h-10">
-          <Icon name="RotateCw" className="mr-2" /> Refresh Data
+    <div className="p-4 md:p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-semibold">Import Management</h1>
+        <Button variant="secondary" onClick={reload} iconName="RefreshCcw">
+          <span className="hidden sm:inline">Refresh Data</span>
         </Button>
       </div>
 
-      {loading && <div className="text-sm text-muted-foreground">Loading imports…</div>}
-      {error && <div className="text-sm text-rose-600">Error: {String(error)}</div>}
+      {/* KPI cards grandes y con color */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <KpiCard
+          icon={<Package size={20} />}
+          label="Total Shipments"
+          value={metrics.total}
+          className="bg-indigo-50 text-indigo-700 border-indigo-200"
+        />
+        <KpiCard
+          icon={<Truck size={20} />}
+          label="In Transit"
+          value={metrics.transit}
+          className="bg-amber-50 text-amber-700 border-amber-200"
+        />
+        <KpiCard
+          icon={<Truck size={20} />}
+          label="Warehouse"
+          value={metrics.warehouse}
+          className="bg-slate-50 text-slate-700 border-slate-200"
+        />
+      </div>
 
-      {/* Tabla agrupada */}
-      <div className="overflow-x-auto rounded-xl border">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 text-left">
+      {/* Buscador */}
+      <div className="mb-4">
+        <div className="relative">
+          <input
+            className="w-full rounded-lg border px-10 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+            placeholder="Search shipments by Shipment ID..."
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          <SearchIcon />
+        </div>
+      </div>
+
+      {/* Tabla */}
+      <div className="bg-card border rounded-xl overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-muted/50 border-b">
             <tr>
-              <th className="px-4 py-3 font-medium">Shipment ID</th>
-              <th className="px-4 py-3 font-medium">Products</th>
-              <th className="px-4 py-3 font-medium">Transport</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              <th className="px-4 py-3 font-medium text-right">Actions</th>
+              <Th>Shipment ID</Th>
+              <Th>Products</Th>
+              <Th>Transport</Th>
+              <Th>Status</Th>
+              <Th>ETA</Th>
+              <Th>Actions</Th>
             </tr>
           </thead>
-          <tbody>
-            {grouped.map((r) => (
-              <tr key={r.shipmentId} className="border-t">
-                <td className="px-4 py-3">{r.shipmentId}</td>
-                <td className="px-4 py-3">{r.productCount}</td>
-                <td className="px-4 py-3">
-                  <Pill tone={transportTone(r.transportType)}>{r.transportType || "—"}</Pill>
-                </td>
-                <td className="px-4 py-3">
-                  <Pill tone={statusTone(r.importStatus)}>{r.importStatus || "—"}</Pill>
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="px-2 py-1 text-xs"
-                    onClick={() => setSelected(r)}
-                  >
-                    <Icon name="Eye" className="mr-1" size={14} />
-                    View Details
+          <tbody className="divide-y">
+            {loading && (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
+            )}
+            {error && (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-red-600">Error: {String(error)}</td></tr>
+            )}
+            {!loading && !error && shipments.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No imports found.</td></tr>
+            )}
+
+            {shipments.map((r) => (
+              <tr key={r.id}>
+                <Td>{r.shipmentId || "—"}</Td>
+                <Td>{r.productCount ?? 0}</Td>
+                <Td>{pillTransport(r.transportType)}</Td>
+                <Td>{pillStatus(r.importStatus)}</Td>
+                <Td>{fmtDate(r.eta)}</Td>
+                <Td>
+                  <Button size="xs" onClick={() => openDetails(r)}>
+                    <Eye size={14} className="mr-1" /> View Details
                   </Button>
-                </td>
+                </Td>
               </tr>
             ))}
-            {grouped.length === 0 && (
-              <tr>
-                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={5}>
-                  No shipments found.
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>
 
-      {/* Drawer */}
-      {selected && (
+      {/* Drawer de detalles */}
+      {openDrawer && (
         <ImportDetailsDrawer
-          isOpen={!!selected}
-          importRow={selected}
-          onClose={() => setSelected(null)}
+          open
+          onClose={() => setOpenDrawer(false)}
+          importRow={selectedRow}
         />
       )}
+    </div>
+  );
+}
+
+function Th({ children }) {
+  return <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">{children}</th>;
+}
+function Td({ children }) {
+  return <td className="px-4 py-3 text-sm">{children}</td>;
+}
+function SearchIcon() {
+  return <RefreshCcw className="hidden" />; // sólo para evitar tree-shaking de lucide; el real icono lo hacemos con CSS:
+}
+
+/* KPI card */
+function KpiCard({ icon, label, value, className = "" }) {
+  const base = "rounded-xl border p-4 flex items-center gap-3";
+  return (
+    <div className={`${base} ${className}`}>
+      <div className="p-2 rounded-lg bg-white/70">{icon}</div>
+      <div>
+        <div className="text-sm opacity-80">{label}</div>
+        <div className="text-2xl font-semibold">{value}</div>
+      </div>
     </div>
   );
 }
