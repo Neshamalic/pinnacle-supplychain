@@ -1,267 +1,196 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsDrawer.jsx
-import React, { useMemo, useState } from "react";
-import Button from "@/components/ui/Button";
-import Icon from "@/components/AppIcon";
-
-import { useSheet } from "@/lib/sheetsApi";
-import {
-  mapPurchaseOrderItems,
-  mapImportItems,
-  mapImports,
-  mapCommunications,
-} from "@/lib/adapters";
-import { usePresentationCatalog } from "@/lib/catalog";
-
+import { useEffect, useMemo, useState } from "react";
+import { API_BASE, fetchJSON, formatCurrency, formatDate } from "@/lib/utils";
 import CommunicationList from "@/components/CommunicationList";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
 
-const fmtNum = (n) =>
-  new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(
-    Number(n || 0)
-  );
-
-const fmtMoney = (n) =>
-  new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-  }).format(Number(n || 0));
-
-const fmtDate = (iso) => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}-${mm}-${d.getFullYear()}`;
-};
-
-const chip = (label, kind = "muted") => {
-  const palette = {
-    muted: "bg-muted text-foreground/70",
-    blue: "bg-blue-100 text-blue-800",
-    green: "bg-emerald-100 text-emerald-800",
-    yellow: "bg-amber-100 text-amber-800",
-    purple: "bg-purple-100 text-purple-800",
-    gray: "bg-gray-100 text-gray-800",
-  };
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs ${palette[kind]}`}>
-      {label}
-    </span>
-  );
-};
-
-export default function OrderDetailsDrawer({ open, onClose, order, onEditItem }) {
+export default function OrderDetailsDrawer({ open, onClose, order }) {
   const [tab, setTab] = useState("items");
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [openNewComm, setOpenNewComm] = useState(false);
 
-  const poNumber = order?.poNumber || "";
+  // ---- carga items de la hoja purchase_order_items y filtra por po_number ----
+  useEffect(() => {
+    if (!open || !order?.po_number) return;
+    let mounted = true;
 
-  // Sheets
-  const { rows: poItemsRows = [], loading: loadingPOI } = useSheet(
-    "purchase_order_items",
-    mapPurchaseOrderItems
-  );
-  const { rows: importItemsRows = [] } = useSheet("import_items", mapImportItems);
-  const { rows: importsRows = [] } = useSheet("imports", mapImports);
+    (async () => {
+      setLoading(true);
+      try {
+        const url = `${API_BASE}?route=table&name=purchase_order_items`;
+        const res = await fetchJSON(url);
+        const all = Array.isArray(res?.rows) ? res.rows : [];
+        const filtered = all.filter(
+          (r) => String(r.po_number || "").trim() === String(order.po_number || "").trim()
+        );
+        if (mounted) setItems(filtered);
+      } catch (err) {
+        console.error("purchase_order_items load error:", err);
+        if (mounted) setItems([]);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
 
-  const { enrich } = usePresentationCatalog();
+    return () => {
+      mounted = false;
+    };
+  }, [open, order?.po_number]);
 
-  // Build items + metrics
-  const items = useMemo(() => {
-    const base = (poItemsRows || []).filter((r) => r.poNumber === poNumber);
-    const withNames = enrich(base);
-
-    const importedBySku = {};
-    (importItemsRows || []).forEach((it) => {
-      if (it.poNumber !== poNumber) return;
-      const key = it.presentationCode;
-      importedBySku[key] = (importedBySku[key] || 0) + (it.qty || 0);
-    });
-
-    const firstImp = (importsRows || []).find((imp) => imp.poNumber === poNumber);
-
-    return withNames.map((r) => {
-      const imported = importedBySku[r.presentationCode] || 0;
-      const remaining = Math.max((r.qty || 0) - imported, 0);
-
-      return {
-        ...r,
-        imported,
-        remaining,
-        importStatus: firstImp?.importStatus || "",
-        transportType: firstImp?.transportType || "",
-      };
-    });
-  }, [poItemsRows, importItemsRows, importsRows, enrich, poNumber]);
-
-  const totalUSD = useMemo(
-    () => items.reduce((acc, it) => acc + (it.unitPrice || 0) * (it.qty || 0), 0),
-    [items]
-  );
-
-  // Refresh comms after save
-  const { refetch: refetchComms } = useSheet("communications", mapCommunications);
-  const handleSavedComm = async () => {
-    if (typeof refetchComms === "function") await refetchComms();
-    setOpenNewComm(false);
-  };
+  const totalUsd = useMemo(() => {
+    return (items || []).reduce((acc, r) => {
+      const qty =
+        Number(r.ordered_qty ?? r.qty ?? r.quantity ?? 0);
+      const price =
+        Number(r.unit_price ?? r.unit_price_usd ?? r.price ?? 0);
+      return acc + qty * price;
+    }, 0);
+  }, [items]);
 
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-[2100] bg-black/40 flex justify-end">
-      <div className="w-full max-w-5xl h-full bg-card border-l border-border shadow-2xl overflow-hidden">
+      <div className="w-full max-w-5xl h-full bg-white border-l border-slate-200 shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          <div>
-            <div className="text-xl font-semibold text-foreground">
-              Order Details – {poNumber || "PO"}
-            </div>
-            {order?.tenderRef ? (
-              <div className="text-sm text-muted-foreground">
-                Tender Ref: {order.tenderRef}
-              </div>
-            ) : null}
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <div className="flex items-center gap-2">
+            <div className="text-xl font-semibold">Order Details – {order?.po_number ? "PO" : ""}</div>
+            {order?.po_number && (
+              <span className="rounded-full bg-indigo-50 text-indigo-700 px-2 py-0.5 text-xs border border-indigo-100">
+                {order.po_number}
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-3">
-            <div className="text-sm text-muted-foreground">
-              Created: {fmtDate(order?.createdDate)}
-            </div>
-            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
-              <Icon name="X" size={18} />
-            </Button>
+          <div className="text-sm text-slate-500">
+            <span className="mr-1">Created:</span>
+            <span>{formatDate(order?.created_date)}</span>
           </div>
+          <button
+            className="ml-4 rounded-lg p-2 hover:bg-slate-100"
+            title="Close"
+            onClick={onClose}
+          >
+            <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.6" />
+            </svg>
+          </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center gap-1 border-b border-border px-4">
+        <div className="flex items-center gap-1 border-b px-4">
           {[
-            ["items", "Items", "Cube"],
+            ["items", "Items", "HelpCircle"],
             ["communications", "Communications", "MessageCircle"],
-          ].map(([key, label, icon]) => (
+          ].map(([key, label]) => (
             <button
               key={key}
               onClick={() => setTab(key)}
-              className={`px-4 py-3 text-sm font-medium flex items-center gap-2 ${
+              className={`px-4 py-3 text-sm font-medium ${
                 tab === key
-                  ? "text-primary border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "text-indigo-700 border-b-2 border-indigo-600"
+                  : "text-slate-500 hover:text-slate-800"
               }`}
             >
-              <Icon name={icon} size={16} />
               {label}
             </button>
           ))}
         </div>
 
         {/* Content */}
-        <div className="p-4 overflow-y-auto h-[calc(100%-110px)]">
+        <div className="p-4 overflow-y-auto h-[calc(100%-112px)]">
           {tab === "items" && (
-            <div className="space-y-3">
-              {/* Summary */}
-              <div className="grid md:grid-cols-3 gap-3">
-                <SummaryCard label="PO Number" value={poNumber || "—"} />
-                <SummaryCard label="Created" value={fmtDate(order?.createdDate)} />
-                <SummaryCard label="Total (USD)" value={fmtMoney(totalUSD)} />
+            <>
+              {/* Resumen */}
+              <div className="grid md:grid-cols-3 gap-3 mb-4">
+                <InfoCard label="PO Number" value={order?.po_number || "—"} />
+                <InfoCard label="Created" value={formatDate(order?.created_date) || "—"} />
+                <InfoCard label="Total (USD)" value={formatCurrency(totalUsd)} />
               </div>
 
-              {/* Items */}
-              {(items || []).map((it, idx) => (
-                <div key={`${it.presentationCode}-${idx}`} className="rounded-lg border p-4 bg-muted/30">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-medium text-foreground">
-                        {it.productName || it.presentationCode}
+              {/* Lista de items */}
+              {loading && (
+                <div className="text-sm text-slate-500">Loading items…</div>
+              )}
+              {!loading && (items || []).length === 0 && (
+                <div className="text-sm text-slate-500">No items found.</div>
+              )}
+
+              <div className="space-y-3">
+                {(items || []).map((it, idx) => {
+                  const presentation = String(it.presentation_code || "").trim();
+                  const ordered =
+                    Number(it.ordered_qty ?? it.qty ?? it.quantity ?? 0);
+                  const price =
+                    Number(it.unit_price ?? it.unit_price_usd ?? it.price ?? 0);
+                  const lineTotal = ordered * price;
+                  return (
+                    <div
+                      key={`${presentation}-${idx}`}
+                      className="rounded-lg border bg-slate-50 p-4"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="font-medium text-slate-800">
+                          {presentation || "Item"}
+                        </div>
+                        <div className="text-sm text-slate-600">
+                          {formatCurrency(price)} <span className="text-slate-400">/ unit</span>
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        Code: {it.presentationCode}
-                        {it.packageUnits ? ` • ${it.packageUnits} units/pack` : null}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {typeof onEditItem === "function" && (
-                        <Button size="sm" variant="secondary" onClick={() => onEditItem(it)}>
-                          Edit
-                        </Button>
-                      )}
-                      <div className="text-right">
-                        <div className="text-sm text-muted-foreground">
-                          {fmtMoney(it.unitPrice)} / unit
+                      <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <span className="text-slate-500">Ordered:</span>{" "}
+                          {ordered}
+                        </div>
+                        <div className="md:col-span-2 text-right font-medium">
+                          {formatCurrency(lineTotal)}
                         </div>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="mt-2 flex items-center gap-2">
-                    {it.importStatus ? chip(it.importStatus, it.importStatus === "warehouse" ? "purple" : "yellow") : null}
-                    {it.transportType ? chip(it.transportType, it.transportType === "air" ? "blue" : "green") : null}
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                    <Metric label="Requested" value={fmtNum(it.qty)} />
-                    <Metric label="Imported" value={fmtNum(it.imported)} />
-                    <Metric label="Remaining" value={fmtNum(it.remaining)} />
-                    <div className="md:text-right font-medium">
-                      {fmtMoney((it.unitPrice || 0) * (it.qty || 0))}
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {loadingPOI && (
-                <div className="text-sm text-muted-foreground">Loading items…</div>
-              )}
-              {!loadingPOI && (items || []).length === 0 && (
-                <div className="text-sm text-muted-foreground">No items found.</div>
-              )}
-            </div>
+                  );
+                })}
+              </div>
+            </>
           )}
 
           {tab === "communications" && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-medium">Communication History</div>
-                <Button size="sm" iconName="Plus" onClick={() => setOpenNewComm(true)}>
-                  Add
-                </Button>
+                <button
+                  className="rounded-md bg-indigo-600 text-white text-sm px-3 py-1.5 hover:bg-indigo-700"
+                  onClick={() => setOpenNewComm(true)}
+                >
+                  + Add
+                </button>
               </div>
-              {/* solo comunicaciones de ESTA PO */}
-              <CommunicationList linkedType="orders" linkedId={poNumber} />
+
+              {/* Muestra SOLO las comunicaciones de orders con este PO */}
+              <CommunicationList linkedType="orders" linkedId={order?.po_number || ""} />
             </div>
           )}
         </div>
       </div>
 
-      {/* Modal New Communication prellenado para Orders */}
       {openNewComm && (
         <NewCommunicationModal
           open={openNewComm}
           onClose={() => setOpenNewComm(false)}
-          onSaved={handleSavedComm}
+          onSaved={() => setOpenNewComm(false)}
           defaultLinkedType="orders"
-          defaultLinkedId={poNumber}
+          defaultLinkedId={order?.po_number || ""}
         />
       )}
     </div>
   );
 }
 
-function SummaryCard({ label, value }) {
+function InfoCard({ label, value }) {
   return (
-    <div className="rounded-lg border p-3 bg-muted/30">
-      <div className="text-xs text-muted-foreground">{label}</div>
+    <div className="rounded-lg border p-3 bg-slate-50">
+      <div className="text-xs text-slate-500">{label}</div>
       <div className="text-sm font-medium">{value}</div>
-    </div>
-  );
-}
-
-function Metric({ label, value }) {
-  return (
-    <div className="rounded-md border bg-white p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-lg font-semibold">{value}</div>
     </div>
   );
 }
