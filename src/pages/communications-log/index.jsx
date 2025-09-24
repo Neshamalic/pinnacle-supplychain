@@ -2,46 +2,41 @@
 import React, { useState } from "react";
 import Button from "@/components/ui/Button";
 import Icon from "@/components/AppIcon";
-import { useSheet } from "@/lib/sheetsApi";
-import { mapCommunications } from "@/lib/adapters";
-import CommunicationTimeline from "./components/CommunicationTimeline.jsx";
-import NewCommunicationModal from "./components/NewCommunicationModal.jsx";
+import CommunicationTimeline from "./components/CommunicationTimeline";
+import NewCommunicationModal from "./components/NewCommunicationModal";
 
-export default function CommunicationsLog() {
-  const { rows = [], loading, error, refresh, refetch } =
-    useSheet("communications", mapCommunications); // ya existe en tu repo. :contentReference[oaicite:4]{index=4}
+export default function CommunicationsLogPage() {
+  const [openNew, setOpenNew] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const [open, setOpen] = useState(false);
-
-  const doRefresh = async () => {
-    // según versión del hook, puede existir refresh o refetch
-    if (typeof refetch === "function") await refetch();
-    else if (typeof refresh === "function") await refresh();
+  const handleSaved = () => {
+    setOpenNew(false);
+    setReloadKey(k => k + 1); // fuerza que CommunicationTimeline pida de nuevo
   };
 
-  if (loading) return <div className="p-6 text-sm text-muted-foreground">Cargando comunicaciones…</div>;
-  if (error)   return <div className="p-6 text-sm text-red-600">Error: {String(error)}</div>;
-
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Communications Log</h1>
-        <Button onClick={() => setOpen(true)}>
-          <Icon name="plus" className="mr-2" />
-          New Communication
-        </Button>
+    <div className="p-4">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 className="text-xl font-semibold">Communications Timeline</h1>
+          <p className="text-sm text-muted-foreground">All messages across tenders, orders and imports.</p>
+        </div>
+        <Button onClick={() => setOpenNew(true)} iconName="Plus">New Communication</Button>
       </div>
 
-      {/* Timeline (tu componente actual) */}
-      <CommunicationTimeline items={rows} />
+      {/* clave de recarga para forzar reread */}
+      <div key={reloadKey}>
+        <CommunicationTimeline />
+      </div>
 
-      {open && (
+      {openNew && (
         <NewCommunicationModal
-          open={open}
-          onClose={() => setOpen(false)}
-          onSaved={doRefresh}
+          open={openNew}
+          onClose={() => setOpenNew(false)}
+          onSaved={handleSaved}
         />
       )}
     </div>
   );
 }
+
