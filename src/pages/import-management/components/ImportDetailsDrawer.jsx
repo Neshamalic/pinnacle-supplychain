@@ -74,7 +74,7 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
   const transportType = importRow?.transportType || importsRows.find((r) => r.shipmentId === shipmentId)?.transportType || "";
   const importStatus  = importRow?.importStatus  || importsRows.find((r) => r.shipmentId === shipmentId)?.importStatus  || "";
 
-  // Items + DEDUP ULTRA (antes y después del enrich)
+  // Items + dedup fuerte
   const { rows: allItems = [], loading: itemsLoading } = useSheet("import_items", mapImportItems);
   const { enrich } = usePresentationCatalog();
 
@@ -82,14 +82,14 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
     const setOci = new Set((ocis || []).map((s) => s.trim()));
     const setPo  = new Set((pos  || []).map((s) => s.trim()));
 
-    // 1) Filtrado por OCI/PO
+    // 1) Filtrar por OCI/PO
     const filtered = (allItems || []).filter(
       (it) =>
         (setOci.size && setOci.has((it.ociNumber || "").trim())) ||
         (setPo.size  && setPo.has((it.poNumber  || "").trim()))
     );
 
-    // 2) Dedup por clave estable oci|po|code|lot (TRIM siempre)
+    // 2) Deduplicar por oci|po|code|lot
     const toKey = (it) =>
       [
         (it.ociNumber || "").trim(),
@@ -99,19 +99,13 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
       ].join("|");
 
     const preMap = new Map();
-    for (const it of filtered) {
-      preMap.set(toKey(it), it);
-    }
-    const preUnique = Array.from(preMap.values());
+    for (const it of filtered) preMap.set(toKey(it), it);
 
-    // 3) Enrichment
-    const enriched = enrich(preUnique);
-
-    // 4) Dedup otra vez post-enrichment por la misma clave
+    // 3) Enrich y volver a deduplicar
+    const enriched = enrich(Array.from(preMap.values()));
     const postMap = new Map();
-    for (const it of enriched) {
-      postMap.set(toKey(it), it);
-    }
+    for (const it of enriched) postMap.set(toKey(it), it);
+
     return Array.from(postMap.values());
   }, [allItems, ocis, pos, enrich]);
 
@@ -168,7 +162,7 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
           ))}
         </div>
 
-        {/* Contenido - SOLO UNA LISTA */}
+        {/* Contenido */}
         <div className="p-4 overflow-y-auto h-[calc(100%-210px)]">
           {tab === "items" && (
             <>
@@ -184,37 +178,41 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
 
               <div className="space-y-3">
                 {items.map((it) => {
+                  // clave única estable
                   const key = [
                     (it.ociNumber || "").trim(),
                     (it.poNumber || "").trim(),
                     (it.presentationCode || "").trim(),
                     (it.lotNumber || "").trim(),
                   ].join("|");
+
                   return (
                     <div key={key} className="bg-muted rounded-lg p-4">
+                      {/* Encabezado del item */}
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="font-medium text-foreground">
                             {it.productName || it.presentationCode || "Product"}
                           </div>
+                          {/* 🔹 Encabezado SIN 'Lot' para no duplicar abajo */}
                           <div className="text-xs text-muted-foreground">
                             Code: {it.presentationCode || "—"}
-                            {it.lotNumber ? <> • Lot: {it.lotNumber}</> : null}
                             {it.expiryDate ? <> • Exp: {fmtDate(it.expiryDate)}</> : null}
                           </div>
                         </div>
+                        {/* 🔹 Precio SOLO aquí (se quitó del grid) */}
                         <div className="text-right text-sm text-muted-foreground">
                           {(it.currency || "USD") + " " + Number(it.unitPrice || 0).toFixed(2)}
                         </div>
                       </div>
 
-                      <div className="mt-2 grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
+                      {/* Detalle en grilla (sin repetir precio) */}
+                      <div className="mt-2 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                         <Field label="OCI">{it.ociNumber || "—"}</Field>
                         <Field label="PO">{it.poNumber || "—"}</Field>
                         <Field label="QC Status"><Pill tone="emerald">{it.qcStatus || "—"}</Pill></Field>
                         <Field label="Lot">{it.lotNumber || "—"}</Field>
                         <Field label="Qty">{it.qty ?? 0}</Field>
-                        <Field label="Unit Price">{(it.currency || "USD") + " " + (it.unitPrice ?? 0)}</Field>
                       </div>
                     </div>
                   );
