@@ -7,11 +7,14 @@ import path from "node:path";
 
 export default defineConfig({
   build: {
-    outDir: "dist",              // <- importante: dist
+    outDir: "dist",
     chunkSizeWarningLimit: 2000,
   },
   resolve: {
-    alias: { "@": path.resolve(__dirname, "src") },
+-   alias: { "@": path.resolve(__dirname, "src") },
++   alias: { "@": path.resolve(__dirname, "src") },
++   // Permite omitir la extensión en los imports (utils -> utils.js)
++   extensions: [".mjs", ".js", ".jsx", ".ts", ".tsx", ".json"],
   },
   plugins: [tsconfigPaths(), react(), tagger()],
   server: {
