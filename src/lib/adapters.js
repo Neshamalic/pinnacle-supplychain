@@ -64,7 +64,7 @@ export const mapTenderItems = (row = {}) => {
   ]);
   const stockCoverageDays = sc === undefined ? undefined : toNumber(sc);
 
-  // NUEVO: período de contrato (para filtrar en la tabla)
+  // Período de contrato (para filtros)
   const contractStart = pick(row, ["contract_start", "contractStart", "start_date"]);
   const contractEnd = pick(row, ["contract_end", "contractEnd", "end_date"]);
 
@@ -118,7 +118,7 @@ export const mapPurchaseOrders = (row = {}) => {
 /** ============ PURCHASE ORDER ITEMS (líneas) ========== */
 export const mapPurchaseOrderItems = (row = {}) => {
   const ordered = toNumber(pick(row, ["ordered_qty", "qty", "quantity"]));
-  const price = toNumber(pick(row, ["unit_price", "price"]));
+  const price = toNumber(pick(row, ["unit_price", "price", "unit_price_usd"]));
   return {
     poNumber: str(pick(row, ["po_number", "po", "poNumber"]) || ""),
     presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
@@ -134,13 +134,15 @@ export const mapPurchaseOrderItems = (row = {}) => {
 
 /** ===================== IMPORTS ====================== */
 export const mapImports = (row = {}) => {
+  // ID de shipment normalizado
   const shipmentId = str(pick(row, ["shipment_id", "shipment", "shipmentId", "id"]) || "");
   const oci = str(pick(row, ["oci_number", "oci"]) || "");
   const po = str(pick(row, ["po_number", "po"]) || "");
 
-  let importStatus = str(pick(row, ["import_status", "customs_status"]) || "").toLowerCase();
-  if (importStatus === "in customs") importStatus = "transit";
-  if (importStatus === "cleared") importStatus = "warehouse";
+  // Normalización de estado
+  let importStatus = str(pick(row, ["import_status", "status", "customs_status"]) || "").toLowerCase();
+  if (importStatus === "in customs" || importStatus === "customs") importStatus = "transit";
+  if (importStatus === "cleared" || importStatus === "arrived") importStatus = "warehouse";
 
   return {
     id: shipmentId || oci || po || str(row.id || ""),
@@ -149,24 +151,44 @@ export const mapImports = (row = {}) => {
     poNumber: po,
     transportType: str(pick(row, ["transport_type", "transport", "mode"]) || "").toLowerCase(),
     eta: toDateISO(pick(row, ["eta", "arrival_date", "arrival"])),
-    importStatus, // 'transit' | 'warehouse'
+    importStatus, // 'transit' | 'warehouse' | etc.
+    qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
+    customsStatus: str(pick(row, ["customs_status", "customs", "in_customs"]) || "").toLowerCase(),
+    location: str(pick(row, ["location", "warehouse", "site", "port"]) || ""),
     totalCostUsd: toNumber(pick(row, ["cif_cost_usd", "total_cost_usd", "cost_usd"])),
+    totalCostClp: toNumber(pick(row, ["total_cost_clp", "cost_clp", "amount_clp"])),
     _raw: row,
   };
 };
 
 /** ================== IMPORT ITEMS ==================== */
 export const mapImportItems = (row = {}) => {
-  return {
-    poNumber: str(pick(row, ["po_number", "po", "poNumber"]) || ""),
-    ociNumber: str(pick(row, ["oci_number", "oci"])),
-    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
+  // ¡IMPORTANTE!: incluir shipmentId para poder filtrar correctamente en el Drawer
+  const shipmentId = str(pick(row, ["shipment_id", "shipmentId", "shipment", "ShipmentId"]) || "");
+
+  const normalized = {
+    shipmentId,
+    poNumber: str(pick(row, ["po_number", "po", "PO", "poNumber"]) || ""),
+    ociNumber: str(pick(row, ["oci_number", "oci", "OCI"]) || ""),
+    presentationCode: str(pick(row, ["presentation_code", "product_code", "sku", "code"]) || ""),
+    productName: str(pick(row, ["product_name", "name", "presentation_name"]) || ""),
+    packageUnits: toNumber(pick(row, ["package_units", "units_per_pack"])),
     lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
     qty: toNumber(pick(row, ["qty", "quantity"])),
-    unitPrice: toNumber(pick(row, ["unit_price", "price"])),
+    unitPrice: toNumber(pick(row, ["unit_price_usd", "unit_price", "price", "unitPrice"])),
     currency: str(pick(row, ["currency", "curr"]) || "USD").toUpperCase(),
-    qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
+    qcStatus: str(pick(row, ["qc_status", "qcStatus", "quality_status", "qc"]) || "").toLowerCase(),
+    expiryDate: toDateISO(pick(row, ["expiry_date", "expiry", "exp_date"])),
     _raw: row,
+  };
+
+  // Alias para compatibilidad con componentes existentes
+  return {
+    ...normalized,
+    unit_price_usd: normalized.unitPrice,
+    unit_price: normalized.unitPrice,
+    lot_number: normalized.lotNumber,
+    presentation_code: normalized.presentationCode,
   };
 };
 
@@ -206,21 +228,27 @@ export const mapDemand = (row = {}) => {
 
 /** ================== COMMUNICATIONS ================= */
 export const mapCommunications = (row = {}) => {
+  const content = str(pick(row, ["content", "body", "text"]) || "");
+  const previewExisting = str(pick(row, ["preview", "snippet"]) || "");
+  const preview = previewExisting || content.slice(0, 160);
+
+  // linked_type esperado: "orders" | "imports" | "tender"
+  const linkedType = str(pick(row, ["linked_type", "entity_type", "link_type"]) || "").toLowerCase();
+
   return {
     id: str(pick(row, ["id", "comm_id"]) || ""),
     createdDate: toDateISO(pick(row, ["created_date", "date", "created"])),
-    type: str(pick(row, ["type", "channel"]) || "").toLowerCase(),
+    type: str(pick(row, ["type", "channel"]) || "").toLowerCase(), // meeting | mail | call | whatsapp | other
     subject: str(pick(row, ["subject", "title"]) || ""),
-    participants: str(pick(row, ["participants", "from_to", "people"]) || ""),
-    content: str(pick(row, ["content", "body", "text"]) || ""),
-    preview: str(pick(row, ["preview", "snippet"]) || ""),
-    linked_type: str(pick(row, ["linked_type", "entity_type", "link_type"]) || "").toLowerCase(),
+    participants: str(pick(row, ["participants", "from_to", "people"]) || ""), // "Name1@... Name2@..."
+    content,
+    preview,
+    linked_type: linkedType,
     linked_id: str(pick(row, ["linked_id", "entity_id", "link_id"]) || ""),
+    unread: String(pick(row, ["unread", "is_unread"])) === "true" ? true : !!pick(row, ["unread"]),
     _raw: row,
   };
 };
 
 /** ================ Export utils ====================== */
 export const _utils = { str, toNumber, toDateISO, pick };
-
-
