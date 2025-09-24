@@ -8,6 +8,7 @@ import { usePresentationCatalog } from "@/lib/catalog";
 import CommunicationList from "@/components/CommunicationList";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
 
+const cx = (...c) => c.filter(Boolean).join(" ");
 const fmtDate = (iso) => {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -15,37 +16,71 @@ const fmtDate = (iso) => {
     ? "—"
     : new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
 };
+
+const tonePill = (t) => {
+  const v = String(t || "").toLowerCase();
+  if (v.includes("warehouse")) return "bg-emerald-100 text-emerald-700 ring-emerald-200";
+  if (v.includes("transit")) return "bg-amber-100 text-amber-800 ring-amber-200";
+  if (v === "air") return "bg-sky-100 text-sky-700 ring-sky-200";
+  if (v === "sea") return "bg-indigo-100 text-indigo-700 ring-indigo-200";
+  if (v.includes("approved")) return "bg-emerald-100 text-emerald-700 ring-emerald-200";
+  if (v.includes("pending") || v.includes("progress")) return "bg-amber-100 text-amber-800 ring-amber-200";
+  if (v.includes("rejected") || v.includes("fail")) return "bg-rose-100 text-rose-700 ring-rose-200";
+  return "bg-slate-100 text-slate-700 ring-slate-200";
+};
+
 const Pill = ({ children }) => (
-  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs bg-slate-100 text-slate-700 ring-1 ring-slate-200">
+  <span className={cx("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1", tonePill(children))}>
     {children || "—"}
   </span>
 );
 
+function InfoCard({ label, value }) {
+  return (
+    <div className="rounded-lg border p-3 bg-background">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-sm font-medium">{value ?? "—"}</div>
+    </div>
+  );
+}
+function Field({ label, value }) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-sm">{value ?? "—"}</div>
+    </div>
+  );
+}
+
 export default function ImportDetailsDrawer({ isOpen, onClose, importRow }) {
-  const imp = importRow;
+  const imp = importRow || {};
   const [tab, setTab] = useState("items");
   const [openNewComm, setOpenNewComm] = useState(false);
 
-  // items de la hoja import_items
-  const { rows: rawItems = [], loading } = useSheet("import_items", mapImportItems);
+  const shipmentId = String(imp?.shipmentId || "").trim();
+
+  // Leemos items desde varios posibles nombres de hoja
+  const { rows: itemsA = [], loading: la } = useSheet("import_items", mapImportItems);
+  const { rows: itemsB = [], loading: lb } = useSheet("imports_items", mapImportItems);
+  const { rows: itemsC = [], loading: lc } = useSheet("Import Items", mapImportItems);
+
+  const allRawItems = useMemo(() => [...itemsA, ...itemsB, ...itemsC], [itemsA, itemsB, itemsC]);
+  const loading = la || lb || lc;
+
   const { enrich } = usePresentationCatalog();
-
-  const shipmentId = imp?.shipmentId || "";
-
-  // filtra por shipmentId (clave)
   const items = useMemo(() => {
-    const filtered = (rawItems || []).filter((r) => String(r.shipmentId || "") === String(shipmentId));
+    const filtered = allRawItems.filter((r) => String(r.shipmentId || "").trim() === shipmentId);
     return enrich(filtered);
-  }, [rawItems, shipmentId, enrich]);
+  }, [allRawItems, shipmentId, enrich]);
 
-  // refresco communications tras guardar
-  const { refetch: refetchComms } = useSheet("communications", mapCommunications);
+  // refrescar Communications tras guardar
+  const { refetch: refetchComms } = useSheet("communications", () => ({}));
   const handleSavedComm = async () => {
     if (typeof refetchComms === "function") await refetchComms();
     setOpenNewComm(false);
   };
 
-  if (!isOpen || !imp) return null;
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[2100] bg-black/40 flex justify-end">
@@ -87,6 +122,7 @@ export default function ImportDetailsDrawer({ isOpen, onClose, importRow }) {
           ))}
         </div>
 
+        {/* Content */}
         <div className="p-4 overflow-y-auto h-[calc(100%-210px)]">
           {tab === "items" && (
             <div className="space-y-3">
@@ -96,7 +132,7 @@ export default function ImportDetailsDrawer({ isOpen, onClose, importRow }) {
                 const qc   = it.qcStatus;
                 const lot  = it.lotNumber;
                 const qty  = it.qty;
-                const unit = it.unitPrice; // normalizado en adapter
+                const unit = it.unitPrice;
                 const cur  = it.currency || "USD";
                 const exp  = it.expiryDate;
 
@@ -153,6 +189,7 @@ export default function ImportDetailsDrawer({ isOpen, onClose, importRow }) {
         </div>
       </div>
 
+      {/* Modal New Communication (pre-relleno) */}
       {openNewComm && (
         <NewCommunicationModal
           open={openNewComm}
@@ -162,23 +199,6 @@ export default function ImportDetailsDrawer({ isOpen, onClose, importRow }) {
           defaultLinkedId={shipmentId}
         />
       )}
-    </div>
-  );
-}
-
-function InfoCard({ label, value }) {
-  return (
-    <div className="rounded-lg border p-3 bg-background">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-sm font-medium">{value ?? "—"}</div>
-    </div>
-  );
-}
-function Field({ label, value }) {
-  return (
-    <div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-sm">{value ?? "—"}</div>
     </div>
   );
 }
