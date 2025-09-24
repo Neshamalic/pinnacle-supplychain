@@ -54,7 +54,7 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
   const [tab, setTab] = useState("items");
   const [openNewComm, setOpenNewComm] = useState(false);
 
-  // 1) Usar ocis/pos que vienen DESDE la tabla; si no vinieran, buscar en la hoja imports
+  // 1) Usar ocis/pos recibidos; si no vienen, consultar imports como fallback
   const { rows: importsRows = [] } = useSheet("imports", mapImports);
   const ocis = useMemo(() => {
     if (Array.isArray(importRow?.ocis) && importRow.ocis.length) return importRow.ocis;
@@ -72,7 +72,7 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
   const transportType = importRow?.transportType || importsRows.find((r) => r.shipmentId === shipmentId)?.transportType || "";
   const importStatus  = importRow?.importStatus  || importsRows.find((r) => r.shipmentId === shipmentId)?.importStatus  || "";
 
-  // 2) Items (filtrar por cualquiera de los OCI/PO)
+  // 2) Items (filtrar por OCI/PO) + DEDUP (para evitar duplicados cuando matchea por ambos)
   const { rows: allItems = [], loading: itemsLoading } = useSheet("import_items", mapImportItems);
   const { enrich } = usePresentationCatalog();
   const items = useMemo(() => {
@@ -84,7 +84,24 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
         (setOci.size && setOci.has((it.ociNumber || "").trim())) ||
         (setPo.size  && setPo.has((it.poNumber  || "").trim()))
     );
-    return enrich(filtered);
+
+    // DEDUP por oci|po|code|lot
+    const seen = new Set();
+    const dedup = [];
+    for (const it of filtered) {
+      const key = [
+        (it.ociNumber || "").trim(),
+        (it.poNumber || "").trim(),
+        (it.presentationCode || "").trim(),
+        (it.lotNumber || "").trim(),
+      ].join("|");
+      if (!seen.has(key)) {
+        seen.add(key);
+        dedup.push(it);
+      }
+    }
+
+    return enrich(dedup);
   }, [allItems, ocis, pos, enrich]);
 
   // 3) Communications refresh
@@ -95,7 +112,8 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
   };
 
   const transportTone = (t) => (t?.toLowerCase?.() === "air" ? "blue" : t?.toLowerCase?.() === "sea" ? "indigo" : "slate");
-  const statusTone = (s) => (s?.toLowerCase?.() === "transit" ? "amber" : s?.toLowerCase?.() === "warehouse" ? "slate" : "gray");
+  const statusTone = (s) =>
+    (s?.toLowerCase?.() === "transit" ? "amber" : ["warehouse", "wharehouse"].includes((s || "").toLowerCase()) ? "slate" : "gray");
 
   return (
     <div className="fixed inset-0 z-[2100] bg-black/40 flex justify-end">
@@ -117,7 +135,7 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
           <InfoCard label="PO Number" value={pos.length ? pos.join(", ") : "—"} />
           <InfoCard label="ETA" value={fmtDate(eta)} />
           <InfoCard label="Transport" value={<Pill tone={transportTone(transportType)}>{transportType || "—"}</Pill>} />
-          <InfoCard label="Import Status" value={<Pill tone={statusTone(importStatus)}>{importStatus || "—"}</Pill>} />
+          <InfoCard label="Import Status" value={<Pill tone={statusTone(importStatus)}>{(importStatus || "").toLowerCase() === "wharehouse" ? "warehouse" : (importStatus || "—")}</Pill>} />
         </div>
 
         {/* Tabs */}
