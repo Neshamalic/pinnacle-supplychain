@@ -1,93 +1,99 @@
 // src/pages/communications-log/components/CommunicationEntry.jsx
 import React, { useState } from "react";
-import Button from "@/components/ui/Button";
 import Icon from "@/components/AppIcon";
 import { API_BASE, postJSON, formatDate } from "@/lib/utils";
 
+const Pill = ({ children, tone = "gray" }) => {
+  const tones = {
+    blue: "bg-blue-100 text-blue-800",
+    gray: "bg-gray-100 text-gray-700",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${tones[tone] || tones.gray}`}>
+      {children}
+    </span>
+  );
+};
+
 export default function CommunicationEntry({ comm, onChange }) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [justDeleted, setJustDeleted] = useState(false);
-  const id = comm.id || "";
+  const [undoVisible, setUndoVisible] = useState(false);
+  const [timer, setTimer] = useState(null);
 
-  const toggle = async () => {
+  const toggle = async (e) => {
+    e?.preventDefault?.(); e?.stopPropagation?.();
     const next = !open;
     setOpen(next);
-    if (next && String(comm.unread || "").toLowerCase() === "true") {
-      try {
-        await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-          id, created_date: comm.createdDate, subject: comm.subject, unread: "false"
-        });
-        onChange?.();
-      } catch { /* ignore */ }
+    if (next && comm.unread) {
+      await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
+        row: { id: comm.id, unread: "false" }
+      });
+      onChange?.();
     }
   };
 
-  const softDelete = async () => {
+  const doDelete = async (e) => {
+    e?.preventDefault?.(); e?.stopPropagation?.();
+    if (!comm?.id) { alert('No se puede eliminar: falta "id".'); return; }
     if (!window.confirm("Are you sure you want to delete?")) return;
-    try {
-      setBusy(true);
-      await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-        id, created_date: comm.createdDate, subject: comm.subject, deleted: "true"
-      });
-      setJustDeleted(true);
-      onChange?.();
-      setTimeout(() => setJustDeleted(false), 6000);
-    } catch (err) {
-      alert("Error al eliminar: " + String(err));
-    } finally {
-      setBusy(false);
-    }
+
+    await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
+      row: { id: comm.id, deleted: "true" }
+    });
+    setUndoVisible(true);
+    if (timer) clearTimeout(timer);
+    const t = setTimeout(() => setUndoVisible(false), 5000);
+    setTimer(t);
+    onChange?.();
   };
 
-  const undo = async () => {
-    try {
-      setBusy(true);
-      await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-        id, created_date: comm.createdDate, subject: comm.subject, deleted: ""
-      });
-      setJustDeleted(false);
-      onChange?.();
-    } catch (err) {
-      alert("Error al restaurar: " + String(err));
-    } finally {
-      setBusy(false);
-    }
+  const undo = async (e) => {
+    e?.preventDefault?.(); e?.stopPropagation?.();
+    if (timer) clearTimeout(timer);
+    await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
+      row: { id: comm.id, deleted: "" }
+    });
+    setUndoVisible(false);
+    onChange?.();
   };
 
   return (
     <div className="rounded-lg border bg-card">
-      <div className="flex items-center gap-2 p-3">
-        <button className="text-muted-foreground hover:text-foreground" onClick={toggle} aria-label="Toggle">
+      <button
+        type="button"
+        onClick={toggle}
+        className="w-full text-left p-3 flex items-start gap-2 hover:bg-muted/50"
+      >
+        <div className="text-muted-foreground mt-0.5">
           <Icon name={open ? "ChevronDown" : "ChevronRight"} size={16} />
-        </button>
-        <div className="font-medium text-sm">{comm.subject || "(sin asunto)"}</div>
-        {String(comm.unread || "").toLowerCase() === "true" && (
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-blue-100 text-blue-700">Unread</span>
-        )}
-        <div className="ml-auto text-xs text-muted-foreground">{formatDate(comm.createdDate)}</div>
-        <Button size="xs" variant="secondary" iconName="Trash2" onClick={softDelete} disabled={busy}>
-          {busy ? "Deleting…" : "Delete"}
-        </Button>
-      </div>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <div className="font-medium text-sm truncate">{comm.subject || "(sin asunto)"}</div>
+            {comm.unread ? <Pill tone="blue">Unread</Pill> : <Pill>Read</Pill>}
+            <div className="ml-auto text-xs text-muted-foreground">{formatDate(comm.createdDate)}</div>
+          </div>
+          <div className="text-xs text-muted-foreground mt-1">
+            {(comm.type || "other")} • {(comm.participants || "—")}
+          </div>
+          {!open && comm.preview && (
+            <div className="mt-1 text-sm text-muted-foreground truncate">{comm.preview}</div>
+          )}
+        </div>
+      </button>
 
-      {justDeleted && (
+      {undoVisible && (
         <div className="px-3 pb-2">
           <div className="rounded-md bg-amber-50 border border-amber-200 p-2 text-[13px] flex items-center gap-2">
-            <span>Deleted.</span>
-            <Button size="xs" variant="secondary" onClick={undo}>Undo</Button>
+            <span>Message deleted</span>
+            <button type="button" className="underline" onClick={undo}>Undo</button>
           </div>
         </div>
       )}
 
       {open && (
-        <div className="px-4 pb-4 text-sm">
-          <div className="text-xs text-muted-foreground mb-1">
-            {(comm.type || "—")} • {(comm.participants || "—")}
-          </div>
-          <div className="whitespace-pre-wrap">
-            {comm.content || comm.preview || "—"}
-          </div>
+        <div className="px-4 pb-4 text-sm whitespace-pre-wrap">
+          {comm.content || comm.preview || "—"}
         </div>
       )}
     </div>
