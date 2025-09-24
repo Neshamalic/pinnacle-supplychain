@@ -12,7 +12,6 @@ const typeIcon = (t) => {
   if (v === "whatsapp") return "MessageCircle";
   return "FileText";
 };
-
 const badgeByEntity = (ltRaw) => {
   const v = String(ltRaw || "").toLowerCase();
   if (["orders", "order", "po", "purchase_order"].includes(v))
@@ -32,20 +31,16 @@ export default function CommunicationEntry({ comm, onDeleted, onUpdated }) {
   const badge = badgeByEntity(comm.linked_type);
 
   const toggle = async () => {
-    const now = !expanded;
-    setExpanded(now);
-
-    // marcar leído al expandir
-    if (now && comm.unread) {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && comm.unread) {
       try {
         await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
           id: comm.id,
           unread: false,
         });
         onUpdated?.({ ...comm, unread: false });
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
   };
 
@@ -55,7 +50,6 @@ export default function CommunicationEntry({ comm, onDeleted, onUpdated }) {
       return;
     }
     if (!window.confirm("Are you sure you want to delete?")) return;
-
     setDeleting(true);
     try {
       await postJSON(`${API_BASE}?route=write&action=delete&name=communications`, {
@@ -69,11 +63,32 @@ export default function CommunicationEntry({ comm, onDeleted, onUpdated }) {
     }
   };
 
+  // body colapsable
+  const Body = () => (
+    <div className="mt-3 text-sm relative">
+      <div
+        className={expanded ? "whitespace-pre-wrap" : "whitespace-pre-wrap overflow-hidden"}
+        style={expanded ? {} : { maxHeight: 72 }} // ~3 líneas
+      >
+        {expanded ? (comm.content || "—") : (comm.preview || "—")}
+      </div>
+      {(comm.content || "").length > (comm.preview || "").length ? (
+        <div className="mt-2">
+          <button
+            className="text-primary text-sm underline underline-offset-2"
+            onClick={toggle}
+          >
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
     <div className="rounded-lg border bg-white p-4">
-      {/* header */}
       <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 cursor-pointer" onClick={toggle}>
+        <div className="flex-1">
           <div className="flex items-center gap-2">
             <Icon name={ico} size={16} />
             <div className="font-medium text-foreground">
@@ -107,16 +122,8 @@ export default function CommunicationEntry({ comm, onDeleted, onUpdated }) {
         </div>
       </div>
 
-      {/* body */}
-      <div className="mt-3 text-sm whitespace-pre-wrap">
-        {!expanded ? (
-          <span className="text-muted-foreground">{comm.preview || "—"}</span>
-        ) : (
-          <span>{comm.content || "—"}</span>
-        )}
-      </div>
+      <Body />
 
-      {/* link */}
       {comm.linked_type && comm.linked_id ? (
         <div className="mt-3 text-xs text-muted-foreground">
           Linked: {comm.linked_type} • {comm.linked_id}
