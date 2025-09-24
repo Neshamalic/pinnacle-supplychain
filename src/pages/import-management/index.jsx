@@ -1,20 +1,18 @@
 // src/pages/import-management/index.jsx
 import React, { useMemo, useState } from "react";
-import { Eye, RefreshCcw, Package, Truck } from "lucide-react";
+import { Eye, Package, Truck } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
 import { mapImports, mapImportItems } from "@/lib/adapters";
 import ImportDetailsDrawer from "./components/ImportDetailsDrawer";
 
-// helpers “for dummies”
 const fmtDate = (v) => {
   if (!v) return "—";
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("es-CL", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 };
-const tone = (t) => ({
-  slab: "rounded-xl shadow-sm border",
+const tone = () => ({
   pill: "inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium",
   tones: {
     blue: "bg-blue-100 text-blue-700",
@@ -42,7 +40,7 @@ const pillStatus = (s = "") => {
 };
 
 export default function ImportManagement() {
-  // 1) Leemos “imports” y “import_items”
+  // Hojas
   const { rows: importsRaw = [], loading, error, reload } = useSheet("imports", mapImports);
   const { rows: importItems = [] } = useSheet("import_items", mapImportItems);
 
@@ -50,7 +48,7 @@ export default function ImportManagement() {
   const [openDrawer, setOpenDrawer] = useState(false);
   const [selectedRow, setSelectedRow] = useState(null);
 
-  // 2) Index de items por OCI/PO (sirve para contar productos y filtrar fantasmas)
+  // Index por OCI/PO (para contar productos y cruzar)
   const itemsByOci = useMemo(() => {
     const m = new Map();
     for (const r of importItems) {
@@ -73,55 +71,71 @@ export default function ImportManagement() {
     return m;
   }, [importItems]);
 
-  // 3) Agrupar por shipmentId y descartar “fantasmas”
+  // Agrupar por shipmentId y PASAR ocis/pos al Drawer
   const shipments = useMemo(() => {
     const byShip = new Map();
 
     for (const row of importsRaw) {
       const sid = (row.shipmentId || "").trim();
+      if (!sid) continue;
+
       const oci = (row.ociNumber || "").trim();
       const po  = (row.poNumber  || "").trim();
 
-      // ¿Tiene al menos un item asociado por OCI o PO?
-      const itemCount =
-        (oci && itemsByOci.get(oci)?.length) ? itemsByOci.get(oci).length :
-        (po  && itemsByPo.get(po)?.length)  ? itemsByPo.get(po).length  : 0;
-
-      // Si no hay items y tampoco OCI/PO, lo consideramos “fantasma” y lo omitimos
-      if (!itemCount && !oci && !po) continue;
-
       if (!byShip.has(sid)) {
         byShip.set(sid, {
-          id: sid || oci || po || "—",
+          id: sid,
           shipmentId: sid,
           transportType: row.transportType || "",
           importStatus: row.importStatus || "",
           eta: row.eta || "",
-          productCount: itemCount,
+          ocis: new Set(),
+          pos: new Set(),
+          productCount: 0,
         });
-      } else {
-        // Merge simple: conservar primer valor y completar campos vacíos
-        const agg = byShip.get(sid);
-        agg.transportType ||= row.transportType || "";
-        agg.importStatus ||= row.importStatus || "";
-        agg.eta ||= row.eta || "";
-        // si en otra fila de mismo shipment encontramos más items, sumar máximo
-        agg.productCount = Math.max(agg.productCount, itemCount);
       }
+
+      const agg = byShip.get(sid);
+      if (oci) agg.ocis.add(oci);
+      if (po)  agg.pos.add(po);
+
+      // completar info si falta
+      if (!agg.transportType && row.transportType) agg.transportType = row.transportType;
+      if (!agg.importStatus && row.importStatus)   agg.importStatus = row.importStatus;
+      if (!agg.eta && row.eta)                     agg.eta = row.eta;
     }
 
-    // Buscar texto
-    let list = Array.from(byShip.values());
+    // Calcular productCount sin doble conteo
+    for (const agg of byShip.values()) {
+      const uniq = new Set();
+      for (const oci of agg.ocis) {
+        for (const it of itemsByOci.get(oci) || []) {
+          uniq.add(`${it.ociNumber}|${it.poNumber}|${it.presentationCode}|${it.lotNumber}`);
+        }
+      }
+      for (const po of agg.pos) {
+        for (const it of itemsByPo.get(po) || []) {
+          uniq.add(`${it.ociNumber}|${it.poNumber}|${it.presentationCode}|${it.lotNumber}`);
+        }
+      }
+      agg.productCount = uniq.size;
+    }
+
+    let list = Array.from(byShip.values()).map((r) => ({
+      ...r,
+      ocis: Array.from(r.ocis),
+      pos: Array.from(r.pos),
+    }));
+
     if (q.trim()) {
       const s = q.trim().toLowerCase();
       list = list.filter(r => (r.shipmentId || "").toLowerCase().includes(s));
     }
-    // Ordenar por shipmentId
+
     list.sort((a,b) => (a.shipmentId || "").localeCompare(b.shipmentId || ""));
     return list;
   }, [importsRaw, itemsByOci, itemsByPo, q]);
 
-  // 4) Métricas (cards)
   const metrics = useMemo(() => {
     const total = shipments.length;
     const transit = shipments.filter(r => (r.importStatus || "").toLowerCase() === "transit").length;
@@ -143,39 +157,24 @@ export default function ImportManagement() {
         </Button>
       </div>
 
-      {/* KPI cards grandes y con color */}
+      {/* KPI */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <KpiCard
-          icon={<Package size={20} />}
-          label="Total Shipments"
-          value={metrics.total}
-          className="bg-indigo-50 text-indigo-700 border-indigo-200"
-        />
-        <KpiCard
-          icon={<Truck size={20} />}
-          label="In Transit"
-          value={metrics.transit}
-          className="bg-amber-50 text-amber-700 border-amber-200"
-        />
-        <KpiCard
-          icon={<Truck size={20} />}
-          label="Warehouse"
-          value={metrics.warehouse}
-          className="bg-slate-50 text-slate-700 border-slate-200"
-        />
+        <KpiCard icon={<Package size={20} />} label="Total Shipments" value={metrics.total}
+                 className="bg-indigo-50 text-indigo-700 border-indigo-200" />
+        <KpiCard icon={<Truck size={20} />} label="In Transit" value={metrics.transit}
+                 className="bg-amber-50 text-amber-700 border-amber-200" />
+        <KpiCard icon={<Truck size={20} />} label="Warehouse" value={metrics.warehouse}
+                 className="bg-slate-50 text-slate-700 border-slate-200" />
       </div>
 
       {/* Buscador */}
       <div className="mb-4">
-        <div className="relative">
-          <input
-            className="w-full rounded-lg border px-10 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-            placeholder="Search shipments by Shipment ID..."
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <SearchIcon />
-        </div>
+        <input
+          className="w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+          placeholder="Search shipments by Shipment ID..."
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
 
       {/* Tabla */}
@@ -192,12 +191,8 @@ export default function ImportManagement() {
             </tr>
           </thead>
           <tbody className="divide-y">
-            {loading && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
-            )}
-            {error && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-red-600">Error: {String(error)}</td></tr>
-            )}
+            {loading && <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>}
+            {error && <tr><td colSpan={6} className="px-4 py-8 text-center text-red-600">Error: {String(error)}</td></tr>}
             {!loading && !error && shipments.length === 0 && (
               <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No imports found.</td></tr>
             )}
@@ -220,12 +215,11 @@ export default function ImportManagement() {
         </table>
       </div>
 
-      {/* Drawer de detalles */}
       {openDrawer && (
         <ImportDetailsDrawer
           open
           onClose={() => setOpenDrawer(false)}
-          importRow={selectedRow}
+          importRow={selectedRow} // <-- trae ocis y pos
         />
       )}
     </div>
@@ -238,15 +232,9 @@ function Th({ children }) {
 function Td({ children }) {
   return <td className="px-4 py-3 text-sm">{children}</td>;
 }
-function SearchIcon() {
-  return <RefreshCcw className="hidden" />; // sólo para evitar tree-shaking de lucide; el real icono lo hacemos con CSS:
-}
-
-/* KPI card */
 function KpiCard({ icon, label, value, className = "" }) {
-  const base = "rounded-xl border p-4 flex items-center gap-3";
   return (
-    <div className={`${base} ${className}`}>
+    <div className={`rounded-xl border p-4 flex items-center gap-3 ${className}`}>
       <div className="p-2 rounded-lg bg-white/70">{icon}</div>
       <div>
         <div className="text-sm opacity-80">{label}</div>
