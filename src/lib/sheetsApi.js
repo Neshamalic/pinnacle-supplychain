@@ -1,130 +1,83 @@
 // src/lib/sheetsApi.js
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { API_BASE, fetchJSON, postJSON } from "@/lib/utils";
 
-// 👉 Ajusta esta URL a tu Web App de Google Apps Script (ya la usas en otras vistas)
-const BASE_URL = import.meta.env.VITE_SHEETS_API_URL;
-
-/* ----------------------------- Internos ----------------------------- */
-
-async function safeJson(res) {
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch (_) {
-    // Mensaje claro cuando el Apps Script respondió texto vacío o HTML
-    throw new Error(
-      `Respuesta no-JSON del servidor (status ${res.status}). Body: ${String(text || "").slice(0, 200)}`
-    );
-  }
-}
-
+/** ========= Core HTTP helpers ========= */
 async function getTable(name) {
-  const url = `${BASE_URL}?route=table&name=${encodeURIComponent(name)}`;
-  const res = await fetch(url, { method: "GET" });
-  const json = await safeJson(res);
-  if (!json.ok) throw new Error(json.error || `Error leyendo hoja: ${name}`);
+  const url = `${API_BASE}?route=table&name=${encodeURIComponent(name)}`;
+  const json = await fetchJSON(url);
+  if (!json?.ok) throw new Error(json?.error || "Failed to load sheet");
   return json.rows || [];
 }
 
-async function postWrite(payload) {
-  const res = await fetch(`${BASE_URL}?route=write`, {
-    method: "POST",
-    // 👇 text/plain evita problemas de CORS con Apps Script;
-    // igual mandamos JSON en el body.
-    headers: { "Content-Type": "text/plain; charset=utf-8" },
-    body: JSON.stringify(payload),
-  });
-  const json = await safeJson(res);
-  if (!json.ok) throw new Error(json.error || "Error de escritura");
-  return json;
+async function createRow(name, row) {
+  const url = `${API_BASE}?route=write&action=create&name=${encodeURIComponent(name)}`;
+  return postJSON(url, { row });
 }
 
-/* ------------------------------ Hook GET ---------------------------- */
-/**
- * Hook genérico para leer una hoja y mapear filas
- * @param {string} sheetName
- * @param {(row:any)=>any} mapFn
- */
-export function useSheet(sheetName, mapFn = (x) => x) {
+async function updateRow(name, row) {
+  // row puede incluir id o llaves alternativas
+  const url = `${API_BASE}?route=write&action=update&name=${encodeURIComponent(name)}`;
+  return postJSON(url, { row });
+}
+
+async function deleteRow(name, where) {
+  // ¡ya NO exigimos id! El Apps Script acepta where con llaves alternativas
+  const url = `${API_BASE}?route=write&action=delete&name=${encodeURIComponent(name)}`;
+  return postJSON(url, { where });
+}
+
+/** ========= Hook de lectura ========= */
+export function useSheet(name, mapper = (r) => r) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
-  const reload = async () => {
+  const refetch = useCallback(async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      setError("");
-      const raw = await getTable(sheetName);
-      const mapped = Array.isArray(raw) ? raw.map((r) => mapFn(r)) : [];
-      setRows(mapped);
-    } catch (e) {
-      setError(String(e?.message || e));
+      const raw = await getTable(name);
+      setRows(raw.map(mapper));
     } finally {
       setLoading(false);
     }
-  };
+  }, [name, mapper]);
 
   useEffect(() => {
-    reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetName]);
+    refetch();
+  }, [refetch]);
 
-  // alias "refetch" por si el componente lo prefiere
-  return useMemo(
-    () => ({ rows, loading, error, reload, refetch: reload }),
-    [rows, loading, error]
-  );
+  return { rows, loading, refetch };
 }
 
-/* ------------------------------ CRUD ------------------------------- */
-
-export async function writeRow(sheetName, row) {
-  return postWrite({ action: "create", name: sheetName, row });
+/** ========= Helpers específicos de Communications ========= */
+function commWhereFromRow(row) {
+  // Si viene id, perfecto:
+  if (row?.id) return { id: row.id };
+  // Fallback (lo acepta el Apps Script): created_date + subject + linked_type + linked_id
+  const where = {};
+  if (row?.createdDate) where.created_date = row.createdDate;
+  if (row?.subject) where.subject = row.subject;
+  if (row?.linked_type) where.linked_type = row.linked_type;
+  if (row?.linked_id) where.linked_id = row.linked_id;
+  return where;
 }
 
-export async function updateRow(sheetName, row) {
-  return postWrite({ action: "update", name: sheetName, row });
+export async function commMarkRead(row) {
+  const payload = { unread: false };
+  if (row?.id) payload.id = row.id;
+  else Object.assign(payload, commWhereFromRow(row));
+  await updateRow("communications", payload);
 }
 
-export async function deleteRow(sheetName, where) {
-  return postWrite({ action: "delete", name: sheetName, where });
+export async function commDelete(row) {
+  await deleteRow("communications", commWhereFromRow(row));
 }
 
-/* --------------------- Comunicaciones (Create) ---------------------- */
-/**
- * Crea una comunicación en la hoja "communications".
- * Acepta claves en camelCase o snake_case:
- * {
- *   type, subject, participants, content,
- *   linkedType/linked_type, linkedId/linked_id,
- *   createdDate (opcional), id (opcional)
- * }
- */
-export async function createCommunication(data = {}) {
-  const id =
-    data.id ||
-    `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+export async function commCreate(row) {
+  // Puedes enviar { type, subject, participants, content, linked_type, linked_id, ... }
+  return createRow("communications", row);
+}
 
-  const createdIso =
-    data.createdDate ||
-    data.created_date ||
-    new Date().toISOString();
-
-  const row = {
-    id,
-    created_date: createdIso,
-    type: String(data.type || "").toLowerCase(),
-    subject: data.subject || "",
-    participants: data.participants || "",
-    content: data.content || "",
-    preview: (data.content || "").slice(0, 140),
-
-    // normalizamos nombres
-    linked_type: String(data.linked_type || data.linkedType || "").toLowerCase(),
-    linked_id: String(data.linked_id || data.linkedId || ""),
-  };
-
-  // Se escribe en la hoja "communications"
-  // (Apps Script appendRow_ usará los headers existentes)
-  return writeRow("communications", row);
+export async function commUpdate(row) {
+  return updateRow("communications", row);
 }
