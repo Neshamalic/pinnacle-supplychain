@@ -1,4 +1,3 @@
-// src/pages/communications-log/components/CommunicationEntry.jsx
 import React, { useState } from "react";
 import Icon from "@/components/AppIcon";
 import { API_BASE, postJSON, formatDate } from "@/lib/utils";
@@ -15,6 +14,16 @@ const Pill = ({ children, tone = "gray" }) => {
   );
 };
 
+function buildUpdatePayload(comm, patch) {
+  const row = { ...patch };
+  if (comm.id) row.id = comm.id;
+  else {
+    row.created_date = comm.createdDate || comm.created_date || "";
+    row.subject = comm.subject || "";
+  }
+  return row;
+}
+
 export default function CommunicationEntry({ comm, onChange }) {
   const [open, setOpen] = useState(false);
   const [undoVisible, setUndoVisible] = useState(false);
@@ -26,7 +35,7 @@ export default function CommunicationEntry({ comm, onChange }) {
     setOpen(next);
     if (next && comm.unread) {
       await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-        row: { id: comm.id, unread: "false" }
+        row: buildUpdatePayload(comm, { unread: "false" })
       });
       onChange?.();
     }
@@ -34,11 +43,9 @@ export default function CommunicationEntry({ comm, onChange }) {
 
   const doDelete = async (e) => {
     e?.preventDefault?.(); e?.stopPropagation?.();
-    if (!comm?.id) { alert('No se puede eliminar: falta "id".'); return; }
     if (!window.confirm("Are you sure you want to delete?")) return;
-
     await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-      row: { id: comm.id, deleted: "true" }
+      row: buildUpdatePayload(comm, { deleted: "true" })
     });
     setUndoVisible(true);
     if (timer) clearTimeout(timer);
@@ -51,7 +58,7 @@ export default function CommunicationEntry({ comm, onChange }) {
     e?.preventDefault?.(); e?.stopPropagation?.();
     if (timer) clearTimeout(timer);
     await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-      row: { id: comm.id, deleted: "" }
+      row: buildUpdatePayload(comm, { deleted: "" })
     });
     setUndoVisible(false);
     onChange?.();
@@ -94,6 +101,16 @@ export default function CommunicationEntry({ comm, onChange }) {
       {open && (
         <div className="px-4 pb-4 text-sm whitespace-pre-wrap">
           {comm.content || comm.preview || "—"}
+          <div className="mt-3 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={doDelete}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-destructive text-destructive-foreground hover:opacity-90"
+            >
+              <Icon name="Trash2" size={14} />
+              Delete
+            </button>
+          </div>
         </div>
       )}
     </div>
