@@ -74,7 +74,7 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
   const transportType = importRow?.transportType || importsRows.find((r) => r.shipmentId === shipmentId)?.transportType || "";
   const importStatus  = importRow?.importStatus  || importsRows.find((r) => r.shipmentId === shipmentId)?.importStatus  || "";
 
-  // Items + dedup fuerte
+  // Items + deduplicación fuerte
   const { rows: allItems = [], loading: itemsLoading } = useSheet("import_items", mapImportItems);
   const { enrich } = usePresentationCatalog();
 
@@ -134,13 +134,14 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
           </Button>
         </div>
 
-        {/* Info top */}
+        {/* Info top (sólo ETA, Transport, Import Status) */}
         <div className="grid gap-3 p-4 border-b border-border bg-muted/20 md:grid-cols-3">
-          <InfoCard label="OCI Number" value={ocis.length ? ocis.join(", ") : "—"} />
-          <InfoCard label="PO Number" value={pos.length ? pos.join(", ") : "—"} />
           <InfoCard label="ETA" value={fmtDate(eta)} />
           <InfoCard label="Transport" value={<Pill tone={transportTone(transportType)}>{transportType || "—"}</Pill>} />
-          <InfoCard label="Import Status" value={<Pill tone={statusTone(importStatus)}>{(importStatus || "").toLowerCase() === "wharehouse" ? "warehouse" : (importStatus || "—")}</Pill>} />
+          <InfoCard
+            label="Import Status"
+            value={<Pill tone={statusTone(importStatus)}>{(importStatus || "").toLowerCase() === "wharehouse" ? "warehouse" : (importStatus || "—")}</Pill>}
+          />
         </div>
 
         {/* Tabs */}
@@ -163,22 +164,18 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
         </div>
 
         {/* Contenido */}
-        <div className="p-4 overflow-y-auto h-[calc(100%-210px)]">
+        <div className="p-4 overflow-y-auto h-[calc(100%-190px)]">
           {tab === "items" && (
             <>
               {itemsLoading && <div className="text-sm text-muted-foreground">Loading items…</div>}
               {!itemsLoading && items.length === 0 && (
                 <div className="text-sm text-muted-foreground">
                   No items found for this shipment.
-                  <div className="text-xs mt-1">
-                    (Se buscan por <b>OCI</b>: {ocis.length ? ocis.join(", ") : "—"} y/o <b>PO</b>: {pos.length ? pos.join(", ") : "—"} en la hoja <i>import_items</i>).
-                  </div>
                 </div>
               )}
 
               <div className="space-y-3">
                 {items.map((it) => {
-                  // clave única estable
                   const key = [
                     (it.ociNumber || "").trim(),
                     (it.poNumber || "").trim(),
@@ -194,19 +191,18 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
                           <div className="font-medium text-foreground">
                             {it.productName || it.presentationCode || "Product"}
                           </div>
-                          {/* 🔹 Encabezado SIN 'Lot' para no duplicar abajo */}
                           <div className="text-xs text-muted-foreground">
                             Code: {it.presentationCode || "—"}
                             {it.expiryDate ? <> • Exp: {fmtDate(it.expiryDate)}</> : null}
                           </div>
                         </div>
-                        {/* 🔹 Precio SOLO aquí (se quitó del grid) */}
+                        {/* Precio sólo aquí */}
                         <div className="text-right text-sm text-muted-foreground">
                           {(it.currency || "USD") + " " + Number(it.unitPrice || 0).toFixed(2)}
                         </div>
                       </div>
 
-                      {/* Detalle en grilla (sin repetir precio) */}
+                      {/* Detalle en grilla */}
                       <div className="mt-2 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                         <Field label="OCI">{it.ociNumber || "—"}</Field>
                         <Field label="PO">{it.poNumber || "—"}</Field>
