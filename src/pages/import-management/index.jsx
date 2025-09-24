@@ -12,6 +12,16 @@ const fmtDate = (v) => {
   if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("es-CL", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 };
+
+// Normaliza valores de estado que vienen distintos (wharehouse/cleared/in customs…)
+const normalizeStatus = (s = "") => {
+  const v = s.toLowerCase().trim();
+  if (v === "wharehouse") return "warehouse";
+  if (v === "cleared") return "warehouse";
+  if (v === "in customs") return "transit";
+  return v;
+};
+
 const tone = () => ({
   pill: "inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium",
   tones: {
@@ -30,17 +40,16 @@ const pillTransport = (s = "") => {
 };
 const pillStatus = (s = "") => {
   const { pill, tones } = tone();
-  const x = s.toLowerCase();
+  const x = normalizeStatus(s);
   const cls =
     x === "transit" ? tones.amber :
     x === "warehouse" ? tones.slate :
     x === "delivered" || x === "arrived" ? tones.green :
     tones.gray;
-  return <span className={`${pill} ${cls}`}>{s || "—"}</span>;
+  return <span className={`${pill} ${cls}`}>{x || "—"}</span>;
 };
 
 export default function ImportManagement() {
-  // Hojas
   const { rows: importsRaw = [], loading, error, reload } = useSheet("imports", mapImports);
   const { rows: importItems = [] } = useSheet("import_items", mapImportItems);
 
@@ -48,14 +57,14 @@ export default function ImportManagement() {
   const [openDrawer, setOpenDrawer] = useState(false);
   const [selectedRow, setSelectedRow] = useState(null);
 
-  // Index por OCI/PO (para contar productos y cruzar)
+  // Índices por OCI/PO para contar productos
   const itemsByOci = useMemo(() => {
     const m = new Map();
     for (const r of importItems) {
-      const key = (r.ociNumber || "").trim();
-      if (!key) continue;
-      if (!m.has(key)) m.set(key, []);
-      m.get(key).push(r);
+      const k = (r.ociNumber || "").trim();
+      if (!k) continue;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(r);
     }
     return m;
   }, [importItems]);
@@ -63,15 +72,15 @@ export default function ImportManagement() {
   const itemsByPo = useMemo(() => {
     const m = new Map();
     for (const r of importItems) {
-      const key = (r.poNumber || "").trim();
-      if (!key) continue;
-      if (!m.has(key)) m.set(key, []);
-      m.get(key).push(r);
+      const k = (r.poNumber || "").trim();
+      if (!k) continue;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(r);
     }
     return m;
   }, [importItems]);
 
-  // Agrupar por shipmentId y PASAR ocis/pos al Drawer
+  // Agrupar por shipmentId (y pasar ocis/pos al Drawer)
   const shipments = useMemo(() => {
     const byShip = new Map();
 
@@ -87,7 +96,7 @@ export default function ImportManagement() {
           id: sid,
           shipmentId: sid,
           transportType: row.transportType || "",
-          importStatus: row.importStatus || "",
+          importStatus: normalizeStatus(row.importStatus || ""),
           eta: row.eta || "",
           ocis: new Set(),
           pos: new Set(),
@@ -99,13 +108,13 @@ export default function ImportManagement() {
       if (oci) agg.ocis.add(oci);
       if (po)  agg.pos.add(po);
 
-      // completar info si falta
+      // completar info si falta (normalizando status)
       if (!agg.transportType && row.transportType) agg.transportType = row.transportType;
-      if (!agg.importStatus && row.importStatus)   agg.importStatus = row.importStatus;
+      if (!agg.importStatus && row.importStatus)   agg.importStatus = normalizeStatus(row.importStatus);
       if (!agg.eta && row.eta)                     agg.eta = row.eta;
     }
 
-    // Calcular productCount sin doble conteo
+    // Calcular productCount (sin duplicar oci+po)
     for (const agg of byShip.values()) {
       const uniq = new Set();
       for (const oci of agg.ocis) {
@@ -132,14 +141,18 @@ export default function ImportManagement() {
       list = list.filter(r => (r.shipmentId || "").toLowerCase().includes(s));
     }
 
+    // ⛳️ Quitar shipments “fantasma” (sin ítems)
+    list = list.filter(r => r.productCount > 0);
+
     list.sort((a,b) => (a.shipmentId || "").localeCompare(b.shipmentId || ""));
     return list;
   }, [importsRaw, itemsByOci, itemsByPo, q]);
 
+  // KPIs usando status normalizado y lista filtrada
   const metrics = useMemo(() => {
     const total = shipments.length;
-    const transit = shipments.filter(r => (r.importStatus || "").toLowerCase() === "transit").length;
-    const warehouse = shipments.filter(r => (r.importStatus || "").toLowerCase() === "warehouse").length;
+    const transit = shipments.filter(r => normalizeStatus(r.importStatus) === "transit").length;
+    const warehouse = shipments.filter(r => normalizeStatus(r.importStatus) === "warehouse").length;
     return { total, transit, warehouse };
   }, [shipments]);
 
@@ -219,7 +232,7 @@ export default function ImportManagement() {
         <ImportDetailsDrawer
           open
           onClose={() => setOpenDrawer(false)}
-          importRow={selectedRow} // <-- trae ocis y pos
+          importRow={selectedRow} // trae ocis/pos y estado normalizado
         />
       )}
     </div>
