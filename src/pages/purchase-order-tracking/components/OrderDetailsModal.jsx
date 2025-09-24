@@ -1,469 +1,287 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
-import React, { useEffect, useMemo, useState } from "react";
-import Button from "@/components/ui/Button";
-import Icon from "@/components/AppIcon";
+import { useEffect, useMemo, useState } from "react";
+import { API_BASE, fetchJSON, formatDate, formatNumber } from "@/lib/utils";
 import CommunicationList from "@/components/CommunicationList";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
-import {
-  API_BASE,
-  fetchJSON,
-  postJSON,
-  formatNumber,
-  formatCurrency,
-  formatDate,
-  badgeClass,
-} from "@/lib/utils.js";
+import { usePresentationCatalog } from "@/lib/catalog";
 
-/* ===== util: tomar el último registro de 'imports' por PO ===== */
-function pickLatestImport(rows) {
-  if (!rows || rows.length === 0) return null;
-  const dateFields = [
-    "updated_at",
-    "created_at",
-    "created_date",
-    "shipment_date",
-    "import_date",
-    "eta",
-    "etd",
-    "last_update",
-  ];
-  const scored = rows.map((r, i) => {
-    let best = -Infinity;
-    for (const f of dateFields) {
-      const v = r?.[f];
-      const t = v ? Date.parse(v) : NaN;
-      if (!Number.isNaN(t)) best = Math.max(best, t);
-    }
-    return { row: r, time: best, idx: i };
-  });
-  scored.sort((a, b) => (b.time - a.time) || (b.idx - a.idx));
-  return scored[0].row;
+// --------- pequeños helpers UI ----------
+function Chip({ children, tone = "slate" }) {
+  const tones = {
+    slate: "bg-slate-100 text-slate-700",
+    blue: "bg-blue-100 text-blue-700",
+    teal: "bg-teal-100 text-teal-700",
+    indigo: "bg-indigo-100 text-indigo-700",
+    purple: "bg-purple-100 text-purple-700",
+    green: "bg-green-100 text-green-700",
+    amber: "bg-amber-100 text-amber-700",
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${tones[tone] || tones.slate}`}>
+      {children}
+    </span>
+  );
 }
 
-/* ===== Modal: editar ítem ===== */
-function EditItemModal({ open, onClose, item, onSaved }) {
-  const [qty, setQty] = useState(item?.requested ?? 0);
-  const [unitCost, setUnitCost] = useState(item?.unit_cost ?? 0);
-  const [importStatus, setImportStatus] = useState(item?.import_status ?? "");
-  const [transport, setTransport] = useState(item?.transport ?? "");
-
-  useEffect(() => {
-    if (open) {
-      setQty(item?.requested ?? 0);
-      setUnitCost(item?.unit_cost ?? 0);
-      setImportStatus(item?.import_status ?? "");
-      setTransport(item?.transport ?? "");
-    }
-  }, [open, item]);
-
-  if (!open) return null;
-
-  async function handleSave() {
-    // 1) actualizar purchase_order_items
-    const res1 = await postJSON(API_BASE, {
-      route: "write",
-      action: "update",
-      name: "purchase_order_items",
-      row: {
-        po_number: item.po_number,
-        presentation_code: item.presentation_code,
-        qty: Number(qty),
-        unit_price_usd: Number(unitCost),
-      },
-    });
-    if (!res1?.ok) throw new Error(res1?.error || "PO item update failed");
-
-    // 2) actualizar imports (por oci_number del PO)
-    if (item.oci_number_for_po) {
-      const res2 = await postJSON(API_BASE, {
-        route: "write",
-        action: "update",
-        name: "imports",
-        row: {
-          oci_number: item.oci_number_for_po,
-          import_status: importStatus || "",
-          transport_type: transport || "",
-        },
-      });
-      if (!res2?.ok) throw new Error(res2?.error || "Import update failed");
-    }
-
-    onSaved({
-      requested: Number(qty),
-      unit_cost: Number(unitCost),
-      import_status: importStatus,
-      transport,
-    });
-    onClose();
-  }
-
+function StatBox({ label, value }) {
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl ring-1 ring-slate-200">
-        <h3 className="mb-4 text-lg font-semibold">Edit Item – {item?.product_name}</h3>
-
-        <div className="grid gap-4">
-          <div>
-            <label className="mb-1 block text-sm font-medium">Requested (qty)</label>
-            <input
-              type="number"
-              value={qty}
-              onChange={(e) => setQty(e.target.value)}
-              className="w-full rounded-lg border p-2"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium">Unit Cost (USD)</label>
-            <input
-              type="number"
-              step="0.01"
-              value={unitCost}
-              onChange={(e) => setUnitCost(e.target.value)}
-              className="w-full rounded-lg border p-2"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium">Import Status</label>
-            <select
-              value={importStatus}
-              onChange={(e) => setImportStatus(e.target.value)}
-              className="w-full rounded-lg border p-2"
-            >
-              <option value="">(select)</option>
-              <option value="planned">planned</option>
-              <option value="warehouse">warehouse</option>
-              <option value="customs">customs</option>
-              <option value="in_transit">in_transit</option>
-              <option value="shipped">shipped</option>
-              <option value="delivered">delivered</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium">Transport</label>
-            <select
-              value={transport}
-              onChange={(e) => setTransport(e.target.value)}
-              className="w-full rounded-lg border p-2"
-            >
-              <option value="">(select)</option>
-              <option value="air">air</option>
-              <option value="sea">sea</option>
-              <option value="courier">courier</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="mt-6 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave}>Save</Button>
-        </div>
-      </div>
+    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
     </div>
   );
 }
 
-/* ===== Modal principal ===== */
+function SectionCard({ children }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      {children}
+    </div>
+  );
+}
+
+// =====================================================
+
 export default function OrderDetailsModal({ open, onClose, order }) {
+  const [tab, setTab] = useState("items"); // items | communications
   const [poItems, setPoItems] = useState([]);
-  const [impItems, setImpItems] = useState([]);
-  const [presentations, setPresentations] = useState([]);
-  const [importsByPO, setImportsByPO] = useState([]);
+  const [imports, setImports] = useState([]);
+  const [importItems, setImportItems] = useState([]);
+  const [newComm, setNewComm] = useState(false);
 
-  const [editingItem, setEditingItem] = useState(null);
-
-  // Communications
-  const [openNewComm, setOpenNewComm] = useState(false);
-  const [commKey, setCommKey] = useState(0); // para forzar refresh del CommunicationList tras guardar
-
-  const po = order || {};
+  const { enrich } = usePresentationCatalog(); // nombre y units/pack por presentation_code
 
   useEffect(() => {
-    if (!open || !po?.po_number) return;
+    if (!open || !order?.po_number) return;
 
-    async function loadAll() {
-      // Ítems del PO
-      const resPOI = await fetchJSON(`${API_BASE}?route=table&name=purchase_order_items`);
-      const poi = resPOI?.ok
-        ? (resPOI.rows || []).filter(
-            (r) => String(r.po_number) === String(po.po_number)
-          )
-        : [];
+    let mounted = true;
+    (async () => {
+      try {
+        const [poi, imps, impItems] = await Promise.all([
+          fetchJSON(`${API_BASE}?route=table&name=purchase_order_items`),
+          fetchJSON(`${API_BASE}?route=table&name=imports`),
+          fetchJSON(`${API_BASE}?route=table&name=import_items`),
+        ]);
 
-      // Import_items (para qty importado por presentación)
-      const resIMP = await fetchJSON(`${API_BASE}?route=table&name=import_items`);
-      const imps = resIMP?.ok
-        ? (resIMP.rows || []).filter(
-            (r) => String(r.po_number) === String(po.po_number)
-          )
-        : [];
+        if (!mounted) return;
 
-      // Presentaciones (para nombre y units/pack)
-      const resPPM = await fetchJSON(
-        `${API_BASE}?route=table&name=product_presentation_master`
-      );
-      const ppm = resPPM?.ok ? resPPM.rows || [] : [];
+        setPoItems((poi?.rows || []).filter(r => String(r.po_number || "").trim() === String(order.po_number || "").trim()));
+        setImports((imps?.rows || []).filter(r => String(r.po_number || "").trim() === String(order.po_number || "").trim()));
+        setImportItems((impItems?.rows || []).filter(r => String(r.po_number || "").trim() === String(order.po_number || "").trim()));
+      } catch (e) {
+        console.error("OrderDetailsModal load error:", e);
+      }
+    })();
 
-      // Tabla imports (para estado/transport del PO)
-      const resImports = await fetchJSON(`${API_BASE}?route=table&name=imports`);
-      const impPO = resImports?.ok
-        ? (resImports.rows || []).filter(
-            (r) => String(r.po_number) === String(po.po_number)
-          )
-        : [];
+    return () => { mounted = false; };
+  }, [open, order?.po_number]);
 
-      setPoItems(poi);
-      setImpItems(imps);
-      setPresentations(ppm);
-      setImportsByPO(impPO);
+  // Agrupamos import_items -> suma qty por presentation_code
+  const importedByCode = useMemo(() => {
+    const map = new Map();
+    for (const r of importItems || []) {
+      const code = String(r.presentation_code || r.presentationCode || "").trim();
+      if (!code) continue;
+      const qty = Number(r.qty || r.quantity || 0);
+      map.set(code, (map.get(code) || 0) + (Number.isFinite(qty) ? qty : 0));
     }
+    return map;
+  }, [importItems]);
 
-    loadAll().catch(console.error);
-  }, [open, po?.po_number]);
+  // Un status y transport “principal” por la PO (tomamos el último por fecha si hubiera varios)
+  const mainImport = useMemo(() => {
+    if (!imports?.length) return { import_status: "", transport_type: "", eta: "" };
+    // intentamos ordenar por ETA si viene
+    const sorted = [...imports].sort((a, b) => {
+      const da = new Date(a.eta || a.arrival_date || 0).getTime();
+      const db = new Date(b.eta || b.arrival_date || 0).getTime();
+      return (db || 0) - (da || 0);
+    });
+    const last = sorted[0];
+    return {
+      import_status: String(last.import_status || "").toLowerCase(),
+      transport_type: String(last.transport_type || last.transport || "").toLowerCase(),
+      eta: last.eta || last.arrival_date || "",
+    };
+  }, [imports]);
 
-  // último import (status/transport)
-  const latestImport = useMemo(
-    () => pickLatestImport(importsByPO),
-    [importsByPO]
-  );
-  const importStatusForPO = latestImport?.import_status || "";
-  const transportForPO = latestImport?.transport_type || "";
-  const ociNumberForPO = latestImport?.oci_number || null;
-
-  // Compose items
+  // Enriquecemos items con nombre y units/pack + imported & remaining + price
   const items = useMemo(() => {
-    const importedByCode = impItems.reduce((acc, it) => {
-      const code = String(it.presentation_code || "");
-      acc[code] = (acc[code] || 0) + Number(it.qty || 0);
-      return acc;
-    }, {});
-
-    const presIndex = presentations.reduce((acc, p) => {
-      const code = String(p.presentation_code || "");
-      acc[code] = {
-        product_name: p.product_name || "",
-        package_units: p.package_units || "",
-      };
-      return acc;
-    }, {});
-
-    return (poItems || []).map((it) => {
-      const code = String(it.presentation_code || "");
-      const requested = Number(it.qty || 0);
-      const unitCost = Number(it.unit_price_usd || 0);
-      const imported = Number(importedByCode[code] || 0);
-      const remaining = Math.max(requested - imported, 0);
-      const pres = presIndex[code] || {};
-
+    const enriched = (poItems || []).map(r => {
+      const code = String(r.presentation_code || r.presentationCode || "").trim();
+      const ordered = Number(r.ordered_qty ?? r.qty ?? r.quantity ?? 0);
+      const unitPrice =
+        Number(r.unit_price_usd ?? r.unit_price ?? r.price ?? 0);
+      const imported = importedByCode.get(code) || 0;
+      const remaining = Math.max(ordered - imported, 0);
       return {
-        key: `${po.po_number}-${code}`,
-        po_number: po.po_number,
-        presentation_code: code,
-        product_name: pres.product_name || "Product",
-        pack_label: pres.package_units ? `${pres.package_units} units/pack` : "",
-        requested,
+        code,
+        ordered,
+        unitPrice,
         imported,
         remaining,
-        unit_cost: unitCost,
-        import_status: importStatusForPO,
-        transport: transportForPO,
-        oci_number_for_po: ociNumberForPO,
       };
     });
-  }, [
-    poItems,
-    impItems,
-    presentations,
-    po?.po_number,
-    importStatusForPO,
-    transportForPO,
-    ociNumberForPO,
-  ]);
+
+    // enrich() añade productName y packageUnits si están en el catálogo
+    return enrich(
+      enriched.map(it => ({
+        presentationCode: it.code,
+        ...it,
+      }))
+    ).map(x => ({
+      ...x,
+      productName: x.productName || x.presentationCode,
+      packageUnits: x.packageUnits || 1,
+    }));
+  }, [poItems, importedByCode, enrich]);
+
+  const totalUSD = useMemo(() => {
+    return items.reduce((acc, it) => acc + (it.ordered || 0) * (it.unitPrice || 0), 0);
+  }, [items]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4 sm:items-center">
-      <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
-        {/* Header */}
-        <div className="flex items-start justify-between border-b p-5">
-          <div>
-            <h2 className="text-xl font-semibold">Order Details – {po.po_number}</h2>
-            <div className="mt-1 text-sm text-gray-600">
-              Tender Ref: {po.tender_ref || "—"}
+    <div className="fixed inset-0 z-[2100] bg-black/40">
+      <div className="absolute inset-0 flex justify-center overflow-y-auto p-6">
+        <div className="w-full max-w-6xl rounded-xl bg-white shadow-2xl ring-1 ring-slate-200">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-slate-200 p-4">
+            <div className="flex items-center gap-3">
+              <h2 className="text-xl font-semibold text-slate-900">Order Details – PO</h2>
+              <Chip tone="indigo">{order?.po_number}</Chip>
+            </div>
+            <div className="text-sm text-slate-500">
+              <span className="mr-1">Created:</span>
+              <span className="font-medium">{formatDate(order?.created_date)}</span>
+              <button className="ml-4 rounded-full p-1 hover:bg-slate-100" onClick={onClose} aria-label="Close">
+                ×
+              </button>
             </div>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
-            <Icon name="X" size={18} />
-          </Button>
-        </div>
 
-        {/* Info superior */}
-        <div className="grid gap-3 border-b bg-slate-50/60 p-5 sm:grid-cols-3">
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="text-xs text-gray-500">Created</div>
-            <div className="mt-1 text-sm">{formatDate(po.created_date)}</div>
-          </div>
-        </div>
-
-        {/* Items */}
-        <div className="space-y-4 p-5">
-          <h3 className="text-base font-semibold text-slate-800">Products in PO</h3>
-
-          {items.map((it) => (
-            <div
-              key={it.key}
-              className="rounded-xl border border-indigo-100 bg-white p-4 shadow-sm ring-1 ring-transparent hover:ring-indigo-100"
-            >
-              {/* encabezado del producto */}
-              <div className="mb-3 flex items-start justify-between">
-                <div>
-                  <div className="font-semibold text-foreground">
-                    {it.product_name}{" "}
-                    {it.pack_label ? (
-                      <span className="text-muted-foreground">• {it.pack_label}</span>
-                    ) : null}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Code: {it.presentation_code || "—"}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="rounded-lg bg-slate-50 px-2 py-1 text-sm font-medium">
-                    {formatCurrency(it.unit_cost)}
-                  </div>
-                  <Button
-                    variant="secondary"
-                    onClick={() => setEditingItem(it)}
-                  >
-                    Edit
-                  </Button>
-                </div>
-              </div>
-
-              {/* línea de status / transport */}
-              <div className="mb-3 flex flex-wrap gap-4">
-                <div>
-                  <div className="mb-1 text-xs text-gray-500">Import Status</div>
-                  <span
-                    className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeClass(
-                      "manufacturing",
-                      it.import_status
-                    )}`}
-                  >
-                    {it.import_status || "—"}
-                  </span>
-                </div>
-                <div>
-                  <div className="mb-1 text-xs text-gray-500">Transport</div>
-                  <span
-                    className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeClass(
-                      "transport",
-                      it.transport
-                    )}`}
-                  >
-                    {it.transport || "—"}
-                  </span>
-                </div>
-              </div>
-
-              {/* KPI boxes */}
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-xs text-gray-500">Requested</div>
-                  <div className="text-2xl font-semibold text-slate-900">
-                    {formatNumber(it.requested)}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-xs text-gray-500">Imported</div>
-                  <div className="text-2xl font-semibold text-slate-900">
-                    {formatNumber(it.imported)}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-xs text-gray-500">Remaining</div>
-                  <div className="text-2xl font-semibold text-slate-900">
-                    {formatNumber(it.remaining)}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {items.length === 0 && (
-            <div className="rounded-xl border p-4 text-gray-500">
-              No items for this PO…
-            </div>
-          )}
-        </div>
-
-        {/* Communications (lista + botón Add) */}
-        <div className="border-t bg-slate-50/60 p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-base font-semibold text-slate-800">Communications</h3>
-            <Button size="sm" iconName="Plus" onClick={() => setOpenNewComm(true)}>
-              Add
-            </Button>
+          {/* Tabs */}
+          <div className="flex items-center gap-2 border-b border-slate-200 px-4">
+            {[
+              ["items", "Items"],
+              ["communications", "Communications"],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={`px-4 py-3 text-sm font-medium ${
+                  tab === key ? "text-indigo-600 border-b-2 border-indigo-600" : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          {/* Igual que en Tender: lista filtrada por esta Order */}
-          <div className="space-y-3">
-            <CommunicationList
-              key={commKey}                 // se fuerza remount tras guardar
-              linkedType="order"
-              linkedId={po?.po_number || ""}
-            />
+          {/* Content */}
+          <div className="p-4">
+            {/* ITEMS TAB */}
+            {tab === "items" && (
+              <>
+                {/* top stats */}
+                <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <SectionCard>
+                    <div className="text-xs text-slate-500">PO Number</div>
+                    <div className="mt-1 text-base font-medium">{order?.po_number || "—"}</div>
+                  </SectionCard>
+                  <SectionCard>
+                    <div className="text-xs text-slate-500">Created</div>
+                    <div className="mt-1 text-base font-medium">{formatDate(order?.created_date) || "—"}</div>
+                  </SectionCard>
+                  <SectionCard>
+                    <div className="text-xs text-slate-500">Total (USD)</div>
+                    <div className="mt-1 text-base font-semibold">
+                      ${formatNumber(Math.round((totalUSD + Number.EPSILON) * 100) / 100)}
+                    </div>
+                  </SectionCard>
+                </div>
+
+                {/* Items list */}
+                {(items || []).length === 0 && (
+                  <div className="rounded-lg border border-dashed p-6 text-center text-slate-500">
+                    No items found.
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  {items.map((it) => (
+                    <SectionCard key={it.code}>
+                      {/* Header line with product name and unit price */}
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            {it.productName}{" "}
+                            <span className="text-slate-500">
+                              • {it.packageUnits} units/pack
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            Code: {it.code}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-slate-500">/ unit</div>
+                          <div className="text-sm font-medium">${it.unitPrice?.toFixed?.(2) ?? it.unitPrice}</div>
+                        </div>
+                      </div>
+
+                      {/* Badges for import status & transport (de la PO) */}
+                      <div className="mt-3 flex flex-wrap items-center gap-3">
+                        <div className="text-xs text-slate-500">Import Status</div>
+                        <Chip tone={mainImport.import_status === "warehouse" ? "green" : mainImport.import_status === "transit" ? "amber" : "slate"}>
+                          {mainImport.import_status || "—"}
+                        </Chip>
+                        <div className="ml-4 text-xs text-slate-500">Transport</div>
+                        <Chip tone={mainImport.transport_type === "air" ? "blue" : mainImport.transport_type === "sea" ? "teal" : "slate"}>
+                          {mainImport.transport_type || "—"}
+                        </Chip>
+                      </div>
+
+                      {/* Stats row */}
+                      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                        <StatBox label="Requested" value={formatNumber(it.ordered)} />
+                        <StatBox label="Imported" value={formatNumber(it.imported)} />
+                        <StatBox label="Remaining" value={formatNumber(it.remaining)} />
+                      </div>
+                    </SectionCard>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* COMMUNICATIONS TAB */}
+            {tab === "communications" && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium">Communications</div>
+                  <button
+                    onClick={() => setNewComm(true)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-white shadow hover:bg-indigo-700"
+                  >
+                    + Add
+                  </button>
+                </div>
+                <CommunicationList linkedType="orders" linkedId={order?.po_number || ""} />
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Modales secundarios */}
-      {editingItem && (
-        <EditItemModal
-          open={!!editingItem}
-          onClose={() => setEditingItem(null)}
-          item={editingItem}
-          onSaved={(patch) => {
-            // actualizar caches locales
-            setPoItems((prev) =>
-              prev.map((r) =>
-                String(r.po_number) === String(editingItem.po_number) &&
-                String(r.presentation_code) === String(editingItem.presentation_code)
-                  ? { ...r, qty: patch.requested, unit_price_usd: patch.unit_cost }
-                  : r
-              )
-            );
-            setImportsByPO((prev) =>
-              Array.isArray(prev)
-                ? prev.map((r) =>
-                    r.oci_number === editingItem.oci_number_for_po
-                      ? {
-                          ...r,
-                          import_status: patch.import_status,
-                          transport_type: patch.transport,
-                        }
-                      : r
-                  )
-                : prev
-            );
-            setEditingItem(null);
-          }}
-        />
-      )}
-
-      {openNewComm && (
+      {/* Modal para crear comunicación */}
+      {newComm && (
         <NewCommunicationModal
-          open={openNewComm}
-          onClose={() => setOpenNewComm(false)}
-          onSaved={() => {
-            // refrescar lista al guardar
-            setCommKey((k) => k + 1);
-          }}
-          defaultLinkedType="Orders"
-          defaultLinkedId={po?.po_number || ""}
+          open={newComm}
+          onClose={() => setNewComm(false)}
+          onSaved={() => setNewComm(false)}
+          defaultLinkedType="orders"
+          defaultLinkedId={order?.po_number || ""}
         />
       )}
     </div>
