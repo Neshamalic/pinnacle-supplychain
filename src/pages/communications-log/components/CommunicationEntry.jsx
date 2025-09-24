@@ -1,85 +1,142 @@
 // src/pages/communications-log/components/CommunicationEntry.jsx
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import Icon from "@/components/AppIcon";
-import { API_BASE, postJSON, formatDate } from "@/lib/utils";
+import Button from "@/components/ui/Button";
+import { commDelete, commMarkRead } from "@/lib/sheetsApi";
+import { formatDate } from "@/lib/utils";
 
-const Pill = ({ children, tone = "gray" }) => {
-  const tones = { blue: "bg-blue-100 text-blue-800", gray: "bg-gray-100 text-gray-700" };
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${tones[tone] || tones.gray}`}>{children}</span>;
-};
+/**
+ * Props:
+ *  - comm: objeto comunicación (con los campos mapeados en adapters.mapCommunications)
+ *  - onDeleted?: (comm) => void
+ *  - onRestored?: (comm) => void
+ *  - onChange?: () => void  // para pedir refetch al padre si quieres
+ */
+export default function CommunicationEntry({ comm, onDeleted, onRestored, onChange }) {
+  const [expanded, setExpanded] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [justDeleted, setJustDeleted] = useState(false); // para Undo
 
-function buildUpdatePayload(comm, patch) {
-  const row = { ...patch };
-  if (comm.id) row.id = comm.id;
-  else { row.created_date = comm.createdDate || comm.created_date || ""; row.subject = comm.subject || ""; }
-  return row;
-}
+  const when = useMemo(() => {
+    return comm?.createdDate ? formatDate(comm.createdDate) : "";
+  }, [comm?.createdDate]);
 
-export default function CommunicationEntry({ comm, onChange }) {
-  const [open, setOpen] = useState(false);
-  const [undoVisible, setUndoVisible] = useState(false);
-  const [timer, setTimer] = useState(null);
+  const preview = comm?.preview || "";
+  const content = comm?.content || "";
 
-  const toggle = async (e) => {
-    e?.preventDefault?.(); e?.stopPropagation?.();
-    const next = !open;
-    setOpen(next);
-    if (next && comm.unread) {
-      await postJSON(`${API_BASE}?route=write&action=update&name=communications`, { row: buildUpdatePayload(comm, { unread: "false" }) });
-      onChange?.();
+  async function handleToggle() {
+    setExpanded((v) => !v);
+    if (comm?.unread) {
+      try {
+        await commMarkRead(comm);
+        // marcamos en el objeto en memoria
+        comm.unread = false;
+        onChange?.();
+      } catch (_e) {
+        // silencioso; no romper UI
+      }
     }
-  };
+  }
 
-  const doDelete = async (e) => {
-    e?.preventDefault?.(); e?.stopPropagation?.();
-    if (!window.confirm("Are you sure you want to delete?")) return;
-    await postJSON(`${API_BASE}?route=write&action=update&name=communications`, { row: buildUpdatePayload(comm, { deleted: "true" }) });
-    setUndoVisible(true);
-    if (timer) clearTimeout(timer);
-    const t = setTimeout(() => setUndoVisible(false), 5000);
-    setTimer(t);
-    onChange?.();
-  };
+  async function handleDeleteClick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (deleting || justDeleted) return;
+    const ok = window.confirm("Are you sure you want to delete?");
+    if (!ok) return;
 
-  const undo = async (e) => {
-    e?.preventDefault?.(); e?.stopPropagation?.();
-    if (timer) clearTimeout(timer);
-    await postJSON(`${API_BASE}?route=write&action=update&name=communications`, { row: buildUpdatePayload(comm, { deleted: "" }) });
-    setUndoVisible(false);
-    onChange?.();
-  };
+    setDeleting(true);
+    try {
+      // Borrado optimista:
+      setJustDeleted(true);
+      onDeleted?.(comm);
+      // Ejecuta borrado real:
+      await commDelete(comm);
+      // Mostramos “Undo” durante 5s
+      setTimeout(() => setJustDeleted(false), 5000);
+    } catch (err) {
+      setJustDeleted(false);
+      alert(`No se pudo eliminar: ${String(err?.message || err)}`);
+      onChange?.(); // por si hace falta refetch
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  function handleUndo(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    setJustDeleted(false);
+    // Simplemente avisamos al padre que “deshaga” el borrado optimista (volver a mostrar la card).
+    onRestored?.(comm);
+  }
+
+  // Badges de estilo
+  const unreadBadge = comm?.unread ? (
+    <span className="ml-2 inline-flex items-center rounded-full bg-blue-100 text-blue-800 px-2 py-0.5 text-xs">
+      Unread
+    </span>
+  ) : null;
 
   return (
-    <div className="rounded-lg border bg-card">
-      <button type="button" onClick={toggle} className="w-full text-left p-3 flex items-start gap-2 hover:bg-muted/50">
-        <div className="text-muted-foreground mt-0.5"><Icon name={open ? "ChevronDown" : "ChevronRight"} size={16} /></div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="font-medium text-sm truncate">{comm.subject || "(sin asunto)"}</div>
-            {comm.unread ? <Pill tone="blue">Unread</Pill> : <Pill>Read</Pill>}
-            <div className="ml-auto text-xs text-muted-foreground">{formatDate(comm.createdDate)}</div>
+    <div className="rounded-lg border bg-muted/20">
+      {/* Header clickable */}
+      <button
+        type="button"
+        className="w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-muted/40 rounded-t-lg"
+        onClick={handleToggle}
+        aria-expanded={expanded}
+      >
+        <Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={16} className="mt-1" />
+        <div className="flex-1">
+          <div className="flex items-center justify-between">
+            <div className="font-medium">
+              {comm?.subject || "(sin asunto)"} {unreadBadge}
+            </div>
+            <div className="text-xs text-muted-foreground">{when}</div>
           </div>
-          <div className="text-xs text-muted-foreground mt-1">{(comm.type || "other")} • {(comm.participants || "—")}</div>
-          {!open && comm.preview && (<div className="mt-1 text-sm text-muted-foreground truncate">{comm.preview}</div>)}
+          <div className="mt-1 text-xs text-muted-foreground">
+            {comm?.type || "—"} • {comm?.participants || "—"}
+          </div>
+          {!expanded && (
+            <div className="mt-2 text-sm text-foreground line-clamp-2">{preview}</div>
+          )}
         </div>
       </button>
 
-      {undoVisible && (
-        <div className="px-3 pb-2">
-          <div className="rounded-md bg-amber-50 border border-amber-200 p-2 text-[13px] flex items-center gap-2">
-            <span>Message deleted</span>
-            <button type="button" className="underline" onClick={undo}>Undo</button>
-          </div>
-        </div>
-      )}
+      {/* Body */}
+      {expanded && (
+        <div className="px-4 pb-3">
+          <div className="text-sm whitespace-pre-wrap">{content || "—"}</div>
 
-      {open && (
-        <div className="px-4 pb-4 text-sm whitespace-pre-wrap">
-          {comm.content || comm.preview || "—"}
-          <div className="mt-3 flex items-center justify-end">
-            <button type="button" onClick={doDelete} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-destructive text-destructive-foreground hover:opacity-90">
-              <Icon name="Trash2" size={14} /> Delete
-            </button>
+          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+            <div>
+              Linked: <b>{comm?.linked_type || "—"}</b>
+              {comm?.linked_id ? <> · {comm.linked_id}</> : null}
+            </div>
+
+            <div className="flex items-center gap-2">
+              {justDeleted ? (
+                <button
+                  type="button"
+                  onClick={handleUndo}
+                  className="text-blue-600 hover:underline"
+                >
+                  Undo
+                </button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  iconName="Trash2"
+                  onClick={handleDeleteClick}
+                  disabled={deleting}
+                >
+                  Delete
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
