@@ -1,231 +1,146 @@
 // src/pages/communications-log/components/NewCommunicationModal.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import Button from "@/components/ui/Button";
 import Icon from "@/components/AppIcon";
-import { useSheet, writeRow } from "@/lib/sheetsApi";
-import { mapTenderItems, mapPurchaseOrderItems, mapImports } from "@/lib/adapters";
+import { API_BASE, postJSON } from "@/lib/utils";
+import { useSheet } from "@/lib/sheetsApi";
+import { mapPurchaseOrders, mapTenders, mapImports } from "@/lib/adapters";
 
-/**
- * Props:
- * - open: boolean
- * - onClose: () => void
- * - onSaved?: () => void  // callback para refrescar la lista
- */
-export default function NewCommunicationModal({ open, onClose, onSaved }) {
-  const [saving, setSaving] = useState(false);
+const TYPES = ["Meeting", "Mail", "Call", "Whatsapp", "Other"];
+const LINKED = ["Orders", "Imports", "Tender"];
 
-  // Form state
-  const [type, setType] = useState("Meeting");
+export default function NewCommunicationModal({
+  open,
+  onClose,
+  onSaved,
+  defaultLinkedType,
+  defaultLinkedId,
+}) {
+  const [type, setType] = useState(TYPES[0]);
   const [subject, setSubject] = useState("");
   const [participants, setParticipants] = useState("");
   const [content, setContent] = useState("");
-  const [linkedType, setLinkedType] = useState("Tender"); // Tender | Orders | Imports (labels UI)
-  const [linkedId, setLinkedId] = useState("");
+  const [linkedType, setLinkedType] = useState(defaultLinkedType || LINKED[0]);
+  const [linkedId, setLinkedId] = useState(defaultLinkedId || "");
+  const [saving, setSaving] = useState(false);
 
-  // Cargar listas para el selector dependiente
-  const { rows: tenderItems = [] } = useSheet("tender_items", mapTenderItems);
-  const { rows: poItems = [] } = useSheet("purchase_order_items", mapPurchaseOrderItems);
+  // opciones para Linked ID
+  const { rows: poRows = [] } = useSheet("purchase_orders", mapPurchaseOrders);
+  const { rows: tenderRows = [] } = useSheet("tenders", mapTenders);
   const { rows: importRows = [] } = useSheet("imports", mapImports);
 
-  // Helpers para opciones únicas
-  const unique = (arr) => Array.from(new Set(arr.filter(Boolean)));
+  const options = useMemo(() => {
+    if (linkedType === "Orders") {
+      return Array.from(new Set(poRows.map(r => r.poNumber))).filter(Boolean);
+    }
+    if (linkedType === "Imports") {
+      return Array.from(new Set(importRows.map(r => r.shipmentId))).filter(Boolean);
+    }
+    if (linkedType === "Tender") {
+      return Array.from(new Set(tenderRows.map(r => r.tenderId))).filter(Boolean);
+    }
+    return [];
+  }, [linkedType, poRows, tenderRows, importRows]);
 
-  const tenderOptions = useMemo(() => {
-    const ids = unique((tenderItems || []).map((r) => r?.tenderId || r?.tender_id));
-    return ids.sort();
-  }, [tenderItems]);
-
-  const orderOptions = useMemo(() => {
-    const ids = unique((poItems || []).map((r) => r?.poNumber || r?.po_number));
-    return ids.sort();
-  }, [poItems]);
-
-  const importOptions = useMemo(() => {
-    const ids = unique((importRows || []).map((r) => r?.shipmentId || r?.shipment_id));
-    return ids.sort();
-  }, [importRows]);
-
-  // Reiniciar linkedId cuando cambia linkedType
-  useEffect(() => {
-    setLinkedId("");
-  }, [linkedType]);
+  const preview = useMemo(() => (content || "").slice(0, 160), [content]);
 
   if (!open) return null;
 
-  const handleClose = () => {
+  const close = () => {
     if (!saving) onClose?.();
   };
 
-  const nowIso = () => new Date().toISOString();
-  const preview = (txt) => (txt || "").slice(0, 160);
-
-  // Mapeo UI → valores que guardamos en la hoja
-  const toSheetLinkedType = (label) => {
-    const v = String(label || "").toLowerCase();
-    if (v.startsWith("tender")) return "tender";
-    if (v.startsWith("order")) return "order";
-    if (v.startsWith("import")) return "import";
-    return "";
-  };
-
-  const validate = () => {
-    if (!type) return "Selecciona Type.";
-    if (!subject.trim()) return "Escribe un Subject.";
-    if (!linkedType) return "Selecciona Linked Type.";
-    if (!linkedId) return "Selecciona Linked ID.";
-    return "";
-  };
-
-  const handleSave = async (e) => {
-    e?.preventDefault?.();
-    const err = validate();
-    if (err) {
-      alert(err);
-      return;
-    }
-
-    const row = {
-      created_date: nowIso(),
-      type,
-      subject,
-      participants, // formato libre: Name1@..., Name2@...
-      content,
-      linked_type: toSheetLinkedType(linkedType), // 'tender' | 'order' | 'import'
-      linked_id: linkedId,                         // tender_id | po_number | shipment_id
-      unread: true,
-      preview: preview(content),
-    };
-
+  const handleSave = async () => {
     try {
       setSaving(true);
-      await writeRow("communications", row); // sheetsApi ya expone writeRow(name, row). :contentReference[oaicite:3]{index=3}
-      setSaving(false);
+      const id = (crypto?.randomUUID?.() || String(Date.now()));
+      const created_date = new Date().toISOString();
+
+      const row = {
+        id,
+        created_date,
+        type,
+        subject,
+        participants,
+        content,
+        preview,
+        unread: "true",       // ← al crear queda sin leer
+        deleted: "",          // ← soft delete
+        linked_type: linkedType.toLowerCase(), // "orders" | "imports" | "tender"
+        linked_id: linkedId || "",
+      };
+
+      await postJSON(`${API_BASE}?route=write&action=create&name=communications`, row);
       onSaved?.();
       onClose?.();
-      // limpiar formulario para próxima vez
-      setType("Meeting");
-      setSubject("");
-      setParticipants("");
-      setContent("");
-      setLinkedType("Tender");
-      setLinkedId("");
-    } catch (e) {
+    } catch (err) {
+      alert("Error guardando: " + String(err));
+    } finally {
       setSaving(false);
-      alert(`No se pudo guardar: ${e?.message || e}`);
     }
   };
 
-  // Opciones para el selector de Linked ID según el tipo elegido
-  const currentIdOptions =
-    linkedType === "Orders" ? orderOptions :
-    linkedType === "Imports" ? importOptions :
-    tenderOptions; // Tender por defecto
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-      <div className="w-[720px] max-w-[95vw] rounded-xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b px-5 py-3">
-          <h3 className="text-lg font-semibold">New Communication</h3>
-          <button onClick={handleClose} className="text-muted-foreground hover:text-foreground">
-            <Icon name="x" />
-          </button>
+    <div className="fixed inset-0 z-[2300] bg-black/40 flex items-center justify-center">
+      <div className="w-full max-w-2xl bg-card rounded-lg shadow-2xl border border-border">
+        <div className="p-4 border-b flex items-center justify-between">
+          <div className="font-semibold">New Communication</div>
+          <Button variant="ghost" size="icon" onClick={close}><Icon name="X" size={18} /></Button>
         </div>
 
-        <form onSubmit={handleSave} className="grid grid-cols-1 gap-4 px-5 py-5">
+        <div className="p-4 space-y-3">
           {/* Type */}
           <div>
-            <label className="mb-1 block text-sm font-medium">Type</label>
-            <select
-              className="w-full rounded-md border px-3 py-2"
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-            >
-              <option>Meeting</option>
-              <option>Mail</option>
-              <option>Call</option>
-              <option>Whatsapp</option>
-              <option>Other</option>
+            <div className="text-xs text-muted-foreground mb-1">Type</div>
+            <select className="w-full rounded-md border p-2" value={type} onChange={e => setType(e.target.value)}>
+              {TYPES.map(t => <option key={t}>{t}</option>)}
             </select>
           </div>
 
           {/* Subject */}
           <div>
-            <label className="mb-1 block text-sm font-medium">Subject</label>
-            <input
-              className="w-full rounded-md border px-3 py-2"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="Ej: Weekly review – Q4 tenders"
-            />
+            <div className="text-xs text-muted-foreground mb-1">Subject</div>
+            <input className="w-full rounded-md border p-2" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Ej: Weekly review – Q4 tenders" />
           </div>
 
           {/* Participants */}
           <div>
-            <label className="mb-1 block text-sm font-medium">Participants</label>
-            <input
-              className="w-full rounded-md border px-3 py-2"
-              value={participants}
-              onChange={(e) => setParticipants(e.target.value)}
-              placeholder="Name1@..., Name2@..."
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Escribe nombres/correos separados por coma.
-            </p>
+            <div className="text-xs text-muted-foreground mb-1">Participants</div>
+            <input className="w-full rounded-md border p-2" value={participants} onChange={e => setParticipants(e.target.value)} placeholder="Name1@..., Name2@..." />
+            <div className="text-[11px] text-muted-foreground mt-1">Escribe nombres/correos separados por coma.</div>
           </div>
 
-          {/* Linked Type + Linked ID */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {/* Linked */}
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-sm font-medium">Linked Type</label>
-              <select
-                className="w-full rounded-md border px-3 py-2"
-                value={linkedType}
-                onChange={(e) => setLinkedType(e.target.value)}
-              >
-                <option>Tender</option>
-                <option>Orders</option>
-                <option>Imports</option>
+              <div className="text-xs text-muted-foreground mb-1">Linked Type</div>
+              <select className="w-full rounded-md border p-2" value={linkedType} onChange={e => setLinkedType(e.target.value)}>
+                {LINKED.map(t => <option key={t}>{t}</option>)}
               </select>
             </div>
-
             <div>
-              <label className="mb-1 block text-sm font-medium">Linked ID</label>
-              <select
-                className="w-full rounded-md border px-3 py-2"
-                value={linkedId}
-                onChange={(e) => setLinkedId(e.target.value)}
-              >
-                <option value="" disabled>Selecciona…</option>
-                {currentIdOptions.map((id) => (
-                  <option key={id} value={id}>{id}</option>
-                ))}
+              <div className="text-xs text-muted-foreground mb-1">Linked ID</div>
+              <select className="w-full rounded-md border p-2" value={linkedId} onChange={e => setLinkedId(e.target.value)}>
+                <option value="">Selecciona…</option>
+                {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
               </select>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <div className="text-[11px] text-muted-foreground mt-1">
                 • Orders: PO Number — • Imports: Shipment ID — • Tender: Tender ID
-              </p>
+              </div>
             </div>
           </div>
 
           {/* Content */}
           <div>
-            <label className="mb-1 block text-sm font-medium">Content</label>
-            <textarea
-              className="h-36 w-full rounded-md border px-3 py-2"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="Escribe la nota, resumen de reunión, correo, etc."
-            />
+            <div className="text-xs text-muted-foreground mb-1">Content</div>
+            <textarea className="w-full rounded-md border p-2 min-h-[160px]" value={content} onChange={e => setContent(e.target.value)} placeholder="Escribe la nota, resumen de reunión, correo, etc." />
           </div>
+        </div>
 
-          <div className="flex items-center justify-end gap-2 border-t pt-4">
-            <Button variant="ghost" onClick={handleClose} disabled={saving}>
-              Cancel
-            </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        </form>
+        <div className="p-3 border-t flex justify-end gap-2">
+          <Button variant="secondary" onClick={close}>Cancel</Button>
+          <Button onClick={handleSave} disabled={saving} iconName="Save">{saving ? "Saving…" : "Save"}</Button>
+        </div>
       </div>
     </div>
   );
