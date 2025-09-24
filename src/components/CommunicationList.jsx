@@ -4,9 +4,9 @@ import Icon from "@/components/AppIcon";
 import Button from "@/components/ui/Button";
 import { useSheet } from "@/lib/sheetsApi";
 import { mapCommunications } from "@/lib/adapters";
-import { API_BASE, postJSON, formatDate } from "@/lib/utils";
+import { API_BASE, postJSON, fetchJSON, formatDate } from "@/lib/utils";
 
-/* ---------------------- helpers ---------------------- */
+/* ---------------- helpers ---------------- */
 const normalizeLinkedType = (t) => {
   const v = String(t || "").toLowerCase().trim();
   if (["order", "po", "purchase_order", "orders"].includes(v)) return "orders";
@@ -14,7 +14,6 @@ const normalizeLinkedType = (t) => {
   if (["tender", "tenders"].includes(v)) return "tender";
   return v;
 };
-
 const typeIcon = (t) => {
   const v = String(t || "").toLowerCase();
   if (v === "mail" || v === "email") return "Mail";
@@ -23,7 +22,6 @@ const typeIcon = (t) => {
   if (v === "whatsapp") return "MessageCircle";
   return "FileText";
 };
-
 const entityBadge = (linkedType) => {
   const lt = normalizeLinkedType(linkedType);
   if (lt === "tender") return { cls: "bg-purple-100 text-purple-800", label: "Tender" };
@@ -31,7 +29,6 @@ const entityBadge = (linkedType) => {
   if (lt === "imports") return { cls: "bg-emerald-100 text-emerald-800", label: "Imports" };
   return { cls: "bg-gray-100 text-gray-800", label: lt || "—" };
 };
-
 const unreadBadge = (unread) =>
   unread ? (
     <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
@@ -39,39 +36,123 @@ const unreadBadge = (unread) =>
     </span>
   ) : null;
 
-/* ---------------------- main ---------------------- */
+/* ---- simple session cache ---- */
+const COMMS_CACHE = (() => {
+  if (!window.__COMMS_CACHE) window.__COMMS_CACHE = { all: null, byKey: {} };
+  return window.__COMMS_CACHE;
+})();
+
+/* ---------------- component ---------------- */
 export default function CommunicationList({
-  linkedType,     // "tender" | "orders" | "imports" (cualquier alias funciona)
-  linkedId,       // tenderId | poNumber | shipmentId
+  linkedType, // "tender" | "orders" | "imports" (alias ok)
+  linkedId,
   emptyMessage = "No communications yet.",
 }) {
   const normType = normalizeLinkedType(linkedType);
-  const { rows = [], loading, error } = useSheet("communications", mapCommunications);
 
-  // estado local optimista
+  // Hook genérico (carga toda la hoja; lo usaremos sólo si no hay filtro)
+  const { rows = [], loading: loadingAll, error } = useSheet("communications", mapCommunications);
+
+  // Estado local
   const [items, setItems] = useState([]);
-  const undoRef = useRef(null); // {item, index, timer}
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => setItems(rows), [rows]);
+  // Paginación “Load more”
+  const PAGE = 20;
+  const [visible, setVisible] = useState(PAGE);
 
-  // filtro por contexto si corresponde
-  const filtered = useMemo(() => {
-    if (!normType || !linkedId) return items;
-    return (items || []).filter(
-      (c) =>
-        normalizeLinkedType(c.linked_type) === normType &&
-        String(c.linked_id || "").trim() === String(linkedId || "").trim()
-    );
-  }, [items, normType, linkedId]);
+  // Undo delete
+  const undoRef = useRef(null);
+
+  // 1) Carga optimizada: si hay contexto, pedimos al server SOLO esas filas
+  useEffect(() => {
+    let abort = false;
+
+    const key = normType && linkedId ? `${normType}:${linkedId}` : null;
+
+    const fromCache = () => {
+      if (!key) return null;
+      const entry = COMMS_CACHE.byKey[key];
+      if (entry && Date.now() - entry.ts < 120000) return entry.rows; // 2 min TTL
+      return null;
+    };
+
+    const load = async () => {
+      setLoading(true);
+      setVisible(PAGE);
+
+      // si hay cache inmediato
+      const cached = fromCache();
+      if (cached && !abort) {
+        setItems(cached);
+        setLoading(false);
+      }
+
+      // si tenemos contexto, pedimos filtrado al Apps Script (rápido)
+      if (normType && linkedId) {
+        try {
+          const res = await fetchJSON(
+            `${API_BASE}?route=table&name=communications&lt=${encodeURIComponent(
+              normType
+            )}&lid=${encodeURIComponent(linkedId)}`
+          );
+          if (!abort && res?.ok) {
+            const rows = (res.rows || []).map(mapCommunications);
+            setItems(rows);
+            COMMS_CACHE.byKey[key] = { rows, ts: Date.now() };
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // si falla, seguimos con el hook genérico
+        }
+      }
+
+      // fallback: usamos la tabla completa (hook) y filtramos
+      const all = (rows || []).map((r) => r);
+      if (!abort) {
+        if (normType && linkedId) {
+          const filtered = all.filter(
+            (c) =>
+              normalizeLinkedType(c.linked_type) === normType &&
+              String(c.linked_id || "").trim() === String(linkedId || "").trim()
+          );
+          setItems(filtered);
+          if (key) COMMS_CACHE.byKey[key] = { rows: filtered, ts: Date.now() };
+        } else {
+          setItems(all);
+          COMMS_CACHE.all = { rows: all, ts: Date.now() };
+        }
+        setLoading(false);
+      }
+    };
+
+    // Primera carga rápida desde cache “global”
+    if (!normType || !linkedId) {
+      const entry = COMMS_CACHE.all;
+      if (entry && Date.now() - entry.ts < 120000) {
+        setItems(entry.rows);
+        setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      abort = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normType, linkedId, rows]);
+
+  // “Load more”
+  const visibleItems = useMemo(() => items.slice(0, visible), [items, visible]);
 
   const handleToggleExpand = async (id) => {
     setItems((prev) =>
       prev.map((c) => (c.id === id ? { ...c, _expanded: !c._expanded } : c))
     );
-
-    // marcar leído si estaba unread y se expande por primera vez
     const current = (items || []).find((x) => x.id === id);
     if (current && current.unread && !current._expanded) {
+      // marcar leído
       setItems((prev) => prev.map((c) => (c.id === id ? { ...c, unread: false } : c)));
       try {
         await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
@@ -79,7 +160,6 @@ export default function CommunicationList({
           unread: false,
         });
       } catch {
-        // Si falla, revertir local
         setItems((prev) => prev.map((c) => (c.id === id ? { ...c, unread: true } : c)));
       }
     }
@@ -90,29 +170,26 @@ export default function CommunicationList({
       alert('No se puede eliminar: falta "id" en esa fila de la planilla.');
       return;
     }
-    const ok = window.confirm("Are you sure you want to delete?");
-    if (!ok) return;
+    if (!window.confirm("Are you sure you want to delete?")) return;
 
     // optimista
+    const globalIndex = items.findIndex((x) => x.id === item.id);
     setItems((prev) => prev.filter((x) => x.id !== item.id));
-
-    // Mostrar barra de UNDO por 5s
     if (undoRef.current?.timer) clearTimeout(undoRef.current.timer);
     const timer = setTimeout(() => (undoRef.current = null), 5000);
-    undoRef.current = { item, index: idxInList, timer };
+    undoRef.current = { item, index: globalIndex, timer };
 
     try {
       await postJSON(`${API_BASE}?route=write&action=delete&name=communications`, {
         where: { id: item.id },
       });
-      // si el usuario no hizo undo, dejamos así
-    } catch (err) {
-      // si falla el backend, devolvemos el item
+    } catch {
+      // revert si falló
       if (undoRef.current?.timer) clearTimeout(undoRef.current.timer);
       undoRef.current = null;
       setItems((prev) => {
         const clone = prev.slice();
-        clone.splice(idxInList, 0, item);
+        clone.splice(globalIndex, 0, item);
         return clone;
       });
       alert("No se pudo eliminar. Intenta nuevamente.");
@@ -135,13 +212,15 @@ export default function CommunicationList({
     <div className="space-y-3">
       {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
       {error && <div className="text-sm text-red-600">Error loading communications.</div>}
-      {!loading && filtered.length === 0 && (
+      {!loading && items.length === 0 && (
         <div className="text-sm text-muted-foreground">{emptyMessage}</div>
       )}
 
-      {filtered.map((c, i) => {
+      {visibleItems.map((c, i) => {
         const badge = entityBadge(c.linked_type);
         const ico = typeIcon(c.type);
+        const expanded = !!c._expanded;
+
         return (
           <div
             key={c.id || i}
@@ -149,11 +228,7 @@ export default function CommunicationList({
           >
             {/* header */}
             <div className="flex items-start justify-between gap-3">
-              <div
-                className="flex-1 cursor-pointer"
-                onClick={() => handleToggleExpand(c.id)}
-                role="button"
-              >
+              <div className="flex-1">
                 <div className="flex items-center gap-2">
                   <Icon name={ico} size={16} />
                   <div className="font-medium text-foreground">
@@ -181,12 +256,35 @@ export default function CommunicationList({
               </div>
             </div>
 
-            {/* body (preview / full) */}
-            <div className="mt-3 text-sm whitespace-pre-wrap">
-              {!c._expanded ? (
-                <span className="text-muted-foreground">{c.preview || "—"}</span>
+            {/* body con “Show more/less” (colapsable real) */}
+            <div className="mt-3 text-sm relative">
+              <div
+                className={expanded ? "whitespace-pre-wrap" : "whitespace-pre-wrap overflow-hidden"}
+                style={expanded ? {} : { maxHeight: 72 }} // ~3 líneas
+              >
+                {expanded ? (c.content || "—") : (c.preview || "—")}
+              </div>
+
+              {!expanded && (c.content || "").length > (c.preview || "").length ? (
+                <div className="mt-2">
+                  <button
+                    className="text-primary text-sm underline underline-offset-2"
+                    onClick={() => handleToggleExpand(c.id)}
+                  >
+                    Show more
+                  </button>
+                </div>
               ) : (
-                <span>{c.content || "—"}</span>
+                (c.content || "").length > 0 && (
+                  <div className="mt-2">
+                    <button
+                      className="text-primary text-sm underline underline-offset-2"
+                      onClick={() => handleToggleExpand(c.id)}
+                    >
+                      Show less
+                    </button>
+                  </div>
+                )
               )}
             </div>
 
@@ -199,6 +297,15 @@ export default function CommunicationList({
           </div>
         );
       })}
+
+      {/* Load more */}
+      {visible < items.length ? (
+        <div className="flex justify-center">
+          <Button variant="secondary" onClick={() => setVisible((v) => v + PAGE)}>
+            Load more
+          </Button>
+        </div>
+      ) : null}
 
       {/* barra de undo */}
       {undoRef.current ? (
