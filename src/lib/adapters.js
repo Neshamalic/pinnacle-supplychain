@@ -214,12 +214,8 @@ export const mapCommunications = (row = {}) => {
   // linked_type esperado: "orders" | "imports" | "tender"
   const linkedType = str(pick(row, ["linked_type", "entity_type", "link_type"]) || "").toLowerCase();
 
-  // Parseo robusto de booleanos (unread / deleted)
-  const parseBool = (v) => {
-    if (typeof v === "boolean") return v;
-    const s = String(v ?? "").trim().toLowerCase();
-    return s === "true" || s === "1" || s === "yes";
-  };
+  const unreadRaw   = pick(row, ["unread", "is_unread"]);
+  const deletedRaw  = pick(row, ["deleted", "is_deleted", "removed"]);
 
   return {
     id: str(pick(row, ["id", "comm_id"]) || ""),
@@ -231,8 +227,8 @@ export const mapCommunications = (row = {}) => {
     preview,
     linked_type: linkedType,
     linked_id: str(pick(row, ["linked_id", "entity_id", "link_id"]) || ""),
-    unread: parseBool(pick(row, ["unread", "is_unread"])),
-    deleted: parseBool(pick(row, ["deleted", "is_deleted", "archived"])),
+    unread: String(unreadRaw).toLowerCase() === "true",
+    deleted: String(deletedRaw).toLowerCase() === "true",
     _raw: row,
   };
 };
