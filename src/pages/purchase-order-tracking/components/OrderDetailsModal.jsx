@@ -5,16 +5,27 @@ import CommunicationList from "@/components/CommunicationList";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
 import { usePresentationCatalog } from "@/lib/catalog";
 
-// --------- pequeños helpers UI ----------
+/* ---------- helpers de parsing tolerantes ---------- */
+const str = (v) => (v == null ? "" : String(v).trim());
+const num = (v) => {
+  if (v == null || v === "") return 0;
+  const n = Number(String(v).replace(/\./g, "").replace(/,/g, "."));
+  return Number.isFinite(n) ? n : 0;
+};
+const pick = (obj, arr) => {
+  for (const k of arr) if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+  return undefined;
+};
+
 function Chip({ children, tone = "slate" }) {
   const tones = {
     slate: "bg-slate-100 text-slate-700",
     blue: "bg-blue-100 text-blue-700",
     teal: "bg-teal-100 text-teal-700",
-    indigo: "bg-indigo-100 text-indigo-700",
-    purple: "bg-purple-100 text-purple-700",
     green: "bg-green-100 text-green-700",
     amber: "bg-amber-100 text-amber-700",
+    indigo: "bg-indigo-100 text-indigo-700",
+    purple: "bg-purple-100 text-purple-700",
   };
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${tones[tone] || tones.slate}`}>
@@ -22,7 +33,6 @@ function Chip({ children, tone = "slate" }) {
     </span>
   );
 }
-
 function StatBox({ label, value }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
@@ -31,16 +41,11 @@ function StatBox({ label, value }) {
     </div>
   );
 }
-
 function SectionCard({ children }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      {children}
-    </div>
-  );
+  return <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">{children}</div>;
 }
 
-// =====================================================
+/* =================================================== */
 
 export default function OrderDetailsModal({ open, onClose, order }) {
   const [tab, setTab] = useState("items"); // items | communications
@@ -49,12 +54,14 @@ export default function OrderDetailsModal({ open, onClose, order }) {
   const [importItems, setImportItems] = useState([]);
   const [newComm, setNewComm] = useState(false);
 
-  const { enrich } = usePresentationCatalog(); // nombre y units/pack por presentation_code
+  const { enrich } = usePresentationCatalog();
+
+  const poNumber = str(pick(order || {}, ["po_number", "po", "id"]) || "");
 
   useEffect(() => {
-    if (!open || !order?.po_number) return;
+    if (!open || !poNumber) return;
 
-    let mounted = true;
+    let alive = true;
     (async () => {
       try {
         const [poi, imps, impItems] = await Promise.all([
@@ -63,82 +70,85 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           fetchJSON(`${API_BASE}?route=table&name=import_items`),
         ]);
 
-        if (!mounted) return;
+        if (!alive) return;
 
-        setPoItems((poi?.rows || []).filter(r => String(r.po_number || "").trim() === String(order.po_number || "").trim()));
-        setImports((imps?.rows || []).filter(r => String(r.po_number || "").trim() === String(order.po_number || "").trim()));
-        setImportItems((impItems?.rows || []).filter(r => String(r.po_number || "").trim() === String(order.po_number || "").trim()));
+        // Filtra por PO
+        const poiRows = (poi?.rows || []).filter(
+          (r) => str(pick(r, ["po_number", "po"])) === poNumber
+        );
+        const impRows = (imps?.rows || []).filter(
+          (r) => str(pick(r, ["po_number", "po"])) === poNumber
+        );
+        const impItemsRows = (impItems?.rows || []).filter(
+          (r) => str(pick(r, ["po_number", "po"])) === poNumber
+        );
+
+        setPoItems(poiRows);
+        setImports(impRows);
+        setImportItems(impItemsRows);
       } catch (e) {
         console.error("OrderDetailsModal load error:", e);
       }
     })();
 
-    return () => { mounted = false; };
-  }, [open, order?.po_number]);
+    return () => {
+      alive = false;
+    };
+  }, [open, poNumber]);
 
-  // Agrupamos import_items -> suma qty por presentation_code
+  // Suma importada por presentation_code
   const importedByCode = useMemo(() => {
     const map = new Map();
     for (const r of importItems || []) {
-      const code = String(r.presentation_code || r.presentationCode || "").trim();
+      const code = str(pick(r, ["presentation_code", "sku", "code"]) || "");
       if (!code) continue;
-      const qty = Number(r.qty || r.quantity || 0);
-      map.set(code, (map.get(code) || 0) + (Number.isFinite(qty) ? qty : 0));
+      const qty = num(pick(r, ["qty", "quantity"]));
+      map.set(code, (map.get(code) || 0) + qty);
     }
     return map;
   }, [importItems]);
 
-  // Un status y transport “principal” por la PO (tomamos el último por fecha si hubiera varios)
+  // Import status / transport de la PO (tomamos el último por ETA si existe)
   const mainImport = useMemo(() => {
     if (!imports?.length) return { import_status: "", transport_type: "", eta: "" };
-    // intentamos ordenar por ETA si viene
     const sorted = [...imports].sort((a, b) => {
-      const da = new Date(a.eta || a.arrival_date || 0).getTime();
-      const db = new Date(b.eta || b.arrival_date || 0).getTime();
+      const da = new Date(pick(a, ["eta", "arrival_date"]) || 0).getTime();
+      const db = new Date(pick(b, ["eta", "arrival_date"]) || 0).getTime();
       return (db || 0) - (da || 0);
     });
-    const last = sorted[0];
+    const last = sorted[0] || {};
     return {
-      import_status: String(last.import_status || "").toLowerCase(),
-      transport_type: String(last.transport_type || last.transport || "").toLowerCase(),
-      eta: last.eta || last.arrival_date || "",
+      import_status: str(pick(last, ["import_status", "status", "customs_status"])),
+      transport_type: str(pick(last, ["transport_type", "transport", "mode"])),
+      eta: pick(last, ["eta", "arrival_date"]) || "",
     };
   }, [imports]);
 
-  // Enriquecemos items con nombre y units/pack + imported & remaining + price
+  // Items enriquecidos para UI
   const items = useMemo(() => {
-    const enriched = (poItems || []).map(r => {
-      const code = String(r.presentation_code || r.presentationCode || "").trim();
-      const ordered = Number(r.ordered_qty ?? r.qty ?? r.quantity ?? 0);
-      const unitPrice =
-        Number(r.unit_price_usd ?? r.unit_price ?? r.price ?? 0);
+    const base = (poItems || []).map((r) => {
+      const code = str(pick(r, ["presentation_code", "sku", "code"]) || "");
+      const ordered = num(pick(r, ["ordered_qty", "qty", "quantity", "requested"]));
+      const unitPrice = num(pick(r, ["unit_price_usd", "unit_price", "price"]));
       const imported = importedByCode.get(code) || 0;
       const remaining = Math.max(ordered - imported, 0);
-      return {
-        code,
-        ordered,
-        unitPrice,
-        imported,
-        remaining,
-      };
+
+      return { presentationCode: code, ordered, unitPrice, imported, remaining };
     });
 
-    // enrich() añade productName y packageUnits si están en el catálogo
-    return enrich(
-      enriched.map(it => ({
-        presentationCode: it.code,
-        ...it,
-      }))
-    ).map(x => ({
+    // enrich => { productName, packageUnits }
+    return enrich(base).map((x) => ({
       ...x,
+      code: x.presentationCode,
       productName: x.productName || x.presentationCode,
       packageUnits: x.packageUnits || 1,
     }));
   }, [poItems, importedByCode, enrich]);
 
-  const totalUSD = useMemo(() => {
-    return items.reduce((acc, it) => acc + (it.ordered || 0) * (it.unitPrice || 0), 0);
-  }, [items]);
+  const totalUSD = useMemo(
+    () => items.reduce((acc, it) => acc + (it.ordered || 0) * (it.unitPrice || 0), 0),
+    [items]
+  );
 
   if (!open) return null;
 
@@ -150,11 +160,11 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           <div className="flex items-center justify-between border-b border-slate-200 p-4">
             <div className="flex items-center gap-3">
               <h2 className="text-xl font-semibold text-slate-900">Order Details – PO</h2>
-              <Chip tone="indigo">{order?.po_number}</Chip>
+              <Chip tone="indigo">{poNumber || "—"}</Chip>
             </div>
             <div className="text-sm text-slate-500">
               <span className="mr-1">Created:</span>
-              <span className="font-medium">{formatDate(order?.created_date)}</span>
+              <span className="font-medium">{formatDate(pick(order || {}, ["created_date"])) || "—"}</span>
               <button className="ml-4 rounded-full p-1 hover:bg-slate-100" onClick={onClose} aria-label="Close">
                 ×
               </button>
@@ -181,18 +191,19 @@ export default function OrderDetailsModal({ open, onClose, order }) {
 
           {/* Content */}
           <div className="p-4">
-            {/* ITEMS TAB */}
             {tab === "items" && (
               <>
-                {/* top stats */}
+                {/* Top stats */}
                 <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
                   <SectionCard>
                     <div className="text-xs text-slate-500">PO Number</div>
-                    <div className="mt-1 text-base font-medium">{order?.po_number || "—"}</div>
+                    <div className="mt-1 text-base font-medium">{poNumber || "—"}</div>
                   </SectionCard>
                   <SectionCard>
                     <div className="text-xs text-slate-500">Created</div>
-                    <div className="mt-1 text-base font-medium">{formatDate(order?.created_date) || "—"}</div>
+                    <div className="mt-1 text-base font-medium">
+                      {formatDate(pick(order || {}, ["created_date"])) || "—"}
+                    </div>
                   </SectionCard>
                   <SectionCard>
                     <div className="text-xs text-slate-500">Total (USD)</div>
@@ -202,7 +213,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                   </SectionCard>
                 </div>
 
-                {/* Items list */}
+                {/* Items */}
                 {(items || []).length === 0 && (
                   <div className="rounded-lg border border-dashed p-6 text-center text-slate-500">
                     No items found.
@@ -210,52 +221,61 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                 )}
 
                 <div className="space-y-4">
-                  {items.map((it) => (
-                    <SectionCard key={it.code}>
-                      {/* Header line with product name and unit price */}
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="font-semibold text-slate-900">
-                            {it.productName}{" "}
-                            <span className="text-slate-500">
-                              • {it.packageUnits} units/pack
-                            </span>
+                  {items.map((it) => {
+                    const statusTone =
+                      /ware/i.test(mainImport.import_status)
+                        ? "green"
+                        : /transit|custom/i.test(mainImport.import_status)
+                        ? "amber"
+                        : "slate";
+                    const transportTone =
+                      /air/i.test(mainImport.transport_type) ? "blue" : /sea/i.test(mainImport.transport_type) ? "teal" : "slate";
+
+                    return (
+                      <SectionCard key={it.code}>
+                        {/* Header product + unit price */}
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="font-semibold text-slate-900">
+                              {it.productName} <span className="text-slate-500">• {it.packageUnits} units/pack</span>
+                            </div>
+                            <div className="text-xs text-slate-500 mt-0.5">Code: {it.code}</div>
                           </div>
-                          <div className="text-xs text-slate-500 mt-0.5">
-                            Code: {it.code}
+                          <div className="text-right">
+                            <div className="text-xs text-slate-500">/ unit</div>
+                            <div className="text-sm font-medium">
+                              {it.unitPrice ? `\$${it.unitPrice.toFixed ? it.unitPrice.toFixed(2) : it.unitPrice}` : "—"}
+                            </div>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-xs text-slate-500">/ unit</div>
-                          <div className="text-sm font-medium">${it.unitPrice?.toFixed?.(2) ?? it.unitPrice}</div>
+
+                        {/* Badges */}
+                        <div className="mt-3 flex flex-wrap items-center gap-3">
+                          <div className="text-xs text-slate-500">Import Status</div>
+                          <Chip tone={statusTone}>{mainImport.import_status || "—"}</Chip>
+                          <div className="ml-4 text-xs text-slate-500">Transport</div>
+                          <Chip tone={transportTone}>{mainImport.transport_type || "—"}</Chip>
+                          {mainImport.eta && (
+                            <>
+                              <div className="ml-4 text-xs text-slate-500">ETA</div>
+                              <Chip tone="slate">{formatDate(mainImport.eta)}</Chip>
+                            </>
+                          )}
                         </div>
-                      </div>
 
-                      {/* Badges for import status & transport (de la PO) */}
-                      <div className="mt-3 flex flex-wrap items-center gap-3">
-                        <div className="text-xs text-slate-500">Import Status</div>
-                        <Chip tone={mainImport.import_status === "warehouse" ? "green" : mainImport.import_status === "transit" ? "amber" : "slate"}>
-                          {mainImport.import_status || "—"}
-                        </Chip>
-                        <div className="ml-4 text-xs text-slate-500">Transport</div>
-                        <Chip tone={mainImport.transport_type === "air" ? "blue" : mainImport.transport_type === "sea" ? "teal" : "slate"}>
-                          {mainImport.transport_type || "—"}
-                        </Chip>
-                      </div>
-
-                      {/* Stats row */}
-                      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                        <StatBox label="Requested" value={formatNumber(it.ordered)} />
-                        <StatBox label="Imported" value={formatNumber(it.imported)} />
-                        <StatBox label="Remaining" value={formatNumber(it.remaining)} />
-                      </div>
-                    </SectionCard>
-                  ))}
+                        {/* Stats */}
+                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                          <StatBox label="Requested" value={formatNumber(it.ordered)} />
+                          <StatBox label="Imported" value={formatNumber(it.imported)} />
+                          <StatBox label="Remaining" value={formatNumber(it.remaining)} />
+                        </div>
+                      </SectionCard>
+                    );
+                  })}
                 </div>
               </>
             )}
 
-            {/* COMMUNICATIONS TAB */}
             {tab === "communications" && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -267,21 +287,20 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                     + Add
                   </button>
                 </div>
-                <CommunicationList linkedType="orders" linkedId={order?.po_number || ""} />
+                <CommunicationList linkedType="orders" linkedId={poNumber} />
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Modal para crear comunicación */}
       {newComm && (
         <NewCommunicationModal
           open={newComm}
           onClose={() => setNewComm(false)}
           onSaved={() => setNewComm(false)}
           defaultLinkedType="orders"
-          defaultLinkedId={order?.po_number || ""}
+          defaultLinkedId={poNumber}
         />
       )}
     </div>
