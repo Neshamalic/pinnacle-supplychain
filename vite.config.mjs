@@ -11,10 +11,9 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000,
   },
   resolve: {
--   alias: { "@": path.resolve(__dirname, "src") },
-+   alias: { "@": path.resolve(__dirname, "src") },
-+   // Permite omitir la extensión en los imports (utils -> utils.js)
-+   extensions: [".mjs", ".js", ".jsx", ".ts", ".tsx", ".json"],
+    alias: { "@": path.resolve(__dirname, "src") },
+    // Permite omitir extensión en imports (utils -> utils.js)
+    extensions: [".mjs", ".js", ".jsx", ".ts", ".tsx", ".json"],
   },
   plugins: [tsconfigPaths(), react(), tagger()],
   server: {
