@@ -12,7 +12,7 @@ import {
   formatCurrency,
   formatDate,
   badgeClass,
-} from "@/lib/utils";
+} from "@/lib/utils.js";
 
 /* ===== util: tomar el último registro de 'imports' por PO ===== */
 function pickLatestImport(rows) {
