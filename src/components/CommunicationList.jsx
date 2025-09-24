@@ -1,4 +1,3 @@
-// src/components/CommunicationList.jsx
 import React, { useMemo, useState } from "react";
 import Icon from "@/components/AppIcon";
 import { useSheet } from "@/lib/sheetsApi";
@@ -17,6 +16,17 @@ const Pill = ({ children, tone = "gray" }) => {
   );
 };
 
+// genera payload para UPDATE aunque no haya id (usa created_date + subject)
+function buildUpdatePayload(comm, patch) {
+  const row = { ...patch };
+  if (comm.id) row.id = comm.id;
+  else {
+    row.created_date = comm.createdDate || comm.created_date || "";
+    row.subject = comm.subject || "";
+  }
+  return row;
+}
+
 export default function CommunicationList({ linkedType, linkedId, maxItems }) {
   const { rows = [], loading, refetch } = useSheet("communications", mapCommunications);
   const [undoRow, setUndoRow] = useState(null);
@@ -34,29 +44,26 @@ export default function CommunicationList({ linkedType, linkedId, maxItems }) {
   }, [rows, linkedType, linkedId, maxItems]);
 
   const confirmDelete = async (row) => {
-    if (!row?.id) {
-      alert('No se puede eliminar: falta "id". Refresca la página y vuelve a intentar.');
-      return;
-    }
     if (!window.confirm("Are you sure you want to delete?")) return;
 
-    // Soft delete (deleted=true) + barra Undo
+    // soft delete vía UPDATE (funciona con id o con llaves)
     await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-      row: { id: row.id, deleted: "true" }
+      row: buildUpdatePayload(row, { deleted: "true" })
     });
+
     setUndoRow(row);
     if (undoTimer) clearTimeout(undoTimer);
-    const timer = setTimeout(() => setUndoRow(null), 5000);
-    setUndoTimer(timer);
+    const t = setTimeout(() => setUndoRow(null), 5000);
+    setUndoTimer(t);
     await refetch?.();
   };
 
   const undoDelete = async (e) => {
     e?.preventDefault?.(); e?.stopPropagation?.();
-    if (!undoRow?.id) return;
+    if (!undoRow) return;
     if (undoTimer) clearTimeout(undoTimer);
     await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-      row: { id: undoRow.id, deleted: "" }
+      row: buildUpdatePayload(undoRow, { deleted: "" })
     });
     setUndoRow(null);
     await refetch?.();
@@ -90,12 +97,11 @@ function CommCard({ comm, onDelete, onMarked }) {
     const next = !open;
     setOpen(next);
 
-    // marcar como leído al abrir por primera vez
     if (next && comm.unread) {
       try {
         setMarking(true);
         await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-          row: { id: comm.id, unread: "false" }
+          row: buildUpdatePayload(comm, { unread: "false" })
         });
         setMarking(false);
         onMarked?.();
@@ -122,9 +128,7 @@ function CommCard({ comm, onDelete, onMarked }) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <div className="font-medium text-sm truncate">
-              {comm.subject || "(sin asunto)"}
-            </div>
+            <div className="font-medium text-sm truncate">{comm.subject || "(sin asunto)"}</div>
             {comm.unread ? <Pill tone="blue">Unread</Pill> : <Pill>Read</Pill>}
             {marking && <span className="text-xs text-muted-foreground">…</span>}
             <div className="ml-auto text-xs text-muted-foreground">{formatDate(comm.createdDate)}</div>
@@ -132,15 +136,12 @@ function CommCard({ comm, onDelete, onMarked }) {
           <div className="text-xs text-muted-foreground mt-1">
             {(comm.type || "other")} • {(comm.participants || "—")}
           </div>
-
-          {/* preview solo colapsado */}
           {!open && comm.preview && (
             <div className="mt-1 text-sm text-muted-foreground truncate">{comm.preview}</div>
           )}
         </div>
       </button>
 
-      {/* cuerpo expandido */}
       {open && (
         <div className="px-4 pb-3">
           <div className="text-sm whitespace-pre-wrap">{comm.content || comm.preview || "—"}</div>
