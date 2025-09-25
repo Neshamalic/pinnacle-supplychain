@@ -274,4 +274,53 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                           <Chip tone={transportTone}>{mainImport.transport_type || "—"}</Chip>
                           {mainImport.eta && (
                             <>
-                              <div className="ml-4 text-xs text-slate
+                              <div className="ml-4 text-xs text-slate-500">ETA</div>
+                              <Chip tone="slate">{formatDate(mainImport.eta)}</Chip>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Stats */}
+                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                          <Stat label="Requested" value={formatNumber(it.ordered)} />
+                          <Stat label="Imported" value={formatNumber(it.imported)} />
+                          <Stat label="Remaining" value={formatNumber(it.remaining)} />
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {tab === "communications" && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium">Communications</div>
+                  <button
+                    onClick={() => setNewComm(true)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-white shadow hover:bg-indigo-700"
+                  >
+                    + Add
+                  </button>
+                </div>
+                <CommunicationList linkedType="orders" linkedId={poNumber} />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {newComm && (
+        <NewCommunicationModal
+          open={newComm}
+          onClose={() => setNewComm(false)}
+          onSaved={() => setNewComm(false)}
+          defaultLinkedType="orders"
+          defaultLinkedId={poNumber}
+        />
+      )}
+    </div>
+  );
+}
+
