@@ -1,407 +1,438 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
-import { useEffect, useMemo, useState } from 'react';
-import { API_BASE, fetchJSON, postJSON, formatDate, formatCurrency, badgeClass } from '../../../lib/utils';
+import { useEffect, useMemo, useState, useCallback } from "react";
+import {
+  API_BASE,
+  fetchJSON,
+  postJSON,
+  formatDate,
+  formatCurrencyNormalized,
+  formatNumber,
+  badgeClass,
+} from "../../../lib/utils";
 
-/* --------------------------------- Mini UI -------------------------------- */
-function Section({ title, children }) {
+// Chip simple
+function Chip({ children }) {
   return (
-    <div className="mt-4">
-      <h3 className="mb-2 text-sm font-semibold text-slate-700">{title}</h3>
-      {children}
-    </div>
-  );
-}
-function Chip({ children, className = '' }) {
-  return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`} >
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
       {children}
     </span>
   );
 }
-function ModalShell({ open, onClose, children, title, right }) {
-  if (!open) return null;
+
+// Card info chica
+function StatCard({ label, children }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/20">
-      <div className="absolute inset-0 overflow-auto">
-        <div className="mx-auto my-8 w-full max-w-5xl rounded-xl bg-white shadow-xl ring-1 ring-slate-200">
-          <div className="flex items-center justify-between border-b px-5 py-4">
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-semibold">Order Details – PO</h2>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-slate-500">{right}</div>
-            <button onClick={onClose} className="rounded p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">✕</button>
+    <div className="rounded-xl bg-slate-50 px-4 py-3 ring-1 ring-slate-200">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 text-base font-semibold text-slate-800">{children}</div>
+    </div>
+  );
+}
+
+// Un bloque de producto (línea)
+function ProductBlock({ line }) {
+  const {
+    presentation_code,
+    product_name,
+    package_units,
+    unit_price_usd,
+    requested_qty,
+    imported_qty,
+    remaining_qty,
+    transport_type,
+    import_status,
+    oci_number,
+  } = line;
+
+  return (
+    <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="text-lg font-semibold text-slate-900">
+            {product_name || "Product"}{" "}
+            <span className="text-slate-400">
+              • {package_units ? `${package_units} units/pack` : presentation_code}
+            </span>
           </div>
-          {children}
+          <div className="mt-1 text-xs text-slate-600">
+            <span className="font-medium">Code:</span> {presentation_code}
+          </div>
         </div>
+
+        <div className="text-sm text-slate-600">
+          <span className="font-semibold">{formatCurrencyNormalized(unit_price_usd)}</span>{" "}
+          <span className="text-slate-400">/ unit</span>
+        </div>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span className={badgeClass("transport", transport_type)} style={{ padding: "2px 8px", borderRadius: 999 }}>
+          {transport_type || "—"}
+        </span>
+        <span className={badgeClass("manufacturing", import_status)} style={{ padding: "2px 8px", borderRadius: 999 }}>
+          {import_status || "—"}
+        </span>
+        {oci_number ? <Chip>OCI {oci_number.replace(/^OCI[-\s]?/i, "").trim() ? `OCI-${oci_number.replace(/^OCI[-\s]?/i, "").trim()}` : oci_number}</Chip> : null}
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <StatCard label="Requested">
+          {formatNumber(requested_qty)}
+        </StatCard>
+        <StatCard label="Imported">
+          {formatNumber(imported_qty)}
+        </StatCard>
+        <StatCard label="Remaining">
+          {formatNumber(remaining_qty)}
+        </StatCard>
       </div>
     </div>
   );
 }
 
-/* --------------------------- Add Communication ---------------------------- */
-function NewCommModal({ open, onClose, defaults, onCreated }) {
-  const [type, setType] = useState('meeting');
-  const [subject, setSubject] = useState('');
-  const [participants, setParticipants] = useState('');
-  const [content, setContent] = useState('');
-  const [linkedType, setLinkedType] = useState(defaults.linked_type);
-  const [linkedId, setLinkedId] = useState(defaults.linked_id);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setType('meeting'); setSubject(''); setParticipants(''); setContent('');
-      setLinkedType(defaults.linked_type); setLinkedId(defaults.linked_id);
-    }
-  }, [open, defaults]);
-
-  async function handleSave() {
-    if (!subject.trim() || !content.trim()) return alert('Subject y Content son obligatorios.');
-    setBusy(true);
-    try {
-      const body = {
-        route: 'write',
-        action: 'create',
-        name: 'communications',
-        row: {
-          type, subject, participants, content,
-          linked_type: linkedType,
-          linked_id: linkedId,
-          unread: 'true',
-        },
-      };
-      const res = await postJSON(API_BASE, body);
-      if (!res?.ok) throw new Error(res?.error || 'Error creating communication');
-      onCreated?.();
-      onClose();
-    } catch (err) {
-      alert(`No se pudo crear: ${err.message}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/30">
-      <div className="mx-auto mt-16 w-full max-w-xl rounded-xl bg-white shadow-xl ring-1 ring-slate-200">
-        <div className="border-b px-5 py-3 text-base font-semibold">New Communication</div>
-        <div className="space-y-3 p-5">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-sm">
-              <span className="mb-1 block text-slate-600">Type</span>
-              <select className="w-full rounded border p-2 text-sm" value={type} onChange={e => setType(e.target.value)}>
-                <option value="meeting">Meeting</option>
-                <option value="mail">Mail</option>
-                <option value="call">Call</option>
-                <option value="whatsapp">Whatsapp</option>
-                <option value="other">Other</option>
-              </select>
-            </label>
-            <label className="text-sm">
-              <span className="mb-1 block text-slate-600">Linked Type</span>
-              <select className="w-full rounded border p-2 text-sm" value={linkedType} onChange={e => setLinkedType(e.target.value)}>
-                {/* Permitimos orders u imports para que también se puedan crear para el OCI si existe */}
-                <option value="orders">Orders</option>
-                <option value="imports">Imports</option>
-              </select>
-            </label>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-sm col-span-2">
-              <span className="mb-1 block text-slate-600">Linked ID</span>
-              <input className="w-full rounded border p-2 text-sm" value={linkedId} onChange={e => setLinkedId(e.target.value)} />
-              <p className="mt-1 text-xs text-slate-500">
-                Orders: PO Number — Imports: Shipment ID (OCI)
-              </p>
-            </label>
-          </div>
-
-          <label className="text-sm block">
-            <span className="mb-1 block text-slate-600">Subject</span>
-            <input className="w-full rounded border p-2 text-sm" value={subject} onChange={e => setSubject(e.target.value)} />
-          </label>
-          <label className="text-sm block">
-            <span className="mb-1 block text-slate-600">Participants</span>
-            <input className="w-full rounded border p-2 text-sm" value={participants} onChange={e => setParticipants(e.target.value)} placeholder="Name1@..., Name2@..." />
-          </label>
-          <label className="text-sm block">
-            <span className="mb-1 block text-slate-600">Content</span>
-            <textarea className="h-28 w-full rounded border p-2 text-sm" value={content} onChange={e => setContent(e.target.value)} />
-          </label>
-        </div>
-
-        <div className="flex items-center justify-end gap-2 border-t px-5 py-3">
-          <button className="rounded-lg px-4 py-2 text-slate-600 hover:bg-slate-100" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-60"
-            onClick={handleSave} disabled={busy}>
-            {busy ? 'Saving…' : 'Save'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+/** ========== API helpers ========== */
+async function getSheet(name, params = "") {
+  const url = `${API_BASE}?route=table&name=${encodeURIComponent(name)}${params}`;
+  const res = await fetchJSON(url);
+  if (!res?.ok) throw new Error(res?.error || `Error loading ${name}`);
+  return res.rows || [];
 }
 
-/* ------------------------------- Main Modal ------------------------------- */
+async function createComm(row) {
+  return postJSON(`${API_BASE}?route=write&name=communications&action=create`, { row });
+}
+async function deleteComm(where) {
+  return postJSON(`${API_BASE}?route=write&name=communications&action=delete`, { where });
+}
+
+/** ========== Modal principal ========== */
 export default function OrderDetailsModal({ open, onClose, order }) {
-  const po = String(order?.po_number || '').trim();
-  const oci = String(order?.oci_number || order?.oci || '').trim();
-
-  const [tab, setTab] = useState('items');
-  const [poItems, setPoItems] = useState([]); // tus items ya funcionaban; mantenemos la carga que tengas
+  const [poRow, setPoRow] = useState(order || null);
+  const [items, setItems] = useState([]); // líneas (producto enriquecido)
   const [totalUsd, setTotalUsd] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  // Communications
   const [comms, setComms] = useState([]);
-  const [adding, setAdding] = useState(false);
-  const [undo, setUndo] = useState(null); // {row, timer}
+  const [commLoading, setCommLoading] = useState(false);
 
-  // -- LOAD ITEMS (como lo tenías funcionando) --------------------------------
-  useEffect(() => {
-    if (!open) return;
-    (async () => {
-      // Trae purchase_orders filtrado por po para construir los "products" (ahora todo está en la misma hoja)
-      const url = `${API_BASE}?route=table&name=purchase_orders`;
-      const res = await fetchJSON(url);
-      const rows = (res?.rows || []).filter(r => String(r.po_number || '').trim() === po);
+  const poNumber = poRow?.po_number || poRow?.poNumber || "";
+  const ociNumber = (poRow?.oci_number || poRow?.ociNumber || "").toString().trim();
 
-      // Armado de tarjetas (product_name/pack_units vía presentation master + imports + import_items ya lo tienes; aquí solo ejemplo)
-      setPoItems(rows);
+  const loadItems = useCallback(async () => {
+    if (!poNumber) return;
+    setLoading(true);
+    try {
+      // purchase_orders (todas las filas; ahora todo está en esta hoja)
+      const poRows = await getSheet("purchase_orders");
+      // Sólo las filas de este PO
+      const lines = poRows.filter(r => (r.po_number || "").toString().trim() === poNumber);
 
-      // Total USD correcto: suma (cost_usd * total_qty) por fila
-      const total = rows.reduce((acc, r) => {
-        const cost = Number(r.cost_usd ?? r.unit_price_usd ?? 0);
-        const qty = Number(r.total_qty ?? r.ordered_qty ?? r.qty ?? 0);
-        return acc + cost * qty;
-      }, 0);
+      // Maestro de presentaciones
+      const master = await getSheet("product_presentation_master");
+      const masterByCode = new Map(
+        master.map(m => [ (m.product_code || m.presentation_code || "").toString().trim(), m ])
+      );
+
+      // imports (para status/transport por oci)
+      const importsRows = await getSheet("imports");
+      const importByOci = new Map(importsRows.map(r => [ (r.oci_number || "").toString().trim(), r ]));
+
+      // import_items para sumar importado por (oci_number, presentation_code)
+      const importItems = await getSheet("import_items");
+
+      // construir líneas enriquecidas
+      const enriched = lines.map(r => {
+        const pres = (r.presentation_code || "").toString().trim();
+        const u = Number(r.cost_usd ?? r.unit_price_usd ?? r.unit_price ?? 0);
+        const requested = Number(r.total_qty ?? r.ordered_qty ?? r.qty ?? 0);
+
+        // status & transport desde imports por OCI global del PO o por r.oci_number si viene a nivel fila
+        const ociForLine = (r.oci_number || ociNumber).toString().trim();
+        const impRow = importByOci.get(ociForLine) || {};
+
+        // sumar importado
+        const imported = importItems
+          .filter(ii =>
+            (ii.oci_number || "").toString().trim() === ociForLine &&
+            (ii.presentation_code || "").toString().trim() === pres
+          )
+          .reduce((acc, ii) => acc + Number(ii.qty || 0), 0);
+
+        const remaining = Math.max(0, requested - imported);
+
+        const m = masterByCode.get(pres) || {};
+        return {
+          presentation_code: pres,
+          product_name: m.product_name || r.product_name || "",
+          package_units: Number(m.package_units || r.package_units || 0) || undefined,
+          unit_price_usd: u,
+          requested_qty: requested,
+          imported_qty: imported,
+          remaining_qty: remaining,
+          transport_type: (impRow.transport_type || "").toString().toLowerCase(),
+          import_status: (impRow.import_status || "").toString().toLowerCase(),
+          oci_number: ociForLine,
+        };
+      });
+
+      // total USD = sum(requested_qty * unit_price_usd)
+      const total = enriched.reduce((acc, l) => acc + (Number(l.requested_qty) * Number(l.unit_price_usd || 0)), 0);
+
+      setItems(enriched);
       setTotalUsd(total);
-    })().catch(console.error);
-  }, [open, po]);
-
-  // -- LOAD COMMUNICATIONS -----------------------------------------------------
-  async function loadComms() {
-    const calls = [];
-
-    // 1) communications de orders: linked_id = PO
-    calls.push(fetchJSON(
-      `${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc`
-    ).catch(() => ({ rows: [] })));
-
-    // 2) si hay OCI, también las de imports: linked_id = OCI
-    if (oci) {
-      calls.push(fetchJSON(
-        `${API_BASE}?route=table&name=communications&lt=imports&lid=${encodeURIComponent(oci)}&order=desc`
-      ).catch(() => ({ rows: [] })));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
+  }, [poNumber, ociNumber]);
 
-    const results = await Promise.all(calls);
-    const merged = results.flatMap(r => r?.rows || []);
+  const loadComms = useCallback(async () => {
+    if (!poNumber) return;
+    setCommLoading(true);
+    try {
+      // Filtra en servidor: linked_type=orders, linked_id=PO-171
+      const rows = await getSheet(
+        "communications",
+        `&lt=orders&lid=${encodeURIComponent(poNumber)}&order=desc`
+      );
+      // Evita duplicados por id
+      const seen = new Set();
+      const filtered = [];
+      for (const r of rows) {
+        const k = r.id || `${r.created_date || r.created || r.date || ""}::${r.subject || ""}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        filtered.push(r);
+      }
+      setComms(filtered);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCommLoading(false);
+    }
+  }, [poNumber]);
 
-    // Sort por created_date desc (backstop por created/date)
-    merged.sort((a, b) => {
-      const ad = new Date(a.created_date || a.created || a.date || 0).getTime() || 0;
-      const bd = new Date(b.created_date || b.created || b.date || 0).getTime() || 0;
-      return bd - ad;
-    });
-    setComms(merged);
-  }
+  useEffect(() => {
+    setPoRow(order || null);
+  }, [order]);
 
-  useEffect(() => { if (open) loadComms().catch(console.error); }, [open, po, oci]);
+  useEffect(() => {
+    if (!open || !poNumber) return;
+    loadItems();
+    loadComms();
+  }, [open, poNumber, loadItems, loadComms]);
 
-  // -- DELETE COMMUNICATION ----------------------------------------------------
-  async function handleDelete(row) {
-    if (!confirm('Are you sure you want to delete this message?')) return;
+  // Crear comunicación
+  const handleAddComm = async () => {
+    const subject = prompt("Subject?");
+    if (!subject) return;
+    const content = prompt("Content?");
+    try {
+      await createComm({
+        subject,
+        content,
+        type: "note",
+        participants: "",
+        linked_type: "orders",
+        linked_id: poNumber,
+        unread: "true",
+      });
+      await loadComms();
+    } catch (e) {
+      alert("Error creating communication");
+      console.error(e);
+    }
+  };
 
-    // Optimistic remove
-    setComms(prev => prev.filter(x => x !== row));
-    const timer = setTimeout(() => setUndo(null), 5000);
-    setUndo({ row, timer });
-
+  // Eliminar comunicación
+  const handleDelete = async (row) => {
+    if (!confirm("Are you sure you want to delete?")) return;
     try {
       const where = row.id
         ? { id: row.id }
-        : { created_date: row.created_date || row.created || row.date, subject: row.subject };
-
-      const body = { route: 'write', action: 'delete', name: 'communications', where };
-      const res = await postJSON(API_BASE, body);
-      if (!res?.ok || (res.removed ?? 0) === 0) throw new Error(res?.error || 'delete failed');
-      clearTimeout(timer);
-      setUndo(null);
-    } catch (err) {
-      alert(`No se pudo eliminar: ${err.message}`);
-      clearTimeout(timer);
-      // revert
-      setComms(prev => [row, ...prev]);
-      setUndo(null);
+        : { created_date: row.created_date || row.created || row.date, subject: row.subject || "" };
+      const res = await deleteComm(where);
+      if (!res?.ok && !res?.removed) {
+        // Apps Script devuelve { ok:true, removed:{...} } – si falla, intentamos por keys
+        await deleteComm({ created_date: where.created_date, subject: where.subject });
+      }
+      await loadComms();
+    } catch (e) {
+      alert('No se pudo eliminar. Refresca e intenta nuevamente.');
+      console.error(e);
     }
-  }
+  };
 
-  function handleUndo() {
-    if (!undo) return;
-    clearTimeout(undo.timer);
-    setComms(prev => [undo.row, ...prev]);
-    setUndo(null);
-  }
+  const totalChip = formatCurrencyNormalized(totalUsd);
 
-  /* ------------------------------- RENDER ---------------------------------- */
-  const headerRight = (
-    <>
-      {po && <Chip className="bg-slate-100 text-slate-600">PO-{po.replace(/^PO-?/i,'')}</Chip>}
-      {oci && <Chip className="bg-slate-100 text-slate-600">OCI-{oci.replace(/^OCI-?/i,'')}</Chip>}
-      <span>Created: {formatDate(order?.created_date || order?.created)}</span>
-    </>
-  );
+  const titlePoChip = poNumber ? `PO-${poNumber.replace(/^PO[-\s]?/i, "").trim()}` : "";
+  const ociChip = ociNumber ? `OCI-${ociNumber.replace(/^OCI[-\s]?/i, "").trim()}` : "";
+
+  if (!open) return null;
 
   return (
-    <ModalShell open={open} onClose={onClose} title="Order Details" right={headerRight}>
-      {/* Tabs */}
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4">
+      <div className="relative h-[92vh] w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-5 py-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold">Order Details – PO</h2>
+            {titlePoChip && <Chip>{titlePoChip}</Chip>}
+            {ociChip && <Chip>{ociChip}</Chip>}
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-slate-500">
+              Created: <span className="font-medium">{formatDate(poRow?.created_date || poRow?.created)}</span>
+            </div>
+            <button
+              className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex h-[calc(92vh-48px)] flex-col">
+          <TabView
+            poNumber={poNumber}
+            totalChip={totalChip}
+            items={items}
+            loading={loading}
+            comms={comms}
+            commLoading={commLoading}
+            onAddComm={handleAddComm}
+            onDeleteComm={handleDelete}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabView({ poNumber, totalChip, items, loading, comms, commLoading, onAddComm, onDeleteComm }) {
+  const [tab, setTab] = useState("items");
+  return (
+    <>
       <div className="border-b px-5">
-        <nav className="-mb-px flex gap-6 text-sm">
-          <button className={`border-b-2 px-1 py-3 ${tab === 'items' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-600 hover:text-slate-900'}`} onClick={() => setTab('items')}>Items</button>
-          <button className={`border-b-2 px-1 py-3 ${tab === 'comms' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-600 hover:text-slate-900'}`} onClick={() => setTab('comms')}>Communications</button>
+        <nav className="flex gap-6">
+          <button
+            className={`-mb-px border-b-2 px-1.5 py-2 text-sm ${tab === "items" ? "border-indigo-500 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}
+            onClick={() => setTab("items")}
+          >
+            Items
+          </button>
+          <button
+            className={`-mb-px border-b-2 px-1.5 py-2 text-sm ${tab === "comms" ? "border-indigo-500 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}
+            onClick={() => setTab("comms")}
+          >
+            Communications
+          </button>
         </nav>
       </div>
 
-      {/* Items tab */}
-      {tab === 'items' && (
-        <div className="p-5">
-          <div className="grid grid-cols-3 gap-3">
-            <div className="rounded-lg bg-slate-50 p-3">
-              <div className="text-xs text-slate-500">PO Number</div>
-              <div className="font-medium">{po || '—'}</div>
-            </div>
-            <div className="rounded-lg bg-slate-50 p-3">
-              <div className="text-xs text-slate-500">Created</div>
-              <div className="font-medium">{formatDate(order?.created_date || order?.created) || '—'}</div>
-            </div>
-            <div className="rounded-lg bg-slate-50 p-3">
-              <div className="text-xs text-slate-500">Total (USD)</div>
-              <div className="font-medium">{formatCurrency(totalUsd)}</div>
-            </div>
-          </div>
-
-          <Section title="Products">
-            {poItems.length === 0 && <div className="py-10 text-center text-slate-500">No items found.</div>}
-
-            <div className="space-y-4">
-              {poItems.map((it, idx) => {
-                const req = Number(it.total_qty ?? it.ordered_qty ?? it.qty ?? 0);
-                const imported = Number(it.imported_qty ?? 0); // si lo calculas antes, pásalo en it
-                const remaining = Math.max(0, req - imported);
-                const unit = Number(it.cost_usd ?? it.unit_price_usd ?? 0);
-                const status = String(it.import_status || '').toLowerCase();
-                const transport = String(it.transport_type || '').toLowerCase();
-
-                return (
-                  <div key={idx} className="rounded-xl border p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <div className="text-base font-semibold">
-                          {it.product_name || it.presentation_code || 'Product'}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          Code: {it.presentation_code || '—'}{it.package_units ? ` • ${it.package_units} units/pack` : ''}
-                        </div>
-                      </div>
-                      <div className="text-sm text-slate-500">
-                        {formatCurrency(unit)} <span className="text-xs">/ unit</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <Chip className={badgeClass('import', status)}>{status || '—'}</Chip>
-                      <Chip className={badgeClass('transport', transport)}>{transport || '—'}</Chip>
-                      {oci && <Chip className="bg-slate-100 text-slate-600">OCI {oci}</Chip>}
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-3 gap-3">
-                      <div className="rounded-lg bg-slate-50 p-3">
-                        <div className="text-xs text-slate-500">Requested</div>
-                        <div className="text-lg font-semibold">{req.toLocaleString('en-US')}</div>
-                      </div>
-                      <div className="rounded-lg bg-slate-50 p-3">
-                        <div className="text-xs text-slate-500">Imported</div>
-                        <div className="text-lg font-semibold">{imported.toLocaleString('en-US')}</div>
-                      </div>
-                      <div className="rounded-lg bg-slate-50 p-3">
-                        <div className="text-xs text-slate-500">Remaining</div>
-                        <div className="text-lg font-semibold">{remaining.toLocaleString('en-US')}</div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Section>
-        </div>
-      )}
-
-      {/* Communications tab */}
-      {tab === 'comms' && (
-        <div className="p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-sm text-slate-600">
-              Linked to <b>Orders</b> • {po}
-              {oci ? <> — <b>Imports</b> • {oci}</> : null}
-            </div>
-            <button
-              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm text-white hover:bg-indigo-700"
-              onClick={() => setAdding(true)}
-            >
-              + Add
-            </button>
-          </div>
-
-          {comms.length === 0 && (
-            <div className="py-10 text-center text-slate-500">No communications yet.</div>
-          )}
-
-          <div className="space-y-4">
-            {comms.map((c, i) => (
-              <div key={`${c.id || c._virtual_id || i}`} className="rounded-xl border p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-base font-semibold">{c.subject || '(no subject)'}</div>
-                    <div className="text-xs text-slate-500">
-                      {c.type || 'note'} • {c.participants || '—'}
-                    </div>
-                  </div>
-                  <div className="text-xs text-slate-500">{formatDate(c.created_date || c.created || c.date)}</div>
-                </div>
-                <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{c.content || c.preview || ''}</div>
-
-                <div className="mt-3 flex items-center justify-between">
-                  <div className="text-xs text-slate-500">
-                    Linked: {c.linked_type || '—'} • {c.linked_id || '—'}
-                  </div>
-                  <button
-                    onClick={() => handleDelete(c)}
-                    className="rounded-lg bg-rose-600 px-3 py-1.5 text-sm text-white hover:bg-rose-700"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {undo && (
-            <div className="mt-4 flex items-center justify-center gap-3">
-              <span className="text-sm text-slate-600">Message deleted.</span>
-              <button className="text-sm font-medium text-indigo-600 hover:underline" onClick={handleUndo}>
-                Undo
-              </button>
-            </div>
-          )}
-
-          <NewCommModal
-            open={adding}
-            onClose={() => setAdding(false)}
-            defaults={{ linked_type: 'orders', linked_id: po }}
-            onCreated={() => loadComms()}
+      <div className="flex-1 overflow-auto p-5">
+        {tab === "items" ? (
+          <ItemsTab poNumber={poNumber} totalChip={totalChip} items={items} loading={loading} />
+        ) : (
+          <CommsTab
+            poNumber={poNumber}
+            comms={comms}
+            loading={commLoading}
+            onAdd={onAddComm}
+            onDelete={onDeleteComm}
           />
-        </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ItemsTab({ poNumber, totalChip, items, loading }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <StatCard label="PO Number">{poNumber || "—"}</StatCard>
+        <div />
+        <StatCard label="Total (USD)">{totalChip}</StatCard>
+      </div>
+
+      <div className="text-sm font-medium text-slate-700">Products</div>
+
+      {loading && <div className="text-sm text-slate-500">Loading…</div>}
+
+      {!loading && items.length === 0 && (
+        <div className="text-sm text-slate-500">No items found.</div>
       )}
-    </ModalShell>
+
+      <div className="space-y-4">
+        {items.map((line, idx) => (
+          <ProductBlock key={`${line.presentation_code}-${idx}`} line={line} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CommsTab({ poNumber, comms, loading, onAdd, onDelete }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-slate-600">
+          Linked to <span className="font-medium">Orders</span> • <span className="font-semibold">{poNumber}</span>
+        </div>
+        <button
+          onClick={onAdd}
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+        >
+          + Add
+        </button>
+      </div>
+
+      {loading && <div className="text-sm text-slate-500">Loading…</div>}
+
+      {(!loading && comms.length === 0) && (
+        <div className="text-sm text-slate-500">No communications yet.</div>
+      )}
+
+      <div className="space-y-3">
+        {comms.map((c) => {
+          const idKey = c.id || `${c.created_date || c.created || c.date || ""}::${c.subject || ""}`;
+          return (
+            <div key={idKey} className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-slate-900">{c.subject || "(no subject)"}</div>
+                  <div className="mt-0.5 text-xs text-slate-500">
+                    {c.type || "note"} • {c.participants || "—"}
+                  </div>
+                </div>
+                <div className="text-xs text-slate-500">{formatDate(c.created_date || c.created || c.date)}</div>
+              </div>
+
+              <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                {c.content || c.preview || ""}
+              </div>
+
+              <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                <div>
+                  Linked: orders • {poNumber}
+                </div>
+                <button
+                  onClick={() => onDelete(c)}
+                  className="rounded-lg bg-rose-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-rose-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
