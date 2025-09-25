@@ -1,198 +1,222 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import { useEffect, useMemo, useState } from "react";
-import { API_BASE, fetchJSON, formatCurrency, formatDate } from "@/lib/utils";
-// usa tu componente de comunicaciones (el mismo que usas en Tenders/Imports).
-// Si tu nombre es distinto, solo cambia la importación de abajo.
-import EntityCommunications from "@/components/communications/EntityCommunications";
+import { API_BASE, fetchJSON, formatDate, formatCurrency } from "../../../lib/utils";
 
-function Badge({ children, className = "" }) {
+// Si ya tienes un componente reutilizable para communications, usa la ruta real de tu proyecto:
+import CommunicationsList from "../../../components/communications/CommunicationsList";
+
+function Pill({ children }) {
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`}
-    >
+    <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
       {children}
     </span>
   );
 }
 
-function StatCard({ label, value }) {
+function Badge({ children }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
+    <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+      {children}
+    </span>
+  );
+}
+
+function StatBox({ label, value }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-slate-900">{value}</div>
+      <div className="mt-1 text-xl font-semibold text-slate-800">{value ?? "—"}</div>
     </div>
   );
 }
 
 export default function OrderDetailsModal({ open, onClose, order }) {
-  const poNumber = String(order?.po_number ?? "").trim();
-  const ociNumber = String(order?.oci_number ?? "").trim();
+  const poNumber = String(order?.po_number || order?.poNumber || "").trim();
 
-  const [loading, setLoading] = useState(true);
-  const [rowsPO, setRowsPO] = useState([]);
-  const [imports, setImports] = useState([]);
-  const [importItems, setImportItems] = useState([]);
-  const [master, setMaster] = useState([]);
   const [tab, setTab] = useState("items");
+  const [poLines, setPoLines] = useState([]);     // líneas del PO desde purchase_orders (nuevo modelo)
+  const [imports, setImports] = useState([]);     // filas de imports para el PO
+  const [impItems, setImpItems] = useState([]);   // filas de import_items para el PO
+  const [master, setMaster] = useState({});       // mapa presentation_code -> {name, units}
 
+  // --------------- Carga de datos ---------------
   useEffect(() => {
-    if (!open || !poNumber) return;
+    if (!poNumber) return;
+
+    let abort = false;
 
     async function load() {
-      setLoading(true);
       try {
-        // Traemos todo y filtramos en cliente (tu Apps Script filtra solo communications).
-        const [poRes, impRes, impItRes, masterRes] = await Promise.all([
-          fetchJSON(`${API_BASE}?route=table&name=purchase_orders`),
-          fetchJSON(`${API_BASE}?route=table&name=imports`),
-          fetchJSON(`${API_BASE}?route=table&name=import_items`),
-          // ojo: usa el nombre exacto de tu hoja de maestro
-          fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`)
-            .catch(() => fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`)) // fallback por si tu hoja se llama distinto
-        ]);
+        // 1) Todas las filas del PO (ahora cada fila es una línea con presentation_code, total_qty, cost_usd, oci_number, etc.)
+        // Si tu Apps Script aún no filtra por ?po=..., filtramos en el cliente.
+        const poRes = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders`);
+        if (!poRes?.ok) throw new Error(poRes?.error || "Error loading purchase_orders");
+        const lines = (poRes.rows || []).filter(r => String(r.po_number || "").trim() === poNumber);
 
-        setRowsPO((poRes?.rows || []).filter(r => String(r.po_number || "") === poNumber));
-        setImports((impRes?.rows || []).filter(r =>
-          String(r.oci_number || "") === ociNumber &&
-          String(r.po_number || "") === poNumber
-        ));
-        setImportItems(impItRes?.rows || []);
-        setMaster(masterRes?.rows || []);
-      } finally {
-        setLoading(false);
+        // 2) Imports del PO (el Apps Script que compartiste sí admite ?po= en 'imports')
+        const imRes = await fetchJSON(`${API_BASE}?route=table&name=imports&po=${encodeURIComponent(poNumber)}`);
+        const imRows = imRes?.ok ? (imRes.rows || []) : [];
+
+        // 3) import_items del PO (también soportado por el Apps Script)
+        const iiRes = await fetchJSON(`${API_BASE}?route=table&name=import_items&po=${encodeURIComponent(poNumber)}`);
+        const iiRows = iiRes?.ok ? (iiRes.rows || []) : [];
+
+        // 4) maestro de presentaciones (nombre y unidades por pack)
+        // Intentamos con un nombre de hoja estándar; si en tu libro tiene otro nombre, crea un alias con el mismo encabezado.
+        let mRows = [];
+        try {
+          const m1 = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`);
+          if (m1?.ok) mRows = m1.rows || [];
+        } catch {}
+        if (!mRows.length) {
+          try {
+            const m2 = await fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`);
+            if (m2?.ok) mRows = m2.rows || [];
+          } catch {}
+        }
+        const mMap = {};
+        for (const r of mRows) {
+          const code = String(r.presentation_code || r.product_code || r.sku || r.code || "").trim();
+          if (!code) continue;
+          mMap[code] = {
+            name: String(r.product_name || r.name || "").trim(),
+            units: Number(r.package_units || r.units_per_pack || r.units_per_package || r.units || 0) || undefined,
+          };
+        }
+
+        if (abort) return;
+        setPoLines(lines);
+        setImports(imRows);
+        setImpItems(iiRows);
+        setMaster(mMap);
+      } catch (err) {
+        console.error("OrderDetails load error:", err);
       }
     }
-    load().catch(console.error);
-  }, [open, poNumber, ociNumber]);
 
-  // --- helpers ---
-  const findMaster = (code) =>
-    master.find(m =>
-      String(m.presentation_code || m.product_code || m.sku || m.code || "")
-        .trim().toLowerCase() === String(code || "").trim().toLowerCase()
-    ) || {};
+    load();
+    return () => { abort = true; };
+  }, [poNumber]);
 
-  const importHeader = useMemo(() => {
-    // Tomamos el primer match del header de imports (suelen ser iguales para la OCI/PO)
-    if (!imports.length) return {};
-    const first = imports[0] || {};
-    return {
-      transport_type: String(first.transport_type || first.transport || "").toLowerCase(),
-      import_status: String(first.import_status || first.status || "").toLowerCase(),
-    };
-  }, [imports]);
+  // --------------- Derivados / enriquecimiento ---------------
+  const ociInHeader = useMemo(() => {
+    const set = new Set((poLines || []).map(r => String(r.oci_number || "").trim()).filter(Boolean));
+    return Array.from(set)[0] || ""; // si hay varios OCI, mostramos el primero
+  }, [poLines]);
 
-  // agrupamos líneas por presentation_code en purchase_orders
-  const lines = useMemo(() => {
-    const map = new Map();
-    for (const r of rowsPO) {
-      const code = String(r.presentation_code || r.product_code || r.sku || "").trim();
-      if (!code) continue;
+  const headerCreated = useMemo(() => {
+    // Toma la primera fecha válida (todas las filas del PO deberían tener la misma)
+    const row = poLines[0] || order || {};
+    const iso = row.created_date || row.created || order?.created_date || "";
+    return formatDate(iso);
+  }, [poLines, order]);
 
-      const key = code;
-      const prev = map.get(key) || {
-        presentation_code: code,
-        // del maestro
-        product_name: "",
-        package_units: null,
-        // desde purchase_orders
-        unit_price_usd: Number(r.cost_usd || r.unit_price_usd || r.unit_price || 0),
-        requested: 0, // total_qty acumulado
-      };
+  // Enriquecemos cada línea (producto) con: nombre, unidades/pack, import status & transport, importado y remaining
+  const items = useMemo(() => {
+    if (!poLines?.length) return [];
 
-      prev.unit_price_usd = Number(
-        r.cost_usd ?? r.unit_price_usd ?? prev.unit_price_usd ?? 0
-      );
-      prev.requested += Number(r.total_qty || r.ordered_qty || r.qty || 0);
+    return poLines
+      .filter(r => String(r.presentation_code || "").trim()) // aseguramos que sea una línea de producto
+      .map(r => {
+        const code = String(r.presentation_code).trim();
 
-      map.set(key, prev);
-    }
+        // Maestro
+        const m = master[code] || {};
+        const productName = m.name || code;
+        const packUnits = m.units;
 
-    // completamos con maestro y con importados
-    for (const [code, obj] of map.entries()) {
-      const m = findMaster(code);
-      obj.product_name = String(m.product_name || m.name || "");
-      obj.package_units = Number(m.package_units || m.units_per_package || 0);
+        // Precios / cantidades en tu nuevo modelo
+        const unitPrice =
+          Number(r.cost_usd || r.unit_price_usd || r.unit_price || 0) || 0;
+        const requested =
+          Number(r.total_qty || r.ordered_qty || r.qty || r.quantity || 0) || 0;
 
-      // importe acumulado por oci + presentation_code
-      const impSum = importItems.reduce((acc, it) => {
-        const okOCI = String(it.oci_number || "").trim() === ociNumber;
-        const okCode =
-          String(it.presentation_code || it.product_code || it.sku || "")
-            .trim()
-            .toLowerCase() === code.toLowerCase();
-        return okOCI && okCode ? acc + Number(it.qty || 0) : acc;
-      }, 0);
+        // Import status + transport por OCI de esta línea
+        const oci = String(r.oci_number || "").trim();
+        const im = (imports || []).find(x =>
+          String(x.oci_number || "").trim() === oci ||
+          (String(x.po_number || "").trim() === poNumber && !oci) // fallback si no tuviera oci_number en imports
+        ) || {};
+        const importStatus = String(im.import_status || im.status || "").toLowerCase();
+        const transport = String(im.transport_type || im.transport || "").toLowerCase();
 
-      obj.imported = impSum;
-      obj.remaining = Math.max(0, (obj.requested || 0) - (obj.imported || 0));
+        // Importado (sumatoria en import_items por oci + presentation_code; si en tu hoja también hay po_number lo usamos)
+        const imported = (impItems || [])
+          .filter(ii =>
+            (oci ? String(ii.oci_number || "").trim() === oci : true) &&
+            String(ii.presentation_code || "").trim() === code &&
+            (String(ii.po_number || "").trim() === poNumber || !ii.po_number)
+          )
+          .reduce((acc, ii) => acc + (Number(ii.qty || ii.quantity || 0) || 0), 0);
 
-      map.set(code, obj);
-    }
+        const remaining = Math.max(0, requested - imported);
 
-    return Array.from(map.values());
-  }, [rowsPO, importItems, ociNumber, master]);
+        return {
+          code,
+          productName,
+          packUnits,
+          unitPrice,
+          requested,
+          imported,
+          remaining,
+          importStatus,
+          transport,
+          oci,
+        };
+      });
+  }, [poLines, master, imports, impItems, poNumber]);
 
-  const header = useMemo(() => {
-    // Tender ref y created con la primera fila del PO
-    const first = rowsPO[0] || {};
-    const created = first.created_date || first.created || first.date_created;
-    const tenderRef = first.tender_ref || first.tender_id || first.tender_number || "";
-    const totalUsd = lines.reduce((acc, l) => acc + (Number(l.requested || 0) * Number(l.unit_price_usd || 0)), 0);
-
-    return {
-      tenderRef,
-      created,
-      totalUsd,
-    };
-  }, [rowsPO, lines]);
+  // Total USD del pedido (suma unitPrice * requested, como referencia rápida)
+  const totalUSD = useMemo(() => {
+    return items.reduce((acc, it) => acc + (it.unitPrice * it.requested || 0), 0);
+  }, [items]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50">
-      {/* overlay */}
-      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      {/* modal */}
-      <div className="absolute inset-y-0 right-0 flex w-full max-w-5xl flex-col bg-white shadow-xl">
-        {/* header */}
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4">
+      <div className="mx-auto w-full max-w-5xl rounded-2xl bg-white shadow-xl">
+        {/* Header */}
         <div className="flex items-center justify-between border-b px-6 py-4">
           <div className="min-w-0">
-            <h2 className="truncate text-xl font-semibold text-slate-900">
-              Order Details –{" "}
-              {ociNumber ? `OCI-${ociNumber}` : "OCI-—"}{" "}
-              / {poNumber ? `PO-${poNumber}` : "PO-—"}
-            </h2>
+            <div className="flex items-center">
+              <h2 className="truncate text-xl font-semibold text-slate-900">
+                Order Details — {ociInHeader ? `OCI-${ociInHeader} / ` : ""}PO-{poNumber}
+              </h2>
+              <Pill>PO-{poNumber}</Pill>
+            </div>
             <div className="mt-1 text-sm text-slate-500">
-              Created: {header.created ? formatDate(header.created) : "—"}
+              Created: {headerCreated || "—"}
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-slate-600 hover:bg-slate-50"
+            className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
+            aria-label="Close"
+            title="Close"
           >
-            ✕
+            ×
           </button>
         </div>
 
-        {/* tabs */}
-        <div className="border-b px-6 pt-3">
-          <nav className="flex gap-6">
+        {/* Tabs */}
+        <div className="border-b px-4 pt-2">
+          <nav className="-mb-px flex gap-6">
             <button
-              className={`pb-3 text-sm font-medium ${
+              className={`border-b-2 px-2 pb-2 text-sm ${
                 tab === "items"
-                  ? "text-indigo-700 border-b-2 border-indigo-600"
-                  : "text-slate-600 hover:text-slate-800"
+                  ? "border-indigo-500 font-medium text-indigo-600"
+                  : "border-transparent text-slate-600 hover:text-slate-800"
               }`}
               onClick={() => setTab("items")}
             >
               Items
             </button>
             <button
-              className={`pb-3 text-sm font-medium ${
+              className={`border-b-2 px-2 pb-2 text-sm ${
                 tab === "comms"
-                  ? "text-indigo-700 border-b-2 border-indigo-600"
-                  : "text-slate-600 hover:text-slate-800"
+                  ? "border-indigo-500 font-medium text-indigo-600"
+                  : "border-transparent text-slate-600 hover:text-slate-800"
               }`}
               onClick={() => setTab("comms")}
             >
@@ -201,93 +225,32 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           </nav>
         </div>
 
-        {/* content */}
-        <div className="flex-1 overflow-auto p-6">
-          {tab === "items" && (
-            <>
-              {/* header stats */}
-              <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <StatCard label="Tender Ref" value={header.tenderRef || "—"} />
-                <StatCard label="Created" value={header.created ? formatDate(header.created) : "—"} />
-                <StatCard label="Total (USD)" value={formatCurrency(header.totalUsd || 0)} />
-              </div>
-
-              {/* products */}
-              <h3 className="mb-3 text-sm font-semibold text-slate-700">Products</h3>
-
-              {loading && <div className="text-slate-500">Loading…</div>}
-
-              {!loading && lines.length === 0 && (
-                <div className="text-slate-500">No items found.</div>
-              )}
-
-              {!loading &&
-                lines.map((l) => (
-                  <div
-                    key={l.presentation_code}
-                    className="mb-4 rounded-xl border border-slate-200 bg-slate-50/50 p-4"
-                  >
-                    {/* title row */}
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-[15px] font-semibold text-slate-900">
-                          {l.product_name || "—"}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          Code: {l.presentation_code || "—"}
-                          {l.package_units ? (
-                            <> • {l.package_units} units/pack</>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {/* unit price */}
-                        <div className="text-sm font-medium text-slate-700">
-                          {formatCurrency(l.unit_price_usd || 0)}{" "}
-                          <span className="text-xs text-slate-500">/ unit</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* chips row */}
-                    <div className="mt-3 flex flex-wrap items-center gap-3">
-                      <Badge className="bg-indigo-50 text-indigo-700">
-                        {importHeader.transport_type || "—"}
-                      </Badge>
-                      <Badge className="bg-slate-100 text-slate-700">
-                        {importHeader.import_status || "—"}
-                      </Badge>
-                    </div>
-
-                    {/* stats row */}
-                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      <StatCard
-                        label="Requested"
-                        value={new Intl.NumberFormat("en-US").format(l.requested || 0)}
-                      />
-                      <StatCard
-                        label="Imported"
-                        value={new Intl.NumberFormat("en-US").format(l.imported || 0)}
-                      />
-                      <StatCard
-                        label="Remaining"
-                        value={new Intl.NumberFormat("en-US").format(l.remaining || 0)}
-                      />
-                    </div>
-                  </div>
-                ))}
-            </>
-          )}
-
-          {tab === "comms" && (
-            <div className="mt-2">
-              {/* Si tu componente tiene otro nombre/ruta, solo cámbialo aquí */}
-              <EntityCommunications linkedType="orders" linkedId={poNumber} />
+        {/* Content */}
+        {tab === "items" ? (
+          <div className="space-y-4 p-6">
+            {/* Resumen */}
+            <div className="grid gap-4 sm:grid-cols-3">
+              <StatBox label="PO Number" value={poNumber || "—"} />
+              <StatBox label="Created" value={headerCreated || "—"} />
+              <StatBox label="Total (USD)" value={formatCurrency(totalUSD)} />
             </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+
+            {/* Lista de productos */}
+            {!items.length ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-slate-500">
+                No items found.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {items.map((it, idx) => (
+                  <div
+                    key={`${it.code}-${idx}`}
+                    className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4"
+                  >
+                    {/* Encabezado del producto */}
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-sm text-slate-500">
+                          Code: <span className="font-medium text-slate-700">{it.code}</span>
+                          {it.packUnits ? (
+                            <span className="ml-2
