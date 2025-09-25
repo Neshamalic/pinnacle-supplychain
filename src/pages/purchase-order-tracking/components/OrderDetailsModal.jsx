@@ -1,326 +1,279 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
-import { useEffect, useMemo, useState } from "react";
-import { API_BASE, fetchJSON, formatCurrency, formatDate } from "../../../lib/utils";
+import { useEffect, useMemo, useState } from 'react';
+import { API_BASE, fetchJSON, formatDate, formatCurrency, badgeClass } from '../../../lib/utils';
 
-// Helpers
-const toNum = (v) => {
-  const s = String(v ?? "").replace(/\./g, "").replace(/,/g, ".");
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
-};
-
-function Badge({ children }) {
-  return (
-    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
-      {children}
-    </span>
-  );
+// Simple iconos
+function Tag({ children }) {
+  return <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{children}</span>;
 }
 
-function CardStat({ label, value }) {
-  return (
-    <div className="flex flex-col rounded-xl border bg-slate-50 px-4 py-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 text-slate-800">{value ?? "—"}</div>
-    </div>
-  );
+function Pill({ children, className = '' }) {
+  return <span className={`rounded-lg px-3 py-2 text-sm ${className}`}>{children}</span>;
 }
 
 export default function OrderDetailsModal({ open, onClose, order }) {
-  const po = order?.po_number || order?.po || "";
-  const [tab, setTab] = useState("items");
+  const po = order?.po_number || '';
+  const oci = order?.oci_number || '';
 
-  // datasets
-  const [poRows, setPoRows] = useState([]); // todas las filas de purchase_orders
-  const [imports, setImports] = useState([]); // hoja imports
-  const [importItems, setImportItems] = useState([]); // hoja import_items
-  const [ppMaster, setPpMaster] = useState([]); // product_presentation_master (o producto_presentation_master)
-  const [comms, setComms] = useState([]); // communications (filtradas)
-  const [loading, setLoading] = useState(true);
+  const [poRows, setPoRows] = useState([]);            // purchase_orders (toda la hoja)
+  const [imports, setImports] = useState([]);          // imports (toda la hoja)
+  const [importItems, setImportItems] = useState([]);  // import_items (toda la hoja)
+  const [tab, setTab] = useState('items');
 
+  // Communications
+  const [comms, setComms] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  // Carga tablas necesarias una sola vez
   useEffect(() => {
-    if (!open || !po) return;
-
+    if (!open) return;
     (async () => {
-      setLoading(true);
-      try {
-        // 1) purchase_orders (ahora incluye las líneas)
-        const poRes = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders`);
-        console.log("[OrderDetailsModal] purchase_orders rows:", poRes?.rows?.length);
-        const allPO = poRes?.rows ?? [];
+      const [poRes, impRes, impItemRes] = await Promise.all([
+        fetchJSON(`${API_BASE}?route=table&name=purchase_orders`),
+        fetchJSON(`${API_BASE}?route=table&name=imports`),
+        fetchJSON(`${API_BASE}?route=table&name=import_items`)
+      ]);
+      if (poRes?.ok) setPoRows(poRes.rows || []);
+      if (impRes?.ok) setImports(impRes.rows || []);
+      if (impItemRes?.ok) setImportItems(impItemRes.rows || []);
+    })().catch(console.error);
+  }, [open]);
 
-        // 2) imports (para traer estado de importación y transporte por oci_number)
-        const impRes = await fetchJSON(`${API_BASE}?route=table&name=imports`);
-        console.log("[OrderDetailsModal] imports rows:", impRes?.rows?.length);
-        const allImports = impRes?.rows ?? [];
+  // Header chips corregidos
+  const headerChips = (
+    <div className="flex items-center gap-2">
+      {po ? <Tag>PO-{po.replace(/^PO-?/i,'')}</Tag> : null}
+      {oci ? <Tag>OCI-{oci.replace(/^OCI-?/i,'')}</Tag> : null}
+    </div>
+  );
 
-        // 3) import_items (para sumar qty importada por oci_number + presentation_code)
-        const iiRes = await fetchJSON(`${API_BASE}?route=table&name=import_items`);
-        console.log("[OrderDetailsModal] import_items rows:", iiRes?.rows?.length);
-        const allImpItems = iiRes?.rows ?? [];
-
-        // 4) product presentation master (puede llamarse product_presentation_master o producto_presentation_master)
-        let ppm = [];
-        try {
-          const ppm1 = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`);
-          ppm = ppm1?.rows ?? [];
-          console.log("[OrderDetailsModal] product_presentation_master rows:", ppm.length);
-        } catch {
-          try {
-            const ppm2 = await fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`);
-            ppm = ppm2?.rows ?? [];
-            console.log("[OrderDetailsModal] producto_presentation_master rows:", ppm.length);
-          } catch {
-            console.warn("[OrderDetailsModal] No se encontró product(o)_presentation_master");
-          }
-        }
-
-        // 5) communications filtradas por orders + po_number
-        const commsRes = await fetchJSON(
-          `${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc&limit=200`
-        );
-        console.log("[OrderDetailsModal] communications (orders, this PO):", commsRes?.rows?.length);
-
-        setPoRows(allPO);
-        setImports(allImports);
-        setImportItems(allImpItems);
-        setPpMaster(ppm);
-        setComms(commsRes?.rows ?? []);
-      } catch (err) {
-        console.error("[OrderDetailsModal] Load error:", err);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [open, po]);
-
-  // Filas de esta PO (cada fila es un presentation_code con total_qty, cost_usd, oci_number, etc.)
+  // Items: ahora están también en purchase_orders (una fila por línea)
+  // Creamos las líneas del PO con toda la info que pides
   const lines = useMemo(() => {
-    const list = (poRows || []).filter(
-      (r) => String(r.po_number || r.po || "").trim() === String(po).trim()
-    );
+    if (!po) return [];
+    // Filas que pertenecen al mismo PO
+    const related = (poRows || []).filter(r => String(r.po_number || '').trim() === po);
 
-    console.log(`[OrderDetailsModal] PO ${po} -> ${list.length} líneas en purchase_orders`);
+    // Para cada línea, armamos el objeto visible
+    return related.map(r => {
+      const presentation = String(r.presentation_code || '').trim();
+      const unitName = Number(r.package_units || r.units_per_pack || 0) || 0;
 
-    // Enriquecemos cada línea
-    const byKey = (o) => String(o.presentation_code || o.product_code || o.sku || "").trim();
+      // Precio unitario USD ya corregido por toNumber en adapters (el backend nos lo manda tal cual).
+      const unitUsd = Number(r.cost_usd || r.unit_price_usd || r.unit_price || 0) || 0;
 
-    return (list || []).map((row) => {
-      const oci = String(row.oci_number || row.oci || "").trim();
-      const code = byKey(row);
+      // Import status / transport: los resolvemos por OCI
+      const impRow = (imports || []).find(ii => String(ii.oci_number || '').trim() === String(r.oci_number || '').trim());
+      const importStatus = String(impRow?.import_status || '').toLowerCase();
+      const transportType = String(impRow?.transport_type || '').toLowerCase();
 
-      // nombre & units desde master
-      const m =
-        (ppMaster || []).find(
-          (x) =>
-            String(x.presentation_code || x.product_code || x.sku || "").trim() === code
-        ) || {};
-      const productName = String(m.product_name || m.name || "").trim();
-      const packageUnits = toNum(m.package_units || m.units_per_pack || m.units);
-
-      // estado/transport desde imports por oci_number
-      const imp =
-        (imports || []).find(
-          (x) => String(x.oci_number || x.oci || "").trim() === oci
-        ) || {};
-      const importStatus = String(imp.import_status || imp.status || "").toLowerCase();
-      const transportType = String(imp.transport_type || imp.transport || "").toLowerCase();
-
-      // qty importada desde import_items por oci + presentation_code
+      // Imported qty: suma import_items para este OCI + presentation
       const imported = (importItems || [])
-        .filter(
-          (x) =>
-            String(x.oci_number || x.oci || "").trim() === oci &&
-            byKey(x) === code
+        .filter(x =>
+          String(x.oci_number || '').trim() === String(r.oci_number || '').trim() &&
+          String(x.presentation_code || '').trim() === presentation
         )
-        .reduce((acc, x) => acc + toNum(x.qty || x.quantity), 0);
+        .reduce((acc, x) => acc + (Number(x.qty || 0) || 0), 0);
 
-      const requested = toNum(row.total_qty || row.requested_qty || row.ordered_qty || row.qty);
-      const remaining = Math.max(0, requested - imported);
-
-      const unitUsd =
-        toNum(row.cost_usd || row.unit_price_usd || row.unit_price || row.price);
-      const lineTotal = unitUsd * requested;
+      const requested = Number(r.total_qty || r.ordered_qty || r.qty || 0) || 0;
+      const remaining = Math.max(requested - imported, 0);
 
       return {
-        ociNumber: oci,
-        presentationCode: code,
-        productName,
-        packageUnits,
+        productName: String(r.product_name || r.presentation_name || '').trim(),
+        productCode: presentation,
+        unitsPerPack: unitName || undefined,
         unitUsd,
         importStatus,
         transportType,
         requested,
         imported,
-        remaining,
-        lineTotal,
+        remaining
       };
     });
-  }, [poRows, po, ppMaster, imports, importItems]);
+  }, [po, poRows, imports, importItems]);
 
-  // Cabecera: tomamos la 1ª fila de la PO
-  const head = useMemo(() => {
-    const row = (poRows || []).find(
-      (r) => String(r.po_number || r.po || "").trim() === String(po).trim()
-    );
-    if (!row) return {};
-    return {
-      poNumber: row.po_number || row.po,
-      ociNumber: row.oci_number || row.oci,
-      tenderRef: row.tender_ref || row.tender || "",
-      createdDate: row.created_date || row.created || row.date_created || "",
-    };
-  }, [poRows, po]);
+  // Total USD: sum(requested * unitUsd)
+  const totalUsd = useMemo(() => {
+    return lines.reduce((acc, l) => acc + (Number(l.requested) * Number(l.unitUsd)), 0);
+  }, [lines]);
 
-  const totalUSD = useMemo(
-    () => lines.reduce((s, x) => s + x.lineTotal, 0),
-    [lines]
-  );
+  // Communications (filtrado solo por Orders + PO)
+  const loadComms = async () => {
+    setBusy(true);
+    try {
+      const url = `${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc`;
+      const res = await fetchJSON(url);
+      setComms(res?.rows || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open && tab === 'comms' && po) loadComms();
+  }, [open, tab, po]);
+
+  const deleteComm = async (comm) => {
+    if (!comm) return;
+    if (!confirm('Are you sure you want to delete this communication?')) return;
+    try {
+      await fetchJSON(`${API_BASE}?route=write&name=communications&action=delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: JSON.stringify({ id: comm.id || comm._virtual_id, subject: comm.subject, created_date: comm.created_date }),
+      });
+      await loadComms();
+    } catch (e) {
+      alert('Delete failed');
+      console.error(e);
+    }
+  };
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/20 p-4">
-      <div className="mx-auto w-full max-w-6xl rounded-2xl bg-white shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/20 p-4">
+      <div className="mx-auto w-full max-w-5xl rounded-2xl bg-white shadow-xl">
         {/* Header */}
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-semibold">
-              Order Details – PO
-            </h2>
-            {head.poNumber ? <Badge>{head.poNumber}</Badge> : null}
-            {head.ociNumber ? <Badge>OCI {head.ociNumber}</Badge> : null}
+        <div className="flex items-center justify-between border-b p-4">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-semibold">Order Details – PO</h2>
+            {headerChips}
           </div>
-          <div className="text-sm text-slate-500">
-            Created: {formatDate(head.createdDate)}
-          </div>
-          <button
-            onClick={onClose}
-            className="ml-4 inline-flex h-8 w-8 items-center justify-center rounded-full hover:bg-slate-100"
-            aria-label="Close"
-          >
-            ✕
-          </button>
+          <div className="text-sm text-slate-500">Created: {formatDate(order?.created_date)}</div>
+          <button onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">×</button>
         </div>
 
         {/* Tabs */}
-        <div className="border-b px-6 pt-3">
-          <div className="flex gap-6">
-            <button
-              className={`-mb-px border-b-2 px-1 pb-3 text-sm ${
-                tab === "items"
-                  ? "border-violet-500 font-medium text-violet-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-              }`}
-              onClick={() => setTab("items")}
-            >
-              Items
-            </button>
-            <button
-              className={`-mb-px border-b-2 px-1 pb-3 text-sm ${
-                tab === "comms"
-                  ? "border-violet-500 font-medium text-violet-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-              }`}
-              onClick={() => setTab("comms")}
-            >
-              Communications
-            </button>
-          </div>
+        <div className="flex gap-6 border-b px-4 pt-3">
+          <button
+            className={`pb-3 text-sm ${tab==='items' ? 'border-b-2 border-indigo-500 font-medium text-indigo-600' : 'text-slate-600'}`}
+            onClick={() => setTab('items')}
+          >Items</button>
+          <button
+            className={`pb-3 text-sm ${tab==='comms' ? 'border-b-2 border-indigo-500 font-medium text-indigo-600' : 'text-slate-600'}`}
+            onClick={() => setTab('comms')}
+          >Communications</button>
         </div>
 
-        {/* Body */}
-        <div className="px-6 py-5">
-          {tab === "items" && (
-            <>
-              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <CardStat label="PO Number" value={head.poNumber || "—"} />
-                <CardStat label="Created" value={formatDate(head.createdDate)} />
-                <CardStat label="Total (USD)" value={formatCurrency(totalUSD)} />
-              </div>
+        {tab === 'items' && (
+          <div className="space-y-4 p-4">
+            {/* Summary cards */}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <Pill className="bg-slate-50 text-slate-700">
+                <div className="text-xs">PO Number</div>
+                <div className="text-base font-medium">PO-{po.replace(/^PO-?/i,'')}</div>
+              </Pill>
+              <Pill className="bg-slate-50 text-slate-700">
+                <div className="text-xs">Created</div>
+                <div className="text-base font-medium">{formatDate(order?.created_date) || '—'}</div>
+              </Pill>
+              <Pill className="bg-slate-50 text-slate-700">
+                <div className="text-xs">Total (USD)</div>
+                <div className="text-base font-medium">{formatCurrency(totalUsd)}</div>
+              </Pill>
+            </div>
 
-              {loading && (
-                <div className="py-16 text-center text-slate-500">Loading…</div>
-              )}
+            {/* Lines */}
+            {lines.length === 0 && (
+              <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">No items found.</div>
+            )}
 
-              {!loading && lines.length === 0 && (
-                <div className="py-12 text-center text-slate-500">
-                  No items found.
-                </div>
-              )}
-
-              <div className="space-y-4">
-                {lines.map((it) => (
-                  <div
-                    key={`${it.ociNumber}::${it.presentationCode}`}
-                    className="rounded-2xl border bg-slate-50 px-4 py-4"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-[15px] font-semibold text-slate-900">
-                          {it.productName || it.presentationCode}
-                        </div>
-                        <div className="mt-0.5 text-xs text-slate-500">
-                          Code: {it.presentationCode}
-                          {it.packageUnits ? ` • ${it.packageUnits} units/pack` : null}
-                        </div>
+            <div className="space-y-4">
+              {lines.map((l, idx) => (
+                <div key={idx} className="rounded-xl border p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-base font-semibold">
+                        {l.productName || l.productCode}
+                        {l.unitsPerPack ? <span className="text-slate-500"> • {l.unitsPerPack} units/pack</span> : null}
                       </div>
-
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="text-slate-500">{formatCurrency(it.unitUsd)}</span>
-                        <span className="text-slate-400">/ unit</span>
+                      <div className="text-xs text-slate-500">Code: {l.productCode}</div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-2 py-0.5 text-xs ${badgeClass('import', l.importStatus)}`}>{l.importStatus || '—'}</span>
+                        <span className={`rounded-full px-2 py-0.5 text-xs ${badgeClass('transport', l.transportType)}`}>{l.transportType || '—'}</span>
+                        {oci ? <Tag>OCI-{oci.replace(/^OCI-?/i,'')}</Tag> : null}
                       </div>
                     </div>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                      {it.importStatus ? <Badge>{it.importStatus}</Badge> : null}
-                      {it.transportType ? <Badge>{it.transportType}</Badge> : null}
-                      {it.ociNumber ? <Badge>OCI {it.ociNumber}</Badge> : null}
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      <CardStat label="Requested" value={it.requested.toLocaleString()} />
-                      <CardStat label="Imported" value={it.imported.toLocaleString()} />
-                      <CardStat label="Remaining" value={it.remaining.toLocaleString()} />
+                    <div className="text-sm text-slate-500">
+                      <div className="text-right text-slate-600">{formatCurrency(l.unitUsd)} <span className="text-xs text-slate-400">/ unit</span></div>
+                      <button
+                        className="mt-2 rounded-lg border px-3 py-1.5 text-slate-700 hover:bg-slate-50"
+                        onClick={() => alert('Edit coming soon')}
+                      >
+                        Edit
+                      </button>
                     </div>
                   </div>
-                ))}
-              </div>
-            </>
-          )}
 
-          {tab === "comms" && (
-            <div className="space-y-3">
-              {comms.length === 0 && (
-                <div className="py-12 text-center text-slate-500">
-                  No communications for this PO.
-                </div>
-              )}
-
-              {comms.map((c) => (
-                <div key={c.id || c._virtual_id} className="rounded-xl border p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="truncate font-medium">{c.subject || "(no subject)"}</div>
-                    <div className="text-xs text-slate-500">
-                      {formatDate(c.created_date || c.created || c.date)}
-                    </div>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {c.type} • {c.participants}
-                  </div>
-                  <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-                    {c.content || c.preview}
-                  </div>
-                  <div className="mt-2 text-xs text-slate-400">
-                    Linked: orders • {po}
+                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <Pill className="bg-slate-50 text-slate-700">
+                      <div className="text-xs">Requested</div>
+                      <div className="text-2xl font-semibold tracking-tight">{l.requested.toLocaleString()}</div>
+                    </Pill>
+                    <Pill className="bg-slate-50 text-slate-700">
+                      <div className="text-xs">Imported</div>
+                      <div className="text-2xl font-semibold tracking-tight">{l.imported.toLocaleString()}</div>
+                    </Pill>
+                    <Pill className="bg-slate-50 text-slate-700">
+                      <div className="text-xs">Remaining</div>
+                      <div className="text-2xl font-semibold tracking-tight">{l.remaining.toLocaleString()}</div>
+                    </Pill>
                   </div>
                 </div>
               ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {tab === 'comms' && (
+          <div className="p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-sm text-slate-500">Linked to Orders • {po}</div>
+              <button
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-white hover:bg-indigo-700"
+                onClick={() => window.dispatchEvent(new CustomEvent('open-new-communication', { detail: { linked_type: 'orders', linked_id: po } }))}
+              >
+                + Add
+              </button>
+            </div>
+
+            {busy && <div className="p-6 text-center text-slate-500">Loading…</div>}
+
+            {!busy && comms.length === 0 && (
+              <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">No communications.</div>
+            )}
+
+            <div className="space-y-3">
+              {comms.map(c => (
+                <div key={c.id || c._virtual_id} className="rounded-xl border p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-base font-semibold">{c.subject || '(no subject)'}</div>
+                      <div className="text-xs text-slate-500">{c.type || 'note'} • {c.participants || '—'}</div>
+                    </div>
+                    <div className="text-xs text-slate-500">{formatDate(c.created_date || c.created || c.date)}</div>
+                  </div>
+                  <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                    {c.content || c.preview || ''}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <div className="text-xs text-slate-500">Linked: orders • {po}</div>
+                    <button
+                      className="rounded-lg bg-rose-600 px-3 py-1.5 text-white hover:bg-rose-700"
+                      onClick={() => deleteComm(c)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
-
