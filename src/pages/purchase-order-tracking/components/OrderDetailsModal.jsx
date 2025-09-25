@@ -5,7 +5,7 @@ import CommunicationList from "@/components/CommunicationList";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
 import { usePresentationCatalog } from "@/lib/catalog";
 
-/* ---------- helpers de parsing tolerantes ---------- */
+/* ---------- helpers tolerantes a alias/formatos ---------- */
 const str = (v) => (v == null ? "" : String(v).trim());
 const num = (v) => {
   if (v == null || v === "") return 0;
@@ -17,6 +17,7 @@ const pick = (obj, arr) => {
   return undefined;
 };
 
+/* ---------- UI helpers ---------- */
 function Chip({ children, tone = "slate" }) {
   const tones = {
     slate: "bg-slate-100 text-slate-700",
@@ -33,7 +34,7 @@ function Chip({ children, tone = "slate" }) {
     </span>
   );
 }
-function StatBox({ label, value }) {
+function Stat({ label, value }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
       <div className="text-xs text-slate-500">{label}</div>
@@ -41,27 +42,34 @@ function StatBox({ label, value }) {
     </div>
   );
 }
-function SectionCard({ children }) {
+function Card({ children }) {
   return <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">{children}</div>;
 }
 
-/* =================================================== */
+/* ========================================================= */
 
 export default function OrderDetailsModal({ open, onClose, order }) {
-  const [tab, setTab] = useState("items"); // items | communications
+  const [tab, setTab] = useState("items");
   const [poItems, setPoItems] = useState([]);
   const [imports, setImports] = useState([]);
   const [importItems, setImportItems] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [newComm, setNewComm] = useState(false);
 
-  const { enrich } = usePresentationCatalog();
+  // Enriquecimiento (nombre + unidades por pack) si existe catálogo
+  let enrich = (arr) => arr;
+  try {
+    // el hook existe en tu repo; si falla, seguimos sin enrich
+    enrich = usePresentationCatalog()?.enrich ?? enrich;
+  } catch {}
 
   const poNumber = str(pick(order || {}, ["po_number", "po", "id"]) || "");
 
   useEffect(() => {
     if (!open || !poNumber) return;
-
     let alive = true;
+    setLoading(true);
+
     (async () => {
       try {
         const [poi, imps, impItems] = await Promise.all([
@@ -72,7 +80,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
 
         if (!alive) return;
 
-        // Filtra por PO
+        // Filtramos por PO Number (aceptando alias)
         const poiRows = (poi?.rows || []).filter(
           (r) => str(pick(r, ["po_number", "po"])) === poNumber
         );
@@ -88,6 +96,8 @@ export default function OrderDetailsModal({ open, onClose, order }) {
         setImportItems(impItemsRows);
       } catch (e) {
         console.error("OrderDetailsModal load error:", e);
+      } finally {
+        if (alive) setLoading(false);
       }
     })();
 
@@ -102,13 +112,12 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     for (const r of importItems || []) {
       const code = str(pick(r, ["presentation_code", "sku", "code"]) || "");
       if (!code) continue;
-      const qty = num(pick(r, ["qty", "quantity"]));
-      map.set(code, (map.get(code) || 0) + qty);
+      map.set(code, (map.get(code) || 0) + num(pick(r, ["qty", "quantity"])));
     }
     return map;
   }, [importItems]);
 
-  // Import status / transport de la PO (tomamos el último por ETA si existe)
+  // Import status / transport para la PO (toma el más reciente por ETA si existe)
   const mainImport = useMemo(() => {
     if (!imports?.length) return { import_status: "", transport_type: "", eta: "" };
     const sorted = [...imports].sort((a, b) => {
@@ -124,7 +133,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     };
   }, [imports]);
 
-  // Items enriquecidos para UI
+  // Ítems enriquecidos para UI (como “antes”)
   const items = useMemo(() => {
     const base = (poItems || []).map((r) => {
       const code = str(pick(r, ["presentation_code", "sku", "code"]) || "");
@@ -136,13 +145,14 @@ export default function OrderDetailsModal({ open, onClose, order }) {
       return { presentationCode: code, ordered, unitPrice, imported, remaining };
     });
 
-    // enrich => { productName, packageUnits }
-    return enrich(base).map((x) => ({
+    const enriched = enrich(base).map((x) => ({
       ...x,
       code: x.presentationCode,
       productName: x.productName || x.presentationCode,
       packageUnits: x.packageUnits || 1,
     }));
+
+    return enriched;
   }, [poItems, importedByCode, enrich]);
 
   const totalUSD = useMemo(
@@ -195,31 +205,37 @@ export default function OrderDetailsModal({ open, onClose, order }) {
               <>
                 {/* Top stats */}
                 <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <SectionCard>
+                  <Card>
                     <div className="text-xs text-slate-500">PO Number</div>
                     <div className="mt-1 text-base font-medium">{poNumber || "—"}</div>
-                  </SectionCard>
-                  <SectionCard>
+                  </Card>
+                  <Card>
                     <div className="text-xs text-slate-500">Created</div>
                     <div className="mt-1 text-base font-medium">
                       {formatDate(pick(order || {}, ["created_date"])) || "—"}
                     </div>
-                  </SectionCard>
-                  <SectionCard>
+                  </Card>
+                  <Card>
                     <div className="text-xs text-slate-500">Total (USD)</div>
                     <div className="mt-1 text-base font-semibold">
                       ${formatNumber(Math.round((totalUSD + Number.EPSILON) * 100) / 100)}
                     </div>
-                  </SectionCard>
+                  </Card>
                 </div>
 
-                {/* Items */}
-                {(items || []).length === 0 && (
+                {loading && (
+                  <div className="rounded-lg border border-dashed p-6 text-center text-slate-500">
+                    Loading items…
+                  </div>
+                )}
+
+                {!loading && (items || []).length === 0 && (
                   <div className="rounded-lg border border-dashed p-6 text-center text-slate-500">
                     No items found.
                   </div>
                 )}
 
+                {/* === Cards por ítem (como antes) === */}
                 <div className="space-y-4">
                   {items.map((it) => {
                     const statusTone =
@@ -232,12 +248,13 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                       /air/i.test(mainImport.transport_type) ? "blue" : /sea/i.test(mainImport.transport_type) ? "teal" : "slate";
 
                     return (
-                      <SectionCard key={it.code}>
-                        {/* Header product + unit price */}
+                      <Card key={it.code}>
+                        {/* Header: nombre + unit price */}
                         <div className="flex items-start justify-between">
                           <div>
                             <div className="font-semibold text-slate-900">
-                              {it.productName} <span className="text-slate-500">• {it.packageUnits} units/pack</span>
+                              {it.productName}{" "}
+                              <span className="text-slate-500">• {it.packageUnits} units/pack</span>
                             </div>
                             <div className="text-xs text-slate-500 mt-0.5">Code: {it.code}</div>
                           </div>
@@ -257,52 +274,4 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                           <Chip tone={transportTone}>{mainImport.transport_type || "—"}</Chip>
                           {mainImport.eta && (
                             <>
-                              <div className="ml-4 text-xs text-slate-500">ETA</div>
-                              <Chip tone="slate">{formatDate(mainImport.eta)}</Chip>
-                            </>
-                          )}
-                        </div>
-
-                        {/* Stats */}
-                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                          <StatBox label="Requested" value={formatNumber(it.ordered)} />
-                          <StatBox label="Imported" value={formatNumber(it.imported)} />
-                          <StatBox label="Remaining" value={formatNumber(it.remaining)} />
-                        </div>
-                      </SectionCard>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-
-            {tab === "communications" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium">Communications</div>
-                  <button
-                    onClick={() => setNewComm(true)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-white shadow hover:bg-indigo-700"
-                  >
-                    + Add
-                  </button>
-                </div>
-                <CommunicationList linkedType="orders" linkedId={poNumber} />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {newComm && (
-        <NewCommunicationModal
-          open={newComm}
-          onClose={() => setNewComm(false)}
-          onSaved={() => setNewComm(false)}
-          defaultLinkedType="orders"
-          defaultLinkedId={poNumber}
-        />
-      )}
-    </div>
-  );
-}
+                              <div className="ml-4 text-xs text-slate
