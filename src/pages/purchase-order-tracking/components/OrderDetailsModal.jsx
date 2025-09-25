@@ -1,326 +1,308 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import { useEffect, useMemo, useState } from "react";
-import { API_BASE, fetchJSON, formatDate, formatNumber } from "@/lib/utils";
-import CommunicationList from "@/components/CommunicationList";
+import { API_BASE, fetchJSON, formatCurrency, formatDate } from "@/lib/utils";
 import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx";
-import { usePresentationCatalog } from "@/lib/catalog";
+import CommunicationList from "@/components/CommunicationList";
 
-/* ---------- helpers tolerantes a alias/formatos ---------- */
-const str = (v) => (v == null ? "" : String(v).trim());
+/* Helpers */
 const num = (v) => {
   if (v == null || v === "") return 0;
-  const n = Number(String(v).replace(/\./g, "").replace(/,/g, "."));
+  const s = String(v).replace(/\./g, "").replace(/,/g, ".");
+  const n = parseFloat(s);
   return Number.isFinite(n) ? n : 0;
 };
-const pick = (obj, arr) => {
-  for (const k of arr) if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
-  return undefined;
-};
 
-/* ---------- UI helpers ---------- */
-function Chip({ children, tone = "slate" }) {
-  const tones = {
-    slate: "bg-slate-100 text-slate-700",
-    blue: "bg-blue-100 text-blue-700",
-    teal: "bg-teal-100 text-teal-700",
-    green: "bg-green-100 text-green-700",
-    amber: "bg-amber-100 text-amber-700",
-    indigo: "bg-indigo-100 text-indigo-700",
-    purple: "bg-purple-100 text-purple-700",
-  };
+function Badge({ children, className = "" }) {
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${tones[tone] || tones.slate}`}>
+    <span
+      className={
+        "inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-700 " +
+        className
+      }
+    >
       {children}
     </span>
   );
 }
-function Stat({ label, value }) {
+
+function CloseIcon() {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
-    </div>
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M18.3 5.71a1 1 0 0 0-1.41 0L12 10.59 7.11 5.7A1 1 0 0 0 5.7 7.11L10.59 12l-4.9 4.89a1 1 0 1 0 1.41 1.41L12 13.41l4.89 4.9a1 1 0 1 0 1.41-1.41L13.41 12l4.9-4.89a1 1 0 0 0-.01-1.4Z"
+      />
+    </svg>
   );
 }
-function Card({ children }) {
-  return <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">{children}</div>;
-}
 
-/* ========================================================= */
-
+/**
+ * Modal con pestañas:
+ *  - Items: carga purchase_order_items y enriquece con master para mostrar
+ *           nombre del producto, units/pack, precio, requested/imported/remaining,
+ *           import status y transport por línea.
+ *  - Communications: lista y permite crear comunicaciones ligadas a la PO.
+ */
 export default function OrderDetailsModal({ open, onClose, order }) {
   const [tab, setTab] = useState("items");
-  const [poItems, setPoItems] = useState([]);
-  const [imports, setImports] = useState([]);
-  const [importItems, setImportItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [newComm, setNewComm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [itemsRaw, setItemsRaw] = useState([]);
+  const [master, setMaster] = useState([]);
+  const [openNewComm, setOpenNewComm] = useState(false);
 
-  // Enriquecimiento (nombre + unidades por pack) si existe catálogo
-  let enrich = (arr) => arr;
-  try {
-    // el hook existe en tu repo; si falla, seguimos sin enrich
-    enrich = usePresentationCatalog()?.enrich ?? enrich;
-  } catch {}
-
-  const poNumber = str(pick(order || {}, ["po_number", "po", "id"]) || "");
-
+  /* Carga líneas de la PO + master */
   useEffect(() => {
-    if (!open || !poNumber) return;
-    let alive = true;
-    setLoading(true);
-
-    (async () => {
+    if (!open || !order?.po_number) return;
+    let cancel = false;
+    async function load() {
+      setLoading(true);
       try {
-        const [poi, imps, impItems] = await Promise.all([
-          fetchJSON(`${API_BASE}?route=table&name=purchase_order_items`),
-          fetchJSON(`${API_BASE}?route=table&name=imports`),
-          fetchJSON(`${API_BASE}?route=table&name=import_items`),
-        ]);
-
-        if (!alive) return;
-
-        // Filtramos por PO Number (aceptando alias)
-        const poiRows = (poi?.rows || []).filter(
-          (r) => str(pick(r, ["po_number", "po"])) === poNumber
+        // líneas de la PO
+        const resItems = await fetchJSON(
+          `${API_BASE}?route=table&name=purchase_order_items`
         );
-        const impRows = (imps?.rows || []).filter(
-          (r) => str(pick(r, ["po_number", "po"])) === poNumber
-        );
-        const impItemsRows = (impItems?.rows || []).filter(
-          (r) => str(pick(r, ["po_number", "po"])) === poNumber
-        );
+        // master de presentaciones (si no existe en tu hoja, no pasa nada)
+        const resMaster = await fetchJSON(
+          `${API_BASE}?route=table&name=product_presentation_master`
+        ).catch(() => ({ ok: false, rows: [] }));
 
-        setPoItems(poiRows);
-        setImports(impRows);
-        setImportItems(impItemsRows);
-      } catch (e) {
-        console.error("OrderDetailsModal load error:", e);
+        if (cancel) return;
+
+        const rowsItems = (resItems?.rows || []).filter(
+          (r) => String(r.po_number || "").trim() === String(order.po_number)
+        );
+        setItemsRaw(rowsItems);
+        setMaster(resMaster?.rows || []);
+      } catch (err) {
+        console.error("OrderDetailsModal load error:", err);
+        setItemsRaw([]);
+        setMaster([]);
       } finally {
-        if (alive) setLoading(false);
+        if (!cancel) setLoading(false);
       }
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, [open, poNumber]);
-
-  // Suma importada por presentation_code
-  const importedByCode = useMemo(() => {
-    const map = new Map();
-    for (const r of importItems || []) {
-      const code = str(pick(r, ["presentation_code", "sku", "code"]) || "");
-      if (!code) continue;
-      map.set(code, (map.get(code) || 0) + num(pick(r, ["qty", "quantity"])));
     }
-    return map;
-  }, [importItems]);
-
-  // Import status / transport para la PO (toma el más reciente por ETA si existe)
-  const mainImport = useMemo(() => {
-    if (!imports?.length) return { import_status: "", transport_type: "", eta: "" };
-    const sorted = [...imports].sort((a, b) => {
-      const da = new Date(pick(a, ["eta", "arrival_date"]) || 0).getTime();
-      const db = new Date(pick(b, ["eta", "arrival_date"]) || 0).getTime();
-      return (db || 0) - (da || 0);
-    });
-    const last = sorted[0] || {};
-    return {
-      import_status: str(pick(last, ["import_status", "status", "customs_status"])),
-      transport_type: str(pick(last, ["transport_type", "transport", "mode"])),
-      eta: pick(last, ["eta", "arrival_date"]) || "",
+    load();
+    return () => {
+      cancel = true;
     };
-  }, [imports]);
+  }, [open, order?.po_number]);
 
-  // Ítems enriquecidos para UI (como “antes”)
+  /* Enriquecimiento con master */
   const items = useMemo(() => {
-    const base = (poItems || []).map((r) => {
-      const code = str(pick(r, ["presentation_code", "sku", "code"]) || "");
-      const ordered = num(pick(r, ["ordered_qty", "qty", "quantity", "requested"]));
-      const unitPrice = num(pick(r, ["unit_price_usd", "unit_price", "price"]));
-      const imported = importedByCode.get(code) || 0;
-      const remaining = Math.max(ordered - imported, 0);
+    const byCode = new Map(
+      (master || []).map((m) => [
+        String(m.presentation_code || m.code || "").trim(),
+        m,
+      ])
+    );
+    return (itemsRaw || []).map((r) => {
+      const code = String(r.presentation_code || r.code || "").trim();
+      const m = byCode.get(code) || {};
+      const requested =
+        num(r.ordered_qty ?? r.ordered ?? r.qty ?? r.quantity ?? 0);
+      const imported = num(r.imported_qty ?? r.imported ?? 0);
+      const remaining = Math.max(0, requested - imported);
+      const unitPrice = num(r.unit_price_usd ?? r.unit_price ?? r.price ?? 0);
+      const pack = num(m.package_units ?? r.package_units ?? r.units_per_pack);
+      const productName =
+        r.product_name ||
+        m.product_name ||
+        `${code}` ||
+        "Product";
 
-      return { presentationCode: code, ordered, unitPrice, imported, remaining };
+      return {
+        presentationCode: code,
+        productName,
+        packageUnits: pack || undefined,
+        requested,
+        imported,
+        remaining,
+        unitPrice,
+        importStatus:
+          String(r.import_status || r.importStatus || "").toLowerCase(),
+        transport: String(r.transport || r.transport_type || "").toLowerCase(),
+      };
     });
-
-    const enriched = enrich(base).map((x) => ({
-      ...x,
-      code: x.presentationCode,
-      productName: x.productName || x.presentationCode,
-      packageUnits: x.packageUnits || 1,
-    }));
-
-    return enriched;
-  }, [poItems, importedByCode, enrich]);
-
-  const totalUSD = useMemo(
-    () => items.reduce((acc, it) => acc + (it.ordered || 0) * (it.unitPrice || 0), 0),
-    [items]
-  );
+  }, [itemsRaw, master]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[2100] bg-black/40">
-      <div className="absolute inset-0 flex justify-center overflow-y-auto p-6">
-        <div className="w-full max-w-6xl rounded-xl bg-white shadow-2xl ring-1 ring-slate-200">
-          {/* Header */}
-          <div className="flex items-center justify-between border-b border-slate-200 p-4">
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold text-slate-900">Order Details – PO</h2>
-              <Chip tone="indigo">{poNumber || "—"}</Chip>
-            </div>
-            <div className="text-sm text-slate-500">
-              <span className="mr-1">Created:</span>
-              <span className="font-medium">{formatDate(pick(order || {}, ["created_date"])) || "—"}</span>
-              <button className="ml-4 rounded-full p-1 hover:bg-slate-100" onClick={onClose} aria-label="Close">
-                ×
-              </button>
-            </div>
+    <div className="fixed inset-0 z-[2100] bg-black/40 flex justify-end">
+      <div className="w-full max-w-5xl h-full bg-white shadow-2xl border-l border-slate-200 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold">
+              Order Details – PO
+              <span className="ml-2 inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs text-indigo-800">
+                {order?.po_number || "—"}
+              </span>
+            </h2>
           </div>
-
-          {/* Tabs */}
-          <div className="flex items-center gap-2 border-b border-slate-200 px-4">
-            {[
-              ["items", "Items"],
-              ["communications", "Communications"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setTab(key)}
-                className={`px-4 py-3 text-sm font-medium ${
-                  tab === key ? "text-indigo-600 border-b-2 border-indigo-600" : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="text-sm text-slate-500">
+            Created: {formatDate(order?.created_date)}
           </div>
-
-          {/* Content */}
-          <div className="p-4">
-            {tab === "items" && (
-              <>
-                {/* Top stats */}
-                <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <Card>
-                    <div className="text-xs text-slate-500">PO Number</div>
-                    <div className="mt-1 text-base font-medium">{poNumber || "—"}</div>
-                  </Card>
-                  <Card>
-                    <div className="text-xs text-slate-500">Created</div>
-                    <div className="mt-1 text-base font-medium">
-                      {formatDate(pick(order || {}, ["created_date"])) || "—"}
-                    </div>
-                  </Card>
-                  <Card>
-                    <div className="text-xs text-slate-500">Total (USD)</div>
-                    <div className="mt-1 text-base font-semibold">
-                      ${formatNumber(Math.round((totalUSD + Number.EPSILON) * 100) / 100)}
-                    </div>
-                  </Card>
-                </div>
-
-                {loading && (
-                  <div className="rounded-lg border border-dashed p-6 text-center text-slate-500">
-                    Loading items…
-                  </div>
-                )}
-
-                {!loading && (items || []).length === 0 && (
-                  <div className="rounded-lg border border-dashed p-6 text-center text-slate-500">
-                    No items found.
-                  </div>
-                )}
-
-                {/* === Cards por ítem (como antes) === */}
-                <div className="space-y-4">
-                  {items.map((it) => {
-                    const statusTone =
-                      /ware/i.test(mainImport.import_status)
-                        ? "green"
-                        : /transit|custom/i.test(mainImport.import_status)
-                        ? "amber"
-                        : "slate";
-                    const transportTone =
-                      /air/i.test(mainImport.transport_type) ? "blue" : /sea/i.test(mainImport.transport_type) ? "teal" : "slate";
-
-                    return (
-                      <Card key={it.code}>
-                        {/* Header: nombre + unit price */}
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <div className="font-semibold text-slate-900">
-                              {it.productName}{" "}
-                              <span className="text-slate-500">• {it.packageUnits} units/pack</span>
-                            </div>
-                            <div className="text-xs text-slate-500 mt-0.5">Code: {it.code}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-xs text-slate-500">/ unit</div>
-                            <div className="text-sm font-medium">
-                              {it.unitPrice ? `\$${it.unitPrice.toFixed ? it.unitPrice.toFixed(2) : it.unitPrice}` : "—"}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Badges */}
-                        <div className="mt-3 flex flex-wrap items-center gap-3">
-                          <div className="text-xs text-slate-500">Import Status</div>
-                          <Chip tone={statusTone}>{mainImport.import_status || "—"}</Chip>
-                          <div className="ml-4 text-xs text-slate-500">Transport</div>
-                          <Chip tone={transportTone}>{mainImport.transport_type || "—"}</Chip>
-                          {mainImport.eta && (
-                            <>
-                              <div className="ml-4 text-xs text-slate-500">ETA</div>
-                              <Chip tone="slate">{formatDate(mainImport.eta)}</Chip>
-                            </>
-                          )}
-                        </div>
-
-                        {/* Stats */}
-                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                          <Stat label="Requested" value={formatNumber(it.ordered)} />
-                          <Stat label="Imported" value={formatNumber(it.imported)} />
-                          <Stat label="Remaining" value={formatNumber(it.remaining)} />
-                        </div>
-                      </Card>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-
-            {tab === "communications" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium">Communications</div>
-                  <button
-                    onClick={() => setNewComm(true)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-white shadow hover:bg-indigo-700"
-                  >
-                    + Add
-                  </button>
-                </div>
-                <CommunicationList linkedType="orders" linkedId={poNumber} />
-              </div>
-            )}
-          </div>
+          <button
+            className="ml-4 rounded-md p-2 hover:bg-slate-100"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <CloseIcon />
+          </button>
         </div>
-      </div>
 
-      {newComm && (
-        <NewCommunicationModal
-          open={newComm}
-          onClose={() => setNewComm(false)}
-          onSaved={() => setNewComm(false)}
-          defaultLinkedType="orders"
-          defaultLinkedId={poNumber}
-        />
-      )}
+        {/* Tabs */}
+        <div className="flex items-center gap-1 border-b border-slate-200 px-5">
+          {[
+            ["items", "Items"],
+            ["comms", "Communications"],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`px-4 py-3 text-sm font-medium ${
+                tab === key
+                  ? "text-indigo-600 border-b-2 border-indigo-600"
+                  : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div className="p-5 overflow-y-auto h-[calc(100%-104px)]">
+          {/* ITEMS */}
+          {tab === "items" && (
+            <>
+              {/* resumen arriba */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <MetaCard label="PO Number" value={order?.po_number || "—"} />
+                <MetaCard
+                  label="Created"
+                  value={formatDate(order?.created_date) || "—"}
+                />
+                <MetaCard
+                  label="Total (USD)"
+                  value={formatCurrency(
+                    items.reduce(
+                      (acc, it) => acc + (it.unitPrice || 0) * (it.requested || 0),
+                      0
+                    )
+                  )}
+                />
+              </div>
+
+              {loading && (
+                <div className="text-sm text-slate-500">Loading items…</div>
+              )}
+
+              {!loading && items.length === 0 && (
+                <div className="text-sm text-slate-500">No items found.</div>
+              )}
+
+              <div className="space-y-4">
+                {items.map((it, idx) => (
+                  <div
+                    key={`${it.presentationCode}-${idx}`}
+                    className="rounded-xl border border-slate-200 bg-slate-50"
+                  >
+                    <div className="flex items-start justify-between px-4 py-3 border-b border-slate-200">
+                      <div>
+                        <div className="font-medium text-slate-900">
+                          {it.productName}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          Code: {it.presentationCode}
+                          {it.packageUnits ? (
+                            <>
+                              {" "}&bull; {it.packageUnits} units/pack
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {it.importStatus ? (
+                          <Badge className="bg-emerald-50 text-emerald-700">
+                            {it.importStatus}
+                          </Badge>
+                        ) : null}
+                        {it.transport ? (
+                          <Badge className="bg-blue-50 text-blue-700">
+                            {it.transport}
+                          </Badge>
+                        ) : null}
+                        <div className="text-sm text-slate-600">
+                          {formatCurrency(it.unitPrice)}{" "}
+                          <span className="text-slate-400 text-xs">/ unit</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-4">
+                      <Kpi title="Requested" value={it.requested} />
+                      <Kpi title="Imported" value={it.imported} />
+                      <Kpi title="Remaining" value={it.remaining} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* COMMUNICATIONS */}
+          {tab === "comms" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium">Communication History</div>
+                <button
+                  className="rounded-md bg-indigo-600 px-3 py-1.5 text-white hover:bg-indigo-700"
+                  onClick={() => setOpenNewComm(true)}
+                >
+                  + Add
+                </button>
+              </div>
+              <CommunicationList
+                linkedType="orders"
+                linkedId={order?.po_number || ""}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* New communication */}
+        {openNewComm && (
+          <NewCommunicationModal
+            open={openNewComm}
+            onClose={() => setOpenNewComm(false)}
+            onSaved={() => setOpenNewComm(false)}
+            defaultLinkedType="orders"
+            defaultLinkedId={order?.po_number || ""}
+          />
+        )}
+      </div>
     </div>
   );
 }
 
+function MetaCard({ label, value }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-sm font-medium text-slate-900">{value}</div>
+    </div>
+  );
+}
+function Kpi({ title, value }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="text-xs text-slate-500">{title}</div>
+      <div className="mt-1 text-2xl font-semibold text-slate-900">
+        {Number.isFinite(+value) ? new Intl.NumberFormat("en-US").format(+value) : value}
+      </div>
+    </div>
+  );
+}
