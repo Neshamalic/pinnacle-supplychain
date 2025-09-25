@@ -469,4 +469,3 @@ function CommCard({ comm, onDelete }) {
     </div>
   );
 }
-
