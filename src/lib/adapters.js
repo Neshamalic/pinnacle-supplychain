@@ -3,14 +3,34 @@
 /** ===================== Utils ===================== */
 const str = (v) => (v == null ? "" : String(v).trim());
 
+// src/lib/adapters.js  (reemplaza SOLO esta función)
 const toNumber = (v) => {
   if (v == null || v === "") return 0;
   if (typeof v === "number" && Number.isFinite(v)) return v;
-  // Soporta "1.234,56" o "1,234.56"
-  const s = String(v).replace(/\./g, "").replace(/,/g, ".");
+
+  const s = String(v).trim();
+
+  // Caso 1: tiene punto y coma → elegimos el separador decimal correcto
+  if (s.includes(".") && s.includes(",")) {
+    // Si la coma está al final tipo "1.234,56" → coma decimal
+    if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
+      return parseFloat(s.replace(/\./g, "").replace(",", "."));
+    }
+    // Si el punto está al final tipo "1,234.56" → punto decimal
+    return parseFloat(s.replace(/,/g, ""));
+  }
+
+  // Caso 2: solo coma → coma decimal
+  if (s.includes(",") && !s.includes(".")) {
+    return parseFloat(s.replace(",", "."));
+  }
+
+  // Caso 3: solo punto → PUNTO decimal (no tocar)
+  // Caso 4: sin separadores → número simple
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : 0;
 };
+
 
 const toDateISO = (v) => {
   if (!v) return "";
