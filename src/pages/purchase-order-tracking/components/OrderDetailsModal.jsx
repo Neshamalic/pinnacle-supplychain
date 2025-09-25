@@ -1,202 +1,202 @@
+// src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import { useEffect, useMemo, useState } from "react";
-import { API_BASE, fetchJSON, formatDate, formatNumber } from "../../../lib/utils";
+import { API_BASE, fetchJSON, formatCurrency, formatDate } from "../../../lib/utils";
 
-// ⬅️ Si ya tienes tu componente real de comunicaciones, impórtalo aquí y
-//     reemplaza el bloque <PlaceholderComms /> de más abajo.
-// import CommunicationsSection from "@/components/communications/CommunicationsSection";
+// Helpers
+const toNum = (v) => {
+  const s = String(v ?? "").replace(/\./g, "").replace(/,/g, ".");
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+};
 
 function Badge({ children }) {
   return (
-    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
       {children}
     </span>
   );
 }
 
-function StatBox({ label, value }) {
+function CardStat({ label, value }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+    <div className="flex flex-col rounded-xl border bg-slate-50 px-4 py-3">
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-slate-800">{value}</div>
+      <div className="mt-1 text-slate-800">{value ?? "—"}</div>
     </div>
   );
 }
 
-/* ===================== helpers robustos ===================== */
-async function getSheetRowsAny(names) {
-  for (const name of names) {
-    try {
-      const url = `${API_BASE}?route=table&name=${encodeURIComponent(name)}`;
-      const r = await fetchJSON(url);
-      if (r?.ok && Array.isArray(r.rows) && r.rows.length) {
-        console.log(`[OrderDetailsModal] Cargada hoja "${name}" con`, r.rows.length, "filas");
-        return r.rows;
-      }
-      console.warn(`[OrderDetailsModal] Hoja "${name}" vacía o sin filas`);
-    } catch (e) {
-      console.warn(`[OrderDetailsModal] Error leyendo hoja "${name}":`, e);
-    }
-  }
-  return [];
-}
-
-function pick(obj, keys, d = "") {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v != null && v !== "") return v;
-  }
-  return d;
-}
-const s = (v) => String(v ?? "").trim();
-const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-
-/* ===================== Modal principal ===================== */
 export default function OrderDetailsModal({ open, onClose, order }) {
+  const po = order?.po_number || order?.po || "";
+  const [tab, setTab] = useState("items");
+
+  // datasets
+  const [poRows, setPoRows] = useState([]); // todas las filas de purchase_orders
+  const [imports, setImports] = useState([]); // hoja imports
+  const [importItems, setImportItems] = useState([]); // hoja import_items
+  const [ppMaster, setPpMaster] = useState([]); // product_presentation_master (o producto_presentation_master)
+  const [comms, setComms] = useState([]); // communications (filtradas)
   const [loading, setLoading] = useState(true);
 
-  const [rowsPO, setRowsPO] = useState([]);        // líneas de purchase_orders (filtradas por PO)
-  const [imports, setImports] = useState([]);      // hoja imports (toda)
-  const [importItems, setImportItems] = useState([]); // hoja import_items (toda)
-  const [masterMap, setMasterMap] = useState({});  // code -> { name, units }
-
-  const poNumber = s(pick(order, ["po_number", "poNumber", "po", "id"]));
-
   useEffect(() => {
-    if (!open || !poNumber) return;
+    if (!open || !po) return;
 
     (async () => {
       setLoading(true);
+      try {
+        // 1) purchase_orders (ahora incluye las líneas)
+        const poRes = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders`);
+        console.log("[OrderDetailsModal] purchase_orders rows:", poRes?.rows?.length);
+        const allPO = poRes?.rows ?? [];
 
-      // 1) purchase_orders (con sinónimos)
-      const allPO = await getSheetRowsAny([
-        "purchase_orders",
-        "purchase-orders",
-        "orders",
-        "po",
-      ]);
+        // 2) imports (para traer estado de importación y transporte por oci_number)
+        const impRes = await fetchJSON(`${API_BASE}?route=table&name=imports`);
+        console.log("[OrderDetailsModal] imports rows:", impRes?.rows?.length);
+        const allImports = impRes?.rows ?? [];
 
-      // filtramos por po_number con tolerancia de alias
-      const poRows = (allPO || []).filter((r) => {
-        const rPo = s(pick(r, ["po_number", "po", "poNumber", "id"]));
-        return rPo === poNumber;
-      });
+        // 3) import_items (para sumar qty importada por oci_number + presentation_code)
+        const iiRes = await fetchJSON(`${API_BASE}?route=table&name=import_items`);
+        console.log("[OrderDetailsModal] import_items rows:", iiRes?.rows?.length);
+        const allImpItems = iiRes?.rows ?? [];
 
-      // 2) product master (con sinónimos)
-      const master = await getSheetRowsAny([
-        "product_presentation_master",
-        "producto_presentation_master",
-        "presentation_master",
-        "product_master",
-      ]);
-      const map = {};
-      for (const row of master) {
-        const code = s(pick(row, ["presentation_code", "product_code", "code"]));
-        if (!code) continue;
-        map[code] = {
-          product_name: s(pick(row, ["product_name", "name", "presentation_name"], code)),
-          package_units: n(pick(row, ["package_units", "units_per_package", "units", "pack_units"])),
-        };
+        // 4) product presentation master (puede llamarse product_presentation_master o producto_presentation_master)
+        let ppm = [];
+        try {
+          const ppm1 = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`);
+          ppm = ppm1?.rows ?? [];
+          console.log("[OrderDetailsModal] product_presentation_master rows:", ppm.length);
+        } catch {
+          try {
+            const ppm2 = await fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`);
+            ppm = ppm2?.rows ?? [];
+            console.log("[OrderDetailsModal] producto_presentation_master rows:", ppm.length);
+          } catch {
+            console.warn("[OrderDetailsModal] No se encontró product(o)_presentation_master");
+          }
+        }
+
+        // 5) communications filtradas por orders + po_number
+        const commsRes = await fetchJSON(
+          `${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc&limit=200`
+        );
+        console.log("[OrderDetailsModal] communications (orders, this PO):", commsRes?.rows?.length);
+
+        setPoRows(allPO);
+        setImports(allImports);
+        setImportItems(allImpItems);
+        setPpMaster(ppm);
+        setComms(commsRes?.rows ?? []);
+      } catch (err) {
+        console.error("[OrderDetailsModal] Load error:", err);
+      } finally {
+        setLoading(false);
       }
-
-      // 3) imports + import_items
-      const importsRows = await getSheetRowsAny(["imports", "importes"]);
-      const impItems = await getSheetRowsAny(["import_items", "import-items", "import_lines"]);
-
-      setRowsPO(poRows);
-      setImports(importsRows);
-      setImportItems(impItems);
-      setMasterMap(map);
-
-      console.log("[OrderDetailsModal] PO filtrado:", poNumber, " =>", poRows.length, "líneas");
-      setLoading(false);
     })();
-  }, [open, poNumber]);
+  }, [open, po]);
 
-  // OCI en encabezado: toma el primero que encuentre
-  const headerOci = useMemo(() => {
-    return s(pick(rowsPO.find((r) => s(r.oci_number)) || {}, ["oci_number"]));
-  }, [rowsPO]);
+  // Filas de esta PO (cada fila es un presentation_code con total_qty, cost_usd, oci_number, etc.)
+  const lines = useMemo(() => {
+    const list = (poRows || []).filter(
+      (r) => String(r.po_number || r.po || "").trim() === String(po).trim()
+    );
 
-  const createdDate = useMemo(() => {
-    const raw = pick(rowsPO.find((r) => r.created_date) || order || {}, ["created_date", "created"]);
-    return formatDate(raw);
-  }, [rowsPO, order]);
+    console.log(`[OrderDetailsModal] PO ${po} -> ${list.length} líneas en purchase_orders`);
 
-  const tenderRef = useMemo(() => s(pick(rowsPO[0] || order || {}, ["tender_ref"])), [rowsPO, order]);
+    // Enriquecemos cada línea
+    const byKey = (o) => String(o.presentation_code || o.product_code || o.sku || "").trim();
 
-  // Construcción de items desde la propia purchase_orders (una por fila)
-  const items = useMemo(() => {
-    return rowsPO.map((row) => {
-      const presentationCode = s(pick(row, ["presentation_code", "product_code", "code"]));
-      const oci = s(pick(row, ["oci_number", "oci"]));
+    return (list || []).map((row) => {
+      const oci = String(row.oci_number || row.oci || "").trim();
+      const code = byKey(row);
 
-      // master
-      const m = masterMap[presentationCode] || {};
-      const productName = m.product_name || s(pick(row, ["product_name"], presentationCode));
-      const packageUnits = m.package_units || undefined;
+      // nombre & units desde master
+      const m =
+        (ppMaster || []).find(
+          (x) =>
+            String(x.presentation_code || x.product_code || x.sku || "").trim() === code
+        ) || {};
+      const productName = String(m.product_name || m.name || "").trim();
+      const packageUnits = toNum(m.package_units || m.units_per_pack || m.units);
 
-      // import status / transport (por OCI o por PO si no hay OCI)
-      const imp = imports.find(
-        (r) =>
-          (oci && s(r.oci_number) === oci) || s(pick(r, ["po_number", "po"])) === poNumber
-      );
-      const importStatus = s(pick(imp || {}, ["import_status", "status"])).toLowerCase();
-      const transportType = s(pick(imp || {}, ["transport_type", "transport"])).toLowerCase();
+      // estado/transport desde imports por oci_number
+      const imp =
+        (imports || []).find(
+          (x) => String(x.oci_number || x.oci || "").trim() === oci
+        ) || {};
+      const importStatus = String(imp.import_status || imp.status || "").toLowerCase();
+      const transportType = String(imp.transport_type || imp.transport || "").toLowerCase();
 
-      // cantidades y costos
-      const requested = n(pick(row, ["total_qty", "ordered_qty", "qty", "quantity"]));
-      const unitPrice = n(pick(row, ["cost_usd", "unit_price", "price"]));
-
-      // suma importada: import_items por (oci_number, presentation_code)
-      const imported = importItems
+      // qty importada desde import_items por oci + presentation_code
+      const imported = (importItems || [])
         .filter(
-          (ii) =>
-            s(pick(ii, ["oci_number", "oci"])) === oci &&
-            s(pick(ii, ["presentation_code", "product_code", "code"])) === presentationCode
+          (x) =>
+            String(x.oci_number || x.oci || "").trim() === oci &&
+            byKey(x) === code
         )
-        .reduce((acc, ii) => acc + n(pick(ii, ["qty", "quantity"])), 0);
+        .reduce((acc, x) => acc + toNum(x.qty || x.quantity), 0);
 
+      const requested = toNum(row.total_qty || row.requested_qty || row.ordered_qty || row.qty);
       const remaining = Math.max(0, requested - imported);
 
+      const unitUsd =
+        toNum(row.cost_usd || row.unit_price_usd || row.unit_price || row.price);
+      const lineTotal = unitUsd * requested;
+
       return {
-        presentationCode,
+        ociNumber: oci,
+        presentationCode: code,
         productName,
         packageUnits,
+        unitUsd,
         importStatus,
         transportType,
-        unitPrice,
         requested,
         imported,
         remaining,
-        oci,
+        lineTotal,
       };
     });
-  }, [rowsPO, imports, importItems, masterMap, poNumber]);
+  }, [poRows, po, ppMaster, imports, importItems]);
 
-  const totalUsd = useMemo(
-    () => items.reduce((acc, it) => acc + it.unitPrice * it.requested, 0),
-    [items]
+  // Cabecera: tomamos la 1ª fila de la PO
+  const head = useMemo(() => {
+    const row = (poRows || []).find(
+      (r) => String(r.po_number || r.po || "").trim() === String(po).trim()
+    );
+    if (!row) return {};
+    return {
+      poNumber: row.po_number || row.po,
+      ociNumber: row.oci_number || row.oci,
+      tenderRef: row.tender_ref || row.tender || "",
+      createdDate: row.created_date || row.created || row.date_created || "",
+    };
+  }, [poRows, po]);
+
+  const totalUSD = useMemo(
+    () => lines.reduce((s, x) => s + x.lineTotal, 0),
+    [lines]
   );
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/20 p-4">
-      <div className="relative h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/20 p-4">
+      <div className="mx-auto w-full max-w-6xl rounded-2xl bg-white shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b px-6 py-4">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold text-slate-900">
-              Order Details – {headerOci ? `OCI-${headerOci} / ` : ""}PO-{poNumber}
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-semibold">
+              Order Details – PO
             </h2>
-            {tenderRef && <Badge>{tenderRef}</Badge>}
+            {head.poNumber ? <Badge>{head.poNumber}</Badge> : null}
+            {head.ociNumber ? <Badge>OCI {head.ociNumber}</Badge> : null}
           </div>
           <div className="text-sm text-slate-500">
-            Created: <span className="font-medium text-slate-700">{createdDate || "—"}</span>
+            Created: {formatDate(head.createdDate)}
           </div>
           <button
             onClick={onClose}
-            className="absolute right-3 top-3 rounded-full p-2 text-slate-500 hover:bg-slate-100"
+            className="ml-4 inline-flex h-8 w-8 items-center justify-center rounded-full hover:bg-slate-100"
             aria-label="Close"
           >
             ✕
@@ -204,134 +204,123 @@ export default function OrderDetailsModal({ open, onClose, order }) {
         </div>
 
         {/* Tabs */}
-        <Tabs
-          itemsTab={
-            <ItemsTab
-              items={items}
-              poNumber={poNumber}
-              createdDate={createdDate}
-              totalUsd={totalUsd}
-            />
-          }
-          commsTab={
-            // Reemplaza este placeholder por tu componente real de comunicaciones
-            // <CommunicationsSection entity="orders" entityId={poNumber} />
-            <PlaceholderComms poNumber={poNumber} />
-          }
-          loading={loading}
-        />
-      </div>
-    </div>
-  );
-}
-
-function Tabs({ itemsTab, commsTab, loading }) {
-  const [tab, setTab] = useState("items");
-  return (
-    <>
-      <div className="flex items-center gap-6 border-b px-6">
-        <button
-          className={`-mb-px border-b-2 px-1.5 py-3 text-sm ${
-            tab === "items"
-              ? "border-violet-600 font-medium text-violet-700"
-              : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
-          onClick={() => setTab("items")}
-        >
-          Items
-        </button>
-        <button
-          className={`-mb-px border-b-2 px-1.5 py-3 text-sm ${
-            tab === "comms"
-              ? "border-violet-600 font-medium text-violet-700"
-              : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
-          onClick={() => setTab("comms")}
-        >
-          Communications
-        </button>
-      </div>
-
-      <div className="h-[calc(90vh-4rem)] overflow-auto">
-        {loading ? (
-          <div className="p-8 text-sm text-slate-500">Loading… (revisa consola si tarda)</div>
-        ) : tab === "items" ? (
-          itemsTab
-        ) : (
-          commsTab
-        )}
-      </div>
-    </>
-  );
-}
-
-function ItemsTab({ items, poNumber, createdDate, totalUsd }) {
-  return (
-    <div className="space-y-6 p-6">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <StatBox label="PO Number" value={poNumber || "—"} />
-        <StatBox label="Created" value={createdDate || "—"} />
-        <StatBox label="Total (USD)" value={`$${formatNumber(totalUsd)}`} />
-      </div>
-
-      {!items.length && (
-        <div className="rounded-xl border border-dashed border-slate-200 p-6 text-sm text-slate-500">
-          No items found. (Abre la consola del navegador: debe aparecer qué hojas y cuántas filas se cargaron)
-        </div>
-      )}
-
-      <div className="space-y-4">
-        {items.map((it, idx) => (
-          <div key={`${it.presentationCode}-${idx}`} className="rounded-xl border border-slate-200 bg-slate-50/60 p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-base font-semibold text-slate-900">
-                  {it.productName}
-                  {it.packageUnits ? (
-                    <span className="ml-2 text-sm font-medium text-slate-500">
-                      • {it.packageUnits} units/pack
-                    </span>
-                  ) : null}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">Code: {it.presentationCode}</div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {Number.isFinite(it.unitPrice) && it.unitPrice > 0 ? (
-                  <span className="text-sm font-semibold text-slate-700">
-                    ${it.unitPrice.toFixed(2)} <span className="text-xs">/ unit</span>
-                  </span>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {it.importStatus && <Badge>{it.importStatus}</Badge>}
-              {it.transportType && <Badge>{it.transportType}</Badge>}
-              {it.oci && <Badge>OCI {it.oci}</Badge>}
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-              <StatBox label="Requested" value={formatNumber(it.requested)} />
-              <StatBox label="Imported" value={formatNumber(it.imported)} />
-              <StatBox label="Remaining" value={formatNumber(it.remaining)} />
-            </div>
+        <div className="border-b px-6 pt-3">
+          <div className="flex gap-6">
+            <button
+              className={`-mb-px border-b-2 px-1 pb-3 text-sm ${
+                tab === "items"
+                  ? "border-violet-500 font-medium text-violet-600"
+                  : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+              onClick={() => setTab("items")}
+            >
+              Items
+            </button>
+            <button
+              className={`-mb-px border-b-2 px-1 pb-3 text-sm ${
+                tab === "comms"
+                  ? "border-violet-500 font-medium text-violet-600"
+                  : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+              onClick={() => setTab("comms")}
+            >
+              Communications
+            </button>
           </div>
-        ))}
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5">
+          {tab === "items" && (
+            <>
+              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <CardStat label="PO Number" value={head.poNumber || "—"} />
+                <CardStat label="Created" value={formatDate(head.createdDate)} />
+                <CardStat label="Total (USD)" value={formatCurrency(totalUSD)} />
+              </div>
+
+              {loading && (
+                <div className="py-16 text-center text-slate-500">Loading…</div>
+              )}
+
+              {!loading && lines.length === 0 && (
+                <div className="py-12 text-center text-slate-500">
+                  No items found.
+                </div>
+              )}
+
+              <div className="space-y-4">
+                {lines.map((it) => (
+                  <div
+                    key={`${it.ociNumber}::${it.presentationCode}`}
+                    className="rounded-2xl border bg-slate-50 px-4 py-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-[15px] font-semibold text-slate-900">
+                          {it.productName || it.presentationCode}
+                        </div>
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          Code: {it.presentationCode}
+                          {it.packageUnits ? ` • ${it.packageUnits} units/pack` : null}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-slate-500">{formatCurrency(it.unitUsd)}</span>
+                        <span className="text-slate-400">/ unit</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                      {it.importStatus ? <Badge>{it.importStatus}</Badge> : null}
+                      {it.transportType ? <Badge>{it.transportType}</Badge> : null}
+                      {it.ociNumber ? <Badge>OCI {it.ociNumber}</Badge> : null}
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <CardStat label="Requested" value={it.requested.toLocaleString()} />
+                      <CardStat label="Imported" value={it.imported.toLocaleString()} />
+                      <CardStat label="Remaining" value={it.remaining.toLocaleString()} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {tab === "comms" && (
+            <div className="space-y-3">
+              {comms.length === 0 && (
+                <div className="py-12 text-center text-slate-500">
+                  No communications for this PO.
+                </div>
+              )}
+
+              {comms.map((c) => (
+                <div key={c.id || c._virtual_id} className="rounded-xl border p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="truncate font-medium">{c.subject || "(no subject)"}</div>
+                    <div className="text-xs text-slate-500">
+                      {formatDate(c.created_date || c.created || c.date)}
+                    </div>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {c.type} • {c.participants}
+                  </div>
+                  <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                    {c.content || c.preview}
+                  </div>
+                  <div className="mt-2 text-xs text-slate-400">
+                    Linked: orders • {po}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function PlaceholderComms({ poNumber }) {
-  return (
-    <div className="p-6 text-sm text-slate-600">
-      <p>
-        Aquí va el componente <strong>Communications</strong> enlazado a:
-        <code className="ml-1 rounded bg-slate-100 px-1">entity="orders"</code>
-        <code className="ml-1 rounded bg-slate-100 px-1">entityId="{poNumber}"</code>
-      </p>
-      <p className="mt-2">Sustituye este bloque con tu componente de comunicaciones real.</p>
-    </div>
-  );
-}
