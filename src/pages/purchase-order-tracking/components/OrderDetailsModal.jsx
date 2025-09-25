@@ -1,8 +1,8 @@
-// src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import { useEffect, useMemo, useState } from "react";
 import { API_BASE, fetchJSON, formatDate, formatNumber } from "../../../lib/utils";
 
-// ⬇️ Si tu bloque de comunicaciones tiene otro nombre/ruta, ajusta esta importación
+// ⬅️ Si ya tienes tu componente real de comunicaciones, impórtalo aquí y
+//     reemplaza el bloque <PlaceholderComms /> de más abajo.
 // import CommunicationsSection from "@/components/communications/CommunicationsSection";
 
 function Badge({ children }) {
@@ -22,24 +22,44 @@ function StatBox({ label, value }) {
   );
 }
 
-// util seguro: intenta varias hojas y si falla, devuelve []
-async function safeTable(name) {
-  try {
-    const r = await fetchJSON(`${API_BASE}?route=table&name=${encodeURIComponent(name)}`);
-    return r?.ok ? (r.rows || []) : [];
-  } catch {
-    return [];
+/* ===================== helpers robustos ===================== */
+async function getSheetRowsAny(names) {
+  for (const name of names) {
+    try {
+      const url = `${API_BASE}?route=table&name=${encodeURIComponent(name)}`;
+      const r = await fetchJSON(url);
+      if (r?.ok && Array.isArray(r.rows) && r.rows.length) {
+        console.log(`[OrderDetailsModal] Cargada hoja "${name}" con`, r.rows.length, "filas");
+        return r.rows;
+      }
+      console.warn(`[OrderDetailsModal] Hoja "${name}" vacía o sin filas`);
+    } catch (e) {
+      console.warn(`[OrderDetailsModal] Error leyendo hoja "${name}":`, e);
+    }
   }
+  return [];
 }
 
+function pick(obj, keys, d = "") {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v != null && v !== "") return v;
+  }
+  return d;
+}
+const s = (v) => String(v ?? "").trim();
+const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+/* ===================== Modal principal ===================== */
 export default function OrderDetailsModal({ open, onClose, order }) {
   const [loading, setLoading] = useState(true);
-  const [poRows, setPoRows] = useState([]);               // líneas de purchase_orders (filtradas por PO)
-  const [importsRows, setImportsRows] = useState([]);     // hoja imports
-  const [importItems, setImportItems] = useState([]);     // hoja import_items
-  const [masterMap, setMasterMap] = useState({});         // code -> { product_name, package_units }
 
-  const poNumber = String(order?.po_number || order?.poNumber || "").trim();
+  const [rowsPO, setRowsPO] = useState([]);        // líneas de purchase_orders (filtradas por PO)
+  const [imports, setImports] = useState([]);      // hoja imports (toda)
+  const [importItems, setImportItems] = useState([]); // hoja import_items (toda)
+  const [masterMap, setMasterMap] = useState({});  // code -> { name, units }
+
+  const poNumber = s(pick(order, ["po_number", "poNumber", "po", "id"]));
 
   useEffect(() => {
     if (!open || !poNumber) return;
@@ -47,91 +67,94 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     (async () => {
       setLoading(true);
 
-      // 1) purchase_orders (todas), luego filtramos por po_number
-      const allPO = await safeTable("purchase_orders");
-      const lines = (allPO || []).filter(r => String(r.po_number || "").trim() === poNumber);
+      // 1) purchase_orders (con sinónimos)
+      const allPO = await getSheetRowsAny([
+        "purchase_orders",
+        "purchase-orders",
+        "orders",
+        "po",
+      ]);
 
-      // 2) producto master (intenta nombres alternativos)
-      const m1 = await safeTable("product_presentation_master");
-      const m2 = m1.length ? [] : await safeTable("producto_presentation_master");
-      const m3 = (m1.length || m2.length) ? [] : await safeTable("presentation_master");
-      const master = [...m1, ...m2, ...m3];
+      // filtramos por po_number con tolerancia de alias
+      const poRows = (allPO || []).filter((r) => {
+        const rPo = s(pick(r, ["po_number", "po", "poNumber", "id"]));
+        return rPo === poNumber;
+      });
+
+      // 2) product master (con sinónimos)
+      const master = await getSheetRowsAny([
+        "product_presentation_master",
+        "producto_presentation_master",
+        "presentation_master",
+        "product_master",
+      ]);
       const map = {};
       for (const row of master) {
-        const code = String(row.product_code || row.presentation_code || row.code || "").trim();
+        const code = s(pick(row, ["presentation_code", "product_code", "code"]));
         if (!code) continue;
         map[code] = {
-          product_name: String(row.product_name || row.name || "").trim(),
-          package_units: Number(row.package_units || row.units_per_package || row.units || 0) || undefined,
+          product_name: s(pick(row, ["product_name", "name", "presentation_name"], code)),
+          package_units: n(pick(row, ["package_units", "units_per_package", "units", "pack_units"])),
         };
       }
 
-      // 3) imports + import_items (para estado y cantidad importada)
-      const imps = await safeTable("imports");
-      const impItems = await safeTable("import_items");
+      // 3) imports + import_items
+      const importsRows = await getSheetRowsAny(["imports", "importes"]);
+      const impItems = await getSheetRowsAny(["import_items", "import-items", "import_lines"]);
 
-      setPoRows(lines);
-      setImportsRows(imps);
+      setRowsPO(poRows);
+      setImports(importsRows);
       setImportItems(impItems);
       setMasterMap(map);
 
+      console.log("[OrderDetailsModal] PO filtrado:", poNumber, " =>", poRows.length, "líneas");
       setLoading(false);
     })();
   }, [open, poNumber]);
 
-  // OCI visible en encabezado: toma el primero que encuentre en las líneas de PO
+  // OCI en encabezado: toma el primero que encuentre
   const headerOci = useMemo(() => {
-    const oci = poRows.find(r => String(r.oci_number || "").trim())?.oci_number;
-    return String(oci || "").trim();
-  }, [poRows]);
+    return s(pick(rowsPO.find((r) => s(r.oci_number)) || {}, ["oci_number"]));
+  }, [rowsPO]);
 
-  // Datos de cabecera
   const createdDate = useMemo(() => {
-    // puede venir en cada línea; usamos la primera con valor
-    const raw = poRows.find(r => r.created_date)?.created_date || order?.created_date;
+    const raw = pick(rowsPO.find((r) => r.created_date) || order || {}, ["created_date", "created"]);
     return formatDate(raw);
-  }, [poRows, order]);
+  }, [rowsPO, order]);
 
-  const tenderRef = useMemo(() => {
-    return String(
-      poRows.find(r => r.tender_ref)?.tender_ref ||
-      order?.tender_ref ||
-      ""
-    ).trim();
-  }, [poRows, order]);
+  const tenderRef = useMemo(() => s(pick(rowsPO[0] || order || {}, ["tender_ref"])), [rowsPO, order]);
 
-  // Construcción de items (una por presentation_code dentro del mismo PO)
+  // Construcción de items desde la propia purchase_orders (una por fila)
   const items = useMemo(() => {
-    if (!poRows.length) return [];
-
-    return poRows.map((row) => {
-      const presentationCode = String(row.presentation_code || row.product_code || row.code || "").trim();
-      const oci = String(row.oci_number || headerOci || "").trim();
+    return rowsPO.map((row) => {
+      const presentationCode = s(pick(row, ["presentation_code", "product_code", "code"]));
+      const oci = s(pick(row, ["oci_number", "oci"]));
 
       // master
       const m = masterMap[presentationCode] || {};
-      const productName = m.product_name || String(row.product_name || "").trim() || presentationCode;
-      const packageUnits = m.package_units;
+      const productName = m.product_name || s(pick(row, ["product_name"], presentationCode));
+      const packageUnits = m.package_units || undefined;
 
-      // import status / transport: busca en imports por oci (o por po si no hubiera oci)
-      const imp = importsRows.find(r =>
-        (oci && String(r.oci_number || "").trim() === oci) ||
-        String(r.po_number || "").trim() === poNumber
+      // import status / transport (por OCI o por PO si no hay OCI)
+      const imp = imports.find(
+        (r) =>
+          (oci && s(r.oci_number) === oci) || s(pick(r, ["po_number", "po"])) === poNumber
       );
-      const importStatus = String(imp?.import_status || "").toLowerCase();
-      const transportType = String(imp?.transport_type || "").toLowerCase();
+      const importStatus = s(pick(imp || {}, ["import_status", "status"])).toLowerCase();
+      const transportType = s(pick(imp || {}, ["transport_type", "transport"])).toLowerCase();
 
       // cantidades y costos
-      const requested = Number(row.total_qty || row.ordered_qty || row.qty || 0) || 0;
-      const unitPrice = Number(row.cost_usd || row.unit_price || 0) || 0;
+      const requested = n(pick(row, ["total_qty", "ordered_qty", "qty", "quantity"]));
+      const unitPrice = n(pick(row, ["cost_usd", "unit_price", "price"]));
 
       // suma importada: import_items por (oci_number, presentation_code)
       const imported = importItems
-        .filter(ii =>
-          String(ii.oci_number || "").trim() === oci &&
-          String(ii.presentation_code || ii.product_code || "").trim() === presentationCode
+        .filter(
+          (ii) =>
+            s(pick(ii, ["oci_number", "oci"])) === oci &&
+            s(pick(ii, ["presentation_code", "product_code", "code"])) === presentationCode
         )
-        .reduce((acc, ii) => acc + (Number(ii.qty || 0) || 0), 0);
+        .reduce((acc, ii) => acc + n(pick(ii, ["qty", "quantity"])), 0);
 
       const remaining = Math.max(0, requested - imported);
 
@@ -148,11 +171,12 @@ export default function OrderDetailsModal({ open, onClose, order }) {
         oci,
       };
     });
-  }, [poRows, headerOci, importsRows, importItems, masterMap, poNumber]);
+  }, [rowsPO, imports, importItems, masterMap, poNumber]);
 
-  const totalUsd = useMemo(() => {
-    return items.reduce((acc, it) => acc + (it.unitPrice * it.requested), 0);
-  }, [items]);
+  const totalUsd = useMemo(
+    () => items.reduce((acc, it) => acc + it.unitPrice * it.requested, 0),
+    [items]
+  );
 
   if (!open) return null;
 
@@ -190,18 +214,9 @@ export default function OrderDetailsModal({ open, onClose, order }) {
             />
           }
           commsTab={
-            // ⬇️ Usa tu propio componente de comunicaciones si ya lo tenías
+            // Reemplaza este placeholder por tu componente real de comunicaciones
             // <CommunicationsSection entity="orders" entityId={poNumber} />
-            <div className="p-6 text-sm text-slate-600">
-              <p>
-                Aquí va tu componente de <strong>Communications</strong> enlazado a:
-                <code className="ml-1 rounded bg-slate-100 px-1">entity="orders"</code>
-                <code className="ml-1 rounded bg-slate-100 px-1">entityId="{poNumber}"</code>
-              </p>
-              <p className="mt-2">
-                Si ya lo usas en Tenders/Imports, importa ese mismo componente y reemplaza este bloque.
-              </p>
-            </div>
+            <PlaceholderComms poNumber={poNumber} />
           }
           loading={loading}
         />
@@ -239,7 +254,7 @@ function Tabs({ itemsTab, commsTab, loading }) {
 
       <div className="h-[calc(90vh-4rem)] overflow-auto">
         {loading ? (
-          <div className="p-8 text-sm text-slate-500">Loading…</div>
+          <div className="p-8 text-sm text-slate-500">Loading… (revisa consola si tarda)</div>
         ) : tab === "items" ? (
           itemsTab
         ) : (
@@ -253,26 +268,21 @@ function Tabs({ itemsTab, commsTab, loading }) {
 function ItemsTab({ items, poNumber, createdDate, totalUsd }) {
   return (
     <div className="space-y-6 p-6">
-      {/* Resumen superior */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <StatBox label="PO Number" value={poNumber || "—"} />
         <StatBox label="Created" value={createdDate || "—"} />
         <StatBox label="Total (USD)" value={`$${formatNumber(totalUsd)}`} />
       </div>
 
-      {/* Lista de productos */}
       {!items.length && (
         <div className="rounded-xl border border-dashed border-slate-200 p-6 text-sm text-slate-500">
-          No items found.
+          No items found. (Abre la consola del navegador: debe aparecer qué hojas y cuántas filas se cargaron)
         </div>
       )}
 
       <div className="space-y-4">
         {items.map((it, idx) => (
-          <div
-            key={`${it.presentationCode}-${idx}`}
-            className="rounded-xl border border-slate-200 bg-slate-50/60 p-5"
-          >
+          <div key={`${it.presentationCode}-${idx}`} className="rounded-xl border border-slate-200 bg-slate-50/60 p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-base font-semibold text-slate-900">
@@ -283,21 +293,15 @@ function ItemsTab({ items, poNumber, createdDate, totalUsd }) {
                     </span>
                   ) : null}
                 </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  Code: {it.presentationCode}
-                </div>
+                <div className="mt-1 text-xs text-slate-500">Code: {it.presentationCode}</div>
               </div>
 
               <div className="flex items-center gap-2">
-                {it.unitPrice ? (
+                {Number.isFinite(it.unitPrice) && it.unitPrice > 0 ? (
                   <span className="text-sm font-semibold text-slate-700">
                     ${it.unitPrice.toFixed(2)} <span className="text-xs">/ unit</span>
                   </span>
                 ) : null}
-                {/* Botón Edit (placeholder visual) */}
-                {/* <button className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
-                  Edit
-                </button> */}
               </div>
             </div>
 
@@ -319,3 +323,15 @@ function ItemsTab({ items, poNumber, createdDate, totalUsd }) {
   );
 }
 
+function PlaceholderComms({ poNumber }) {
+  return (
+    <div className="p-6 text-sm text-slate-600">
+      <p>
+        Aquí va el componente <strong>Communications</strong> enlazado a:
+        <code className="ml-1 rounded bg-slate-100 px-1">entity="orders"</code>
+        <code className="ml-1 rounded bg-slate-100 px-1">entityId="{poNumber}"</code>
+      </p>
+      <p className="mt-2">Sustituye este bloque con tu componente de comunicaciones real.</p>
+    </div>
+  );
+}
