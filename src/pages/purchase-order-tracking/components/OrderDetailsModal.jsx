@@ -1,442 +1,412 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
-import React, { useEffect, useMemo, useState } from "react";
-import { API_BASE, fetchJSON, postJSON, formatNumber, formatCurrency, formatDate } from "@/lib/utils";
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { API_BASE, fetchJSON, postJSON, formatCurrency, formatDate, formatNumber, badgeClass } from '../../../lib/utils';
 
-// ===== Helpers =====
-const str = (v) => (v == null ? "" : String(v).trim());
-const pick = (obj, keys, d = "") => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v != null && v !== "") return v;
-  }
-  return d;
-};
-const numFromInput = (v) => {
-  if (v == null || v === "") return 0;
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  const s = String(v).trim();
-  if (s.includes(".") && s.includes(",")) {
-    if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
-      return parseFloat(s.replace(/\./g, "").replace(",", "."));
-    }
-    return parseFloat(s.replace(/,/g, ""));
-  }
-  if (s.includes(",") && !s.includes(".")) return parseFloat(s.replace(",", "."));
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
-};
+/* ───────── UI helpers ───────── */
+function Modal({ open, onClose, children, title }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4">
+      <div className="relative mx-auto w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b px-5 py-4">
+          <div className="text-lg font-semibold text-slate-900">{title}</div>
+          <button onClick={onClose} className="rounded-full p-2 text-slate-500 hover:bg-slate-100" aria-label="Close">×</button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
 
-export default function OrderDetailsModal({ open, onClose, order }) {
+function Badge({ children, className = '' }) {
+  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>{children}</span>;
+}
+function InfoTile({ label, value }) {
+  return (
+    <div className="rounded-lg bg-slate-50 px-4 py-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="font-medium text-slate-800">{value ?? '—'}</div>
+    </div>
+  );
+}
+
+/* ───────── Modal: editar línea (price + qty) ───────── */
+function ItemEditModal({ open, onClose, line, onSaved }) {
+  const [qty, setQty] = useState(0);
+  const [price, setPrice] = useState(0);
+
+  useEffect(() => {
+    setQty(line?.total_qty ?? 0);
+    setPrice(line?.cost_usd ?? 0);
+  }, [line]);
+
+  async function handleSave() {
+    if (!line) return;
+    await postJSON(`${API_BASE}?route=write&action=update&name=purchase_orders`, {
+      row: {
+        po_number: line.po_number,
+        presentation_code: line.presentation_code,
+        total_qty: Number(String(qty).replace(/\./g, '').replace(',', '.')),
+        cost_usd: Number(String(price).replace(/\./g, '').replace(',', '.')),
+      },
+    });
+    onSaved?.();
+    onClose();
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Edit item — ${line?.product_name || line?.presentation_code || ''}`}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-sm text-slate-600">Total qty (requested)</span>
+          <input type="number" min={0} value={qty} onChange={(e)=>setQty(e.target.value)} className="rounded-lg border p-2" />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-sm text-slate-600">Unit price (USD)</span>
+          <input type="number" step="0.0001" min={0} value={price} onChange={(e)=>setPrice(e.target.value)} className="rounded-lg border p-2" />
+        </label>
+      </div>
+
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
+        <button onClick={handleSave} className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">Save</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ───────── Modal: nueva comunicación (form completo) ───────── */
+function CommunicationModal({ open, onClose, defaultLinked, onSaved }) {
+  const [type, setType] = useState('meeting');
+  const [subject, setSubject] = useState('');
+  const [participants, setParticipants] = useState('');
+  const [linkedType, setLinkedType] = useState(defaultLinked?.type || 'orders');
+  const [linkedId, setLinkedId] = useState(defaultLinked?.id || '');
+  const [content, setContent] = useState('');
+
+  useEffect(() => {
+    setLinkedType(defaultLinked?.type || 'orders');
+    setLinkedId(defaultLinked?.id || '');
+  }, [defaultLinked, open]);
+
+  async function handleSave() {
+    await postJSON(`${API_BASE}?route=write&name=communications&action=create`, {
+      row: {
+        type, subject, participants, linked_type: linkedType, linked_id: linkedId, content,
+        unread: 'true', created_date: new Date().toISOString(),
+      },
+    });
+    onSaved?.();
+    onClose();
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="New Communication">
+      <div className="grid gap-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-slate-600">Type</span>
+            <select value={type} onChange={(e)=>setType(e.target.value)} className="rounded-lg border p-2">
+              <option value="meeting">Meeting</option>
+              <option value="mail">Mail</option>
+              <option value="call">Call</option>
+              <option value="whatsapp">Whatsapp</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-slate-600">Participants</span>
+            <input value={participants} onChange={(e)=>setParticipants(e.target.value)} placeholder="Name1@…, Name2@…" className="rounded-lg border p-2" />
+          </label>
+        </div>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-sm text-slate-600">Subject</span>
+          <input value={subject} onChange={(e)=>setSubject(e.target.value)} placeholder="Ej: Weekly review – Q4 tenders" className="rounded-lg border p-2" />
+        </label>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-slate-600">Linked Type</span>
+            <select value={linkedType} onChange={(e)=>setLinkedType(e.target.value)} className="rounded-lg border p-2">
+              <option value="orders">Orders</option>
+              <option value="imports">Imports</option>
+              <option value="tender">Tender</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-slate-600">Linked ID</span>
+            <input value={linkedId} onChange={(e)=>setLinkedId(e.target.value)} placeholder="PO-xxx / OCI-… / Tender id" className="rounded-lg border p-2" />
+          </label>
+        </div>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-sm text-slate-600">Content</span>
+          <textarea rows={6} value={content} onChange={(e)=>setContent(e.target.value)} className="w-full rounded-lg border p-2" placeholder="Escribe la nota, resumen de reunión, correo, etc." />
+        </label>
+      </div>
+
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
+        <button onClick={handleSave} className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">Save</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ───────── Tarjetas de Items y Comms ───────── */
+function ProductLine({ line, onEdit }) {
+  const price = Number(line.cost_usd || 0);
+  const imported = Number(line.imported_qty || 0);
+  const requested = Number(line.total_qty || 0);
+  const remaining = Math.max(requested - imported, 0);
+  const transportCls = badgeClass('transport', line.transport_type);
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-base font-semibold text-slate-800">
+            {line.product_name || line.presentation_code}
+          </div>
+          <div className="text-xs text-slate-500">
+            Code: {line.presentation_code}{line.package_units ? ` • ${formatNumber(line.package_units)} units/pack` : ''}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {line.import_status ? <Badge className="bg-emerald-50 text-emerald-700">{line.import_status}</Badge> : null}
+            {line.transport_type ? <Badge className={transportCls}>{line.transport_type}</Badge> : null}
+            {line.oci_number ? <Badge className="bg-indigo-50 text-indigo-700">OCI {line.oci_number}</Badge> : null}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className="text-sm text-slate-500">{formatCurrency(price)} <span className="text-xs">/ unit</span></div>
+          <button className="mt-2 rounded-lg border px-3 py-1.5 text-slate-700 hover:bg-slate-50" onClick={()=>onEdit(line)}>Edit</button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <InfoTile label="Requested" value={formatNumber(requested)} />
+        <InfoTile label="Imported" value={formatNumber(imported)} />
+        <InfoTile label="Remaining" value={formatNumber(remaining)} />
+      </div>
+    </div>
+  );
+}
+
+function CommCard({ c, onDelete }) {
+  const isUnread = String(c.unread) === 'true';
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="text-base font-semibold text-slate-800">{c.subject || '(no subject)'}</div>
+            {isUnread && <Badge className="bg-amber-100 text-amber-700">Unread</Badge>}
+          </div>
+          <div className="text-xs text-slate-500">{(c.type || '').toLowerCase()} • {c.participants || ''}</div>
+        </div>
+        <div className="text-xs text-slate-500">{formatDate(c.created_date)}</div>
+      </div>
+
+      {/* aquí forzamos los saltos de línea y el “wrap” */}
+      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700">
+        {c.content || c.preview || ''}
+      </div>
+
+      <div className="mt-3 text-xs text-slate-500">
+        Linked: {c.linked_type} • {c.linked_id}
+      </div>
+
+      <div className="mt-3">
+        <button className="rounded-lg bg-rose-600 px-3 py-1.5 text-white hover:bg-rose-700" onClick={()=>onDelete(c)}>Delete</button>
+      </div>
+    </div>
+  );
+}
+
+/* ───────── Componente principal ───────── */
+export default function OrderDetailsModal({ open, onClose, seed }) {
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState("items");
+  const [header, setHeader]   = useState({ po_number: '', oci_number: '', created_date: '' });
+  const [lines, setLines]     = useState([]);
+  const [comms, setComms]     = useState([]);
 
-  // ===== NUEVO: soporte si el padre no pasa PO =====
-  const initialPO =
-    str(pick(order || {}, ["po_number", "po", "poNumber", "id"])) || ""; // lo que venga
-  const [poInput, setPoInput] = useState(initialPO);
+  const po  = String(seed?.po_number || '').trim();
+  const oci = String(seed?.oci_number || '').trim();
 
-  // si hay input, lo uso como poNumber
-  const poNumber = str(poInput);
+  // Título “limpio”: OCI-xxx / PO-xxx (solo una vez)
+  const headerTitle = useMemo(() => {
+    const a = oci ? `OCI-${oci.replace(/^OCI-?/i, '')}` : '';
+    const b = po  ? `PO-${po.replace(/^PO-?/i, '')}`   : '';
+    return [a, b].filter(Boolean).join(' / ');
+  }, [po, oci]);
 
-  // Data
-  const [poRows, setPoRows] = useState([]);
-  const [importItems, setImportItems] = useState([]);
-  const [comms, setComms] = useState([]);
+  const totalUSD = useMemo(() => lines.reduce((acc, l) => acc + Number(l.cost_usd || 0) * Number(l.total_qty || 0), 0), [lines]);
 
-  const [editOpen, setEditOpen] = useState(false);
-  const [costUsd, setCostUsd] = useState("");
-  const [totalQty, setTotalQty] = useState("");
-
-  const [newOpen, setNewOpen] = useState(false);
-  const [commType, setCommType] = useState("meeting");
-  const [commSubject, setCommSubject] = useState("");
-  const [commParticipants, setCommParticipants] = useState("");
-  const [commContent, setCommContent] = useState("");
-
-  const ociFromOrder = str(pick(order || {}, ["oci_number", "oci"]));
-  const headerLabel = useMemo(() => {
-    if (ociFromOrder && poNumber) return `${ociFromOrder} / ${poNumber}`;
-    if (poNumber) return `PO ${poNumber}`;
-    if (ociFromOrder) return `OCI ${ociFromOrder}`;
-    return "Order Details";
-  }, [ociFromOrder, poNumber]);
-
-  async function refetchAll() {
-    if (!poNumber) return;
+  const loadAll = useCallback(async () => {
+    if (!po) return;
     setLoading(true);
     try {
-      const [poRes, impItemsRes, commRes] = await Promise.all([
-        fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(poNumber)}`),
-        fetchJSON(`${API_BASE}?route=table&name=import_items&po=${encodeURIComponent(poNumber)}`),
-        fetchJSON(
-          `${API_BASE}?route=table&name=communications&linked_type=orders&linked_id=${encodeURIComponent(
-            poNumber
-          )}&order=desc`
-        ),
-      ]);
-      setPoRows(poRes?.rows || []);
-      setImportItems(impItemsRes?.rows || []);
-      setComms(commRes?.rows || []);
-    } catch (e) {
-      console.error("OrderDetailsModal load error:", e);
+      // 1) purchase_orders (backend ya acepta filtros)
+      const poRes  = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(po)}${oci ? `&oci=${encodeURIComponent(oci)}` : ''}`);
+      const rowsPO = (poRes.rows || []).filter(r => String(r.po_number || '').trim() === po);
+      const first  = rowsPO[0] || seed || {};
+      setHeader({ po_number: po, oci_number: first.oci_number || oci || '', created_date: first.created_date || seed?.created_date || '' });
+
+      const ociNow = (first.oci_number || oci || '').trim();
+
+      // 2) master (nombre y pack)
+      const pm1 = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`).catch(()=>({rows:[]}));
+      const pm2 = await fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`).catch(()=>({rows:[]}));
+      const master = new Map();
+      for (const m of (pm1.rows||[]).concat(pm2.rows||[])) {
+        const key = String(m.presentation_code || m.product_code || m.code || '').trim();
+        if (!key) continue;
+        master.set(key, { product_name: m.product_name || m.name || '', package_units: Number(m.package_units || m.units_per_package || m.units || 0) });
+      }
+
+      // 3) imports (estado + transporte)
+      let importRow = null;
+      if (ociNow || po) {
+        const impRes = await fetchJSON(`${API_BASE}?route=table&name=imports${po ? `&po=${encodeURIComponent(po)}` : ''}${ociNow ? `&oci=${encodeURIComponent(ociNow)}` : ''}`);
+        importRow = (impRes.rows || [])[0] || null;
+      }
+
+      // 4) import_items: sumatorias por presentation_code
+      const iiRes = await fetchJSON(`${API_BASE}?route=table&name=import_items${po ? `&po=${encodeURIComponent(po)}` : ''}${ociNow ? `&oci=${encodeURIComponent(ociNow)}` : ''}`);
+      const importedMap = new Map();
+      for (const it of (iiRes.rows || [])) {
+        const code = String(it.presentation_code || '').trim();
+        const qty  = Number(it.qty || it.quantity || 0);
+        if (!code) continue;
+        importedMap.set(code, (importedMap.get(code) || 0) + qty);
+      }
+
+      // 5) Consolidar líneas por presentation_code
+      const linesMap = new Map();
+      for (const r of rowsPO) {
+        const code = String(r.presentation_code || '').trim();
+        if (!code) continue;
+        if (!linesMap.has(code)) {
+          const m = master.get(code) || {};
+          linesMap.set(code, {
+            po_number: po,
+            oci_number: ociNow,
+            presentation_code: code,
+            product_name: m.product_name || '',
+            package_units: m.package_units || 0,
+            import_status: (importRow?.import_status || '').toLowerCase(),
+            transport_type: (importRow?.transport_type || '').toLowerCase(),
+            cost_usd: Number(r.cost_usd || r.unit_price_usd || r.unit_price || 0),
+            total_qty: Number(r.total_qty || r.ordered_qty || r.qty || 0),
+            imported_qty: Number(importedMap.get(code) || 0),
+          });
+        } else {
+          const acc = linesMap.get(code);
+          acc.total_qty += Number(r.total_qty || r.ordered_qty || r.qty || 0);
+          if (!acc.cost_usd && r.cost_usd) acc.cost_usd = Number(r.cost_usd);
+        }
+      }
+      setLines(Array.from(linesMap.values()));
+
+      // 6) communications
+      const commRes = await fetchJSON(`${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc`);
+      setComms(commRes.rows || []);
     } finally {
       setLoading(false);
     }
-  }
+  }, [po, oci, seed]);
 
-  useEffect(() => {
-    if (!open) return;
-    // si el padre no pasó PO, no disparo hasta que el usuario lo ingrese
-    if (poNumber) refetchAll();
-  }, [open, poNumber]);
+  useEffect(() => { if (open) loadAll().catch(console.error); }, [open, loadAll]);
 
-  const items = useMemo(() => {
-    const byCode = new Map();
-    for (const r of poRows) {
-      const code = str(pick(r, ["presentation_code", "sku", "code"]));
-      const ordered = Number(pick(r, ["ordered_qty", "qty", "quantity", "total_qty"], 0)) || 0;
-      const unitPrice = Number(pick(r, ["unit_price_usd", "unit_price", "price"], 0)) || 0;
-      if (!code) continue;
-      const prev = byCode.get(code) || { presentationCode: code, ordered: 0, imported: 0, unitPrice };
-      byCode.set(code, {
-        ...prev,
-        ordered: prev.ordered + ordered,
-        unitPrice: unitPrice || prev.unitPrice,
-      });
-    }
-    for (const r of importItems) {
-      const code = str(pick(r, ["presentation_code", "sku", "code"]));
-      const qty = Number(pick(r, ["qty", "quantity"], 0)) || 0;
-      if (!code) continue;
-      const prev = byCode.get(code) || { presentationCode: code, ordered: 0, imported: 0, unitPrice: 0 };
-      byCode.set(code, { ...prev, imported: prev.imported + qty });
-    }
-    return Array.from(byCode.values()).map((r) => ({
-      ...r,
-      remaining: Math.max(0, Number(r.ordered) - Number(r.imported)),
-    }));
-  }, [poRows, importItems]);
+  // estados/acciones para modales
+  const [editLine, setEditLine] = useState(null);
+  const [showComm, setShowComm] = useState(false);
 
-  async function handleSaveHeader() {
-    try {
-      const payload = {
-        row: {
-          po_number: poNumber,
-          cost_usd: numFromInput(costUsd),
-          total_qty: numFromInput(totalQty),
-        },
-      };
-      const res = await postJSON(`${API_BASE}?route=write&action=update&name=purchase_orders`, payload);
-      if (!res?.ok && !res?.updated && !res?.upserted) throw new Error(JSON.stringify(res));
-      setEditOpen(false);
-      await refetchAll();
-    } catch (e) {
-      alert("No se pudo guardar. Revisa el formato de números.\n" + String(e));
-    }
-  }
-
-  async function handleCreateComm() {
-    try {
-      const body = {
-        type: commType,
-        subject: commSubject,
-        participants: commParticipants,
-        content: commContent,
-        linked_type: "orders",
-        linked_id: poNumber,
-      };
-      const res = await postJSON(`${API_BASE}?route=write&action=create&name=communications`, body);
-      if (!res?.ok) throw new Error(JSON.stringify(res));
-      setNewOpen(false);
-      setCommType("meeting");
-      setCommSubject("");
-      setCommParticipants("");
-      setCommContent("");
-      await refetchAll();
-      setTab("comms");
-    } catch (e) {
-      alert("No se pudo crear la comunicación.\n" + String(e));
-    }
+  async function handleDeleteComm(c) {
+    await postJSON(`${API_BASE}?route=write&action=delete&name=communications`, {
+      where: c.id ? { id: c.id } : { created_date: c.created_date, subject: c.subject },
+    });
+    await loadAll();
   }
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4">
-      <div className="mx-auto w-full max-w-6xl rounded-2xl bg-white shadow-xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <div>
-            <div className="text-xs text-slate-500">Order Details —</div>
-            <div className="text-lg font-semibold">{headerLabel}</div>
-          </div>
-          <button
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
-            onClick={onClose}
-          >
-            Close
-          </button>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4">
+      <div className="mx-auto w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-xl">
+        {/* Header: SOLO una vez “OCI-xxx / PO-xxx” */}
+        <div className="flex items-center justify-between border-b px-5 py-4">
+          <div className="text-xl font-semibold text-slate-900">Order Details — {headerTitle}</div>
+          <div className="text-sm text-slate-500">Created: {formatDate(header.created_date)}</div>
         </div>
 
-      {/* ===== NUEVO bloque cuando no hay PO ===== */}
-{!poNumber && (
-  <div className="px-6 py-4">
-    <div
-      className="rounded-xl border border-amber-300 bg-amber-50 p-4"
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="mb-2 text-sm text-amber-900">
-        No recibí el <b>PO Number</b> desde la tabla. Escríbelo para cargar los datos:
+        {/* Tabs propios */}
+        <Tabs>
+          <Tab title="Items">
+            <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-3">
+              <InfoTile label="PO Number" value={po} />
+              <InfoTile label="Created" value={formatDate(header.created_date)} />
+              <InfoTile label="Total (USD)" value={formatCurrency(totalUSD)} />
+            </div>
+
+            <div className="px-5 pb-5">
+              <div className="mb-2 text-sm font-medium text-slate-700">Products</div>
+              <div className="grid grid-cols-1 gap-4">
+                {lines.map(l => <ProductLine key={l.presentation_code} line={l} onEdit={setEditLine} />)}
+                {lines.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">No items found.</div>}
+              </div>
+            </div>
+          </Tab>
+
+          <Tab title="Communications">
+            <div className="flex items-center justify-between px-5 pt-5">
+              <div className="text-sm text-slate-600">
+                Linked to <b>Orders</b> • <b>{po}</b>{header.oci_number ? <> — <b>Imports</b> • <b>{header.oci_number}</b></> : null}
+              </div>
+              <button className="rounded-lg bg-violet-600 px-3 py-1.5 text-white hover:bg-violet-700" onClick={()=>setShowComm(true)}>+ Add</button>
+            </div>
+
+            <div className="grid gap-4 p-5">
+              {comms.map(c => <CommCard key={c.id || c._virtual_id || `${c.created_date}::${c.subject}`} c={c} onDelete={handleDeleteComm} />)}
+              {comms.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">No communications for this PO.</div>}
+            </div>
+          </Tab>
+        </Tabs>
+
+        <div className="flex items-center justify-end gap-2 border-t px-5 py-3">
+          <button className="rounded-lg border px-4 py-2" onClick={onClose}>Close</button>
+        </div>
+
+        {loading && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/60">
+            <div className="animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600 p-4" />
+          </div>
+        )}
       </div>
 
-      <div className="flex items-center gap-2">
-        <input
-          autoFocus
-          tabIndex={0}
-          className="w-full rounded-lg border px-3 py-2"
-          placeholder="Ej: PO-171"
-          value={poInput}
-          onChange={(e) => setPoInput(e.target.value)}
-        />
-
-        <button
-          className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
-          onClick={() => poInput && refetchAll()}
-        >
-          Cargar
-        </button>
-
-        {/* Fallback por si el input no deja escribir */}
-        <button
-          className="rounded-lg border border-blue-600 px-3 py-2 text-sm text-blue-700 hover:bg-blue-50"
-          onClick={() => {
-            const v = window.prompt("Escribe el PO Number (ej: PO-171):", poInput || "");
-            if (v) {
-              setPoInput(v.trim());
-              // Disparamos fetch en el próximo ciclo; si quieres inmediato:
-              // setTimeout(refetchAll, 0);
-              refetchAll();
-            }
-          }}
-        >
-          Escribir PO
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-            Communications
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="px-6 pb-6 pt-2">
-          {loading ? (
-            <div className="p-6 text-slate-500">Cargando…</div>
-          ) : tab === "items" ? (
-            <>
-              <div className="mb-4 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-3">
-                <div>
-                  <div className="text-xs text-slate-500">Products</div>
-                  <div className="text-xl font-semibold">{formatNumber(items.length)}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500">Ordered (sum)</div>
-                  <div className="text-xl font-semibold">
-                    {formatNumber(items.reduce((s, r) => s + Number(r.ordered || 0), 0))}
-                  </div>
-                </div>
-                <div className="flex items-center justify-end">
-                  <button
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
-                    onClick={() => {
-                      const row0 = poRows[0] || {};
-                      setCostUsd(str(pick(row0, ["cost_usd", "usd", "amount_usd"], "")));
-                      setTotalQty(str(pick(row0, ["total_qty", "qty_total"], "")));
-                      setEditOpen(true);
-                    }}
-                    disabled={!poNumber}
-                  >
-                    Edit header (costs)
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white">
-                <div className="grid grid-cols-5 gap-2 border-b px-4 py-2 text-xs text-slate-500">
-                  <div>Code</div>
-                  <div className="text-right">Ordered</div>
-                  <div className="text-right">Imported</div>
-                  <div className="text-right">Remaining</div>
-                  <div className="text-right">Unit Price</div>
-                </div>
-                {items.length === 0 ? (
-                  <div className="px-4 py-6 text-sm text-slate-500">No items found.</div>
-                ) : (
-                  items.map((it) => (
-                    <div key={it.presentationCode} className="grid grid-cols-5 gap-2 px-4 py-2 text-sm">
-                      <div className="font-medium">{it.presentationCode}</div>
-                      <div className="text-right">{formatNumber(it.ordered)}</div>
-                      <div className="text-right">{formatNumber(it.imported)}</div>
-                      <div className="text-right">{formatNumber(it.remaining)}</div>
-                      <div className="text-right">{formatCurrency(it.unitPrice)}</div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="mb-3 flex items-center justify-between">
-                <div className="text-sm text-slate-600">
-                  Linked to: <span className="font-medium">orders</span> /{" "}
-                  <span className="font-mono">{poNumber || "—"}</span>
-                </div>
-                <button
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
-                  onClick={() => setNewOpen(true)}
-                  disabled={!poNumber}
-                >
-                  + Add
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                {comms.length === 0 ? (
-                  <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-                    No communications yet.
-                  </div>
-                ) : (
-                  comms.map((c) => (
-                    <div key={c.id || c._virtual_id || Math.random()} className="rounded-xl border border-slate-200 bg-white p-4">
-                      <div className="mb-1 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold">{str(c.subject) || "(No subject)"}</span>
-                          {String(c.unread).toLowerCase() === "true" && (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">Unread</span>
-                          )}
-                          <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">Orders</span>
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {formatDate(pick(c, ["created_date", "created", "date"]) || "") || "—"}
-                        </div>
-                      </div>
-                      <div className="text-sm text-slate-700 whitespace-pre-wrap">{str(c.content)}</div>
-                      <div className="mt-2 text-xs text-slate-500">Linked: orders • {poNumber}</div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Edit header */}
-      {editOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
-            <div className="mb-3 text-lg font-semibold">Edit costs (header)</div>
-            <div className="space-y-3">
-              <label className="block text-sm">
-                <span className="text-slate-600">Cost USD</span>
-                <input
-                  className="mt-1 w-full rounded-lg border px-3 py-2"
-                  value={costUsd}
-                  onChange={(e) => setCostUsd(e.target.value)}
-                  placeholder="Ej: 1,10 o 1.10"
-                />
-              </label>
-              <label className="block text-sm">
-                <span className="text-slate-600">Total Qty</span>
-                <input
-                  className="mt-1 w-full rounded-lg border px-3 py-2"
-                  value={totalQty}
-                  onChange={(e) => setTotalQty(e.target.value)}
-                  placeholder="Ej: 1.000 o 1000"
-                />
-              </label>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button className="rounded-lg border px-3 py-2 text-sm" onClick={() => setEditOpen(false)}>
-                Cancel
-              </button>
-              <button
-                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
-                onClick={handleSaveHeader}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* New Communication */}
-      {newOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-xl bg-white p-4 shadow-xl">
-            <div className="mb-3 text-lg font-semibold">New Communication</div>
-            <div className="space-y-3">
-              <label className="block text-sm">
-                <span className="text-slate-600">Type</span>
-                <select
-                  className="mt-1 w-full rounded-lg border px-3 py-2"
-                  value={commType}
-                  onChange={(e) => setCommType(e.target.value)}
-                >
-                  <option value="meeting">Meeting</option>
-                  <option value="mail">Mail</option>
-                  <option value="call">Call</option>
-                  <option value="whatsapp">Whatsapp</option>
-                  <option value="other">Other</option>
-                </select>
-              </label>
-              <label className="block text-sm">
-                <span className="text-slate-600">Subject</span>
-                <input
-                  className="mt-1 w-full rounded-lg border px-3 py-2"
-                  value={commSubject}
-                  onChange={(e) => setCommSubject(e.target.value)}
-                  placeholder="Ej: Reunión semanal / Cotización / etc."
-                />
-              </label>
-              <label className="block text-sm">
-                <span className="text-slate-600">Participants</span>
-                <input
-                  className="mt-1 w-full rounded-lg border px-3 py-2"
-                  value={commParticipants}
-                  onChange={(e) => setCommParticipants(e.target.value)}
-                  placeholder="name1@..., name2@..."
-                />
-              </label>
-              <label className="block text-sm">
-                <span className="text-slate-600">Content</span>
-                <textarea
-                  className="mt-1 w-full rounded-lg border px-3 py-2"
-                  rows={6}
-                  value={commContent}
-                  onChange={(e) => setCommContent(e.target.value)}
-                  placeholder="Escribe la nota, correo, resumen de llamada, etc."
-                />
-              </label>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button className="rounded-lg border px-3 py-2 text-sm" onClick={() => setNewOpen(false)}>
-                Cancel
-              </button>
-              <button
-                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
-                onClick={handleCreateComm}
-                disabled={!poNumber}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modales secundarios */}
+      <ItemEditModal open={!!editLine} onClose={()=>setEditLine(null)} line={editLine} onSaved={loadAll} />
+      <CommunicationModal open={showComm} onClose={()=>setShowComm(false)} defaultLinked={{ type: 'orders', id: po }} onSaved={loadAll} />
     </div>
   );
 }
+
+/* ───────── Tabs minimal ───────── */
+function Tabs({ children }) {
+  const [idx, setIdx] = useState(0);
+  const items = Array.isArray(children) ? children : [children];
+  return (
+    <>
+      <div className="flex gap-6 border-b px-5 pt-3">
+        {items.map((c, i) => (
+          <button key={i} onClick={() => setIdx(i)} className={`-mb-px border-b-2 px-1.5 py-2 text-sm ${i === idx ? 'border-violet-600 text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+            {c.props.title}
+          </button>
+        ))}
+      </div>
+      <div>{items[idx]}</div>
+    </>
+  );
+}
+function Tab({ children }) { return children; }
