@@ -1,413 +1,433 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { API_BASE, fetchJSON, postJSON, formatCurrency, formatDate, formatNumber, badgeClass } from '../../../lib/utils';
+import React, { useEffect, useMemo, useState } from "react";
+import Button from "@/components/ui/Button";
+import Icon from "@/components/AppIcon";
+import { useSheet } from "@/lib/sheetsApi";
+import { mapPurchaseOrders, mapImportItems, mapCommunications } from "@/lib/adapters";
+import { formatCurrency, formatNumber, formatDate, API_BASE, postJSON } from "@/lib/utils";
 
-/* ───────── UI helpers ───────── */
-function Modal({ open, onClose, children, title }) {
+/* =========================
+   Modal contenedor reusable
+   ========================= */
+function Modal({ open, onClose, children, maxWidth = "max-w-5xl" }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4">
-      <div className="relative mx-auto w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b px-5 py-4">
-          <div className="text-lg font-semibold text-slate-900">{title}</div>
-          <button onClick={onClose} className="rounded-full p-2 text-slate-500 hover:bg-slate-100" aria-label="Close">×</button>
-        </div>
-        <div className="p-5">{children}</div>
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className={`relative mx-auto mt-10 w-full ${maxWidth} rounded-xl bg-white shadow-xl`}>
+        {children}
       </div>
     </div>
   );
 }
 
-function Badge({ children, className = '' }) {
-  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>{children}</span>;
-}
-function InfoTile({ label, value }) {
-  return (
-    <div className="rounded-lg bg-slate-50 px-4 py-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-medium text-slate-800">{value ?? '—'}</div>
-    </div>
-  );
-}
-
-/* ───────── Modal: editar línea (price + qty) ───────── */
+/* ======================================
+   Editor de línea (qty + unit_price_usd)
+   ====================================== */
 function ItemEditModal({ open, onClose, line, onSaved }) {
-  const [qty, setQty] = useState(0);
-  const [price, setPrice] = useState(0);
+  const [qty, setQty] = useState("");
+  const [price, setPrice] = useState("");
 
   useEffect(() => {
-    setQty(line?.total_qty ?? 0);
-    setPrice(line?.cost_usd ?? 0);
-  }, [line]);
+    if (open && line) {
+      setQty(String(line.totalQty ?? line.total_qty ?? ""));
+      setPrice(String(line.unitPriceUsd ?? line.unit_price_usd ?? ""));
+    }
+  }, [open, line]);
+
+  function toNumberSafe(v) {
+    // Acepta “1,14” o “1.14”
+    const cleaned = String(v || "").replace(/\./g, "").replace(",", ".");
+    const num = Number(cleaned);
+    return Number.isFinite(num) ? num : 0;
+  }
 
   async function handleSave() {
     if (!line) return;
-    await postJSON(`${API_BASE}?route=write&action=update&name=purchase_orders`, {
-      row: {
-        po_number: line.po_number,
-        presentation_code: line.presentation_code,
-        total_qty: Number(String(qty).replace(/\./g, '').replace(',', '.')),
-        cost_usd: Number(String(price).replace(/\./g, '').replace(',', '.')),
-      },
-    });
+    const body = {
+      // Llaves para "upsert" en Apps Script (tienen que coincidir con KEYS.purchase_orders)
+      po_number: line.poNumber,
+      presentation_code: line.presentationCode,
+      // Campos modificables:
+      total_qty: toNumberSafe(qty),
+      unit_price_usd: toNumberSafe(price),
+    };
+
+    await postJSON(`${API_BASE}?route=write&action=update&name=purchase_orders`, { row: body });
     onSaved?.();
     onClose();
   }
 
+  if (!open) return null;
   return (
-    <Modal open={open} onClose={onClose} title={`Edit item — ${line?.product_name || line?.presentation_code || ''}`}>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1">
-          <span className="text-sm text-slate-600">Total qty (requested)</span>
-          <input type="number" min={0} value={qty} onChange={(e)=>setQty(e.target.value)} className="rounded-lg border p-2" />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-sm text-slate-600">Unit price (USD)</span>
-          <input type="number" step="0.0001" min={0} value={price} onChange={(e)=>setPrice(e.target.value)} className="rounded-lg border p-2" />
-        </label>
-      </div>
+    <Modal open={open} onClose={onClose} maxWidth="max-w-lg">
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Edit line</h3>
+          <button onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100">
+            <Icon name="X" size={18} />
+          </button>
+        </div>
 
-      <div className="mt-6 flex justify-end gap-2">
-        <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
-        <button onClick={handleSave} className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">Save</button>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-slate-600">Total qty</span>
+            <input
+              type="number"
+              min={0}
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              className="rounded-lg border p-2"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-slate-600">Unit price (USD)</span>
+            <input
+              type="text" // text para permitir coma, luego normalizamos
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              className="rounded-lg border p-2"
+              placeholder="1.14"
+            />
+          </label>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
+          <button onClick={handleSave} className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">
+            Save
+          </button>
+        </div>
       </div>
     </Modal>
   );
 }
 
-/* ───────── Modal: nueva comunicación (form completo) ───────── */
+/* ==========================================
+   Formulario completo de “New Communication”
+   (mismo estilo que en Communications Log)
+   ========================================== */
 function CommunicationModal({ open, onClose, defaultLinked, onSaved }) {
-  const [type, setType] = useState('meeting');
-  const [subject, setSubject] = useState('');
-  const [participants, setParticipants] = useState('');
-  const [linkedType, setLinkedType] = useState(defaultLinked?.type || 'orders');
-  const [linkedId, setLinkedId] = useState(defaultLinked?.id || '');
-  const [content, setContent] = useState('');
+  const [type, setType] = useState("meeting");
+  const [subject, setSubject] = useState("");
+  const [participants, setParticipants] = useState("");
+  const [linkedType, setLinkedType] = useState(defaultLinked?.type || "orders");
+  const [linkedId, setLinkedId] = useState(defaultLinked?.id || "");
+  const [content, setContent] = useState("");
 
   useEffect(() => {
-    setLinkedType(defaultLinked?.type || 'orders');
-    setLinkedId(defaultLinked?.id || '');
+    setLinkedType(defaultLinked?.type || "orders");
+    setLinkedId(defaultLinked?.id || "");
   }, [defaultLinked, open]);
 
   async function handleSave() {
     await postJSON(`${API_BASE}?route=write&name=communications&action=create`, {
       row: {
-        type, subject, participants, linked_type: linkedType, linked_id: linkedId, content,
-        unread: 'true', created_date: new Date().toISOString(),
+        type,
+        subject,
+        participants,
+        linked_type: linkedType,
+        linked_id: linkedId,
+        content,
+        unread: "true",
+        created_date: new Date().toISOString(),
       },
     });
     onSaved?.();
     onClose();
   }
 
+  if (!open) return null;
   return (
-    <Modal open={open} onClose={onClose} title="New Communication">
-      <div className="grid gap-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-sm text-slate-600">Type</span>
-            <select value={type} onChange={(e)=>setType(e.target.value)} className="rounded-lg border p-2">
-              <option value="meeting">Meeting</option>
-              <option value="mail">Mail</option>
-              <option value="call">Call</option>
-              <option value="whatsapp">Whatsapp</option>
-              <option value="other">Other</option>
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-sm text-slate-600">Participants</span>
-            <input value={participants} onChange={(e)=>setParticipants(e.target.value)} placeholder="Name1@…, Name2@…" className="rounded-lg border p-2" />
-          </label>
+    <Modal open={open} onClose={onClose} maxWidth="max-w-2xl">
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">New Communication</h3>
+          <button onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100">
+            <Icon name="X" size={18} />
+          </button>
         </div>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-sm text-slate-600">Subject</span>
-          <input value={subject} onChange={(e)=>setSubject(e.target.value)} placeholder="Ej: Weekly review – Q4 tenders" className="rounded-lg border p-2" />
-        </label>
+        <div className="grid gap-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-slate-600">Type</span>
+              <select value={type} onChange={(e)=>setType(e.target.value)} className="rounded-lg border p-2">
+                <option value="meeting">Meeting</option>
+                <option value="mail">Mail</option>
+                <option value="call">Call</option>
+                <option value="whatsapp">Whatsapp</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-slate-600">Participants</span>
+              <input
+                value={participants}
+                onChange={(e)=>setParticipants(e.target.value)}
+                placeholder="Name1@…, Name2@…"
+                className="rounded-lg border p-2"
+              />
+            </label>
+          </div>
+
           <label className="flex flex-col gap-1">
-            <span className="text-sm text-slate-600">Linked Type</span>
-            <select value={linkedType} onChange={(e)=>setLinkedType(e.target.value)} className="rounded-lg border p-2">
-              <option value="orders">Orders</option>
-              <option value="imports">Imports</option>
-              <option value="tender">Tender</option>
-            </select>
+            <span className="text-sm text-slate-600">Subject</span>
+            <input
+              value={subject}
+              onChange={(e)=>setSubject(e.target.value)}
+              placeholder="Ej: Weekly review – Q4 tenders"
+              className="rounded-lg border p-2"
+            />
           </label>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-slate-600">Linked Type</span>
+              <select value={linkedType} onChange={(e)=>setLinkedType(e.target.value)} className="rounded-lg border p-2">
+                <option value="orders">Orders</option>
+                <option value="imports">Imports</option>
+                <option value="tender">Tender</option>
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-slate-600">Linked ID</span>
+              <input
+                value={linkedId}
+                onChange={(e)=>setLinkedId(e.target.value)}
+                placeholder="PO-xxx / OCI-xxx / tender id"
+                className="rounded-lg border p-2"
+              />
+            </label>
+          </div>
+
           <label className="flex flex-col gap-1">
-            <span className="text-sm text-slate-600">Linked ID</span>
-            <input value={linkedId} onChange={(e)=>setLinkedId(e.target.value)} placeholder="PO-xxx / OCI-… / Tender id" className="rounded-lg border p-2" />
+            <span className="text-sm text-slate-600">Content</span>
+            <textarea
+              value={content}
+              onChange={(e)=>setContent(e.target.value)}
+              rows={6}
+              className="w-full rounded-lg border p-2"
+              placeholder="Escribe la nota, resumen de reunión, correo, etc."
+            />
           </label>
+
+          <div className="mt-2 text-xs text-slate-500">
+            Linked: <b>{linkedType}</b> • <b>{linkedId}</b>
+          </div>
         </div>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-sm text-slate-600">Content</span>
-          <textarea rows={6} value={content} onChange={(e)=>setContent(e.target.value)} className="w-full rounded-lg border p-2" placeholder="Escribe la nota, resumen de reunión, correo, etc." />
-        </label>
-      </div>
-
-      <div className="mt-6 flex justify-end gap-2">
-        <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
-        <button onClick={handleSave} className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">Save</button>
+        <div className="mt-6 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
+          <button onClick={handleSave} className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">
+            Save
+          </button>
+        </div>
       </div>
     </Modal>
   );
 }
 
-/* ───────── Tarjetas de Items y Comms ───────── */
-function ProductLine({ line, onEdit }) {
-  const price = Number(line.cost_usd || 0);
-  const imported = Number(line.imported_qty || 0);
-  const requested = Number(line.total_qty || 0);
-  const remaining = Math.max(requested - imported, 0);
-  const transportCls = badgeClass('transport', line.transport_type);
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-base font-semibold text-slate-800">
-            {line.product_name || line.presentation_code}
-          </div>
-          <div className="text-xs text-slate-500">
-            Code: {line.presentation_code}{line.package_units ? ` • ${formatNumber(line.package_units)} units/pack` : ''}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {line.import_status ? <Badge className="bg-emerald-50 text-emerald-700">{line.import_status}</Badge> : null}
-            {line.transport_type ? <Badge className={transportCls}>{line.transport_type}</Badge> : null}
-            {line.oci_number ? <Badge className="bg-indigo-50 text-indigo-700">OCI {line.oci_number}</Badge> : null}
-          </div>
-        </div>
-        <div className="shrink-0 text-right">
-          <div className="text-sm text-slate-500">{formatCurrency(price)} <span className="text-xs">/ unit</span></div>
-          <button className="mt-2 rounded-lg border px-3 py-1.5 text-slate-700 hover:bg-slate-50" onClick={()=>onEdit(line)}>Edit</button>
-        </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <InfoTile label="Requested" value={formatNumber(requested)} />
-        <InfoTile label="Imported" value={formatNumber(imported)} />
-        <InfoTile label="Remaining" value={formatNumber(remaining)} />
-      </div>
-    </div>
-  );
-}
-
+/* ==========================
+   Tarjeta de comunicación
+   ========================== */
 function CommCard({ c, onDelete }) {
-  const isUnread = String(c.unread) === 'true';
+  const isUnread = String(c.unread) === "true";
+  const kind = (c.linked_type || "").toLowerCase();
+  const kindLabel = kind === "tender" ? "Tender" : kind === "imports" ? "Imports" : "Orders";
+  const [expanded, setExpanded] = useState(false);
+  const text = String(c.content || c.preview || "");
+  const short = text.length > 280 ? text.slice(0, 280) + "…" : text;
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2">
-            <div className="text-base font-semibold text-slate-800">{c.subject || '(no subject)'}</div>
-            {isUnread && <Badge className="bg-amber-100 text-amber-700">Unread</Badge>}
+            <div className="text-base font-semibold text-slate-800">{c.subject || "(no subject)"}</div>
+            {isUnread && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">Unread</span>}
+            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs text-indigo-700">{kindLabel}</span>
           </div>
-          <div className="text-xs text-slate-500">{(c.type || '').toLowerCase()} • {c.participants || ''}</div>
+          <div className="text-xs text-slate-500">
+            {(c.type || "").toLowerCase()} • {c.participants || ""} • {formatDate(c.created_date)}
+          </div>
         </div>
-        <div className="text-xs text-slate-500">{formatDate(c.created_date)}</div>
+
+        <button className="rounded-lg border px-3 py-1.5 text-rose-700 hover:bg-rose-50" onClick={() => onDelete?.(c)}>
+          Delete
+        </button>
       </div>
 
-      {/* aquí forzamos los saltos de línea y el “wrap” */}
       <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700">
-        {c.content || c.preview || ''}
-      </div>
-
-      <div className="mt-3 text-xs text-slate-500">
-        Linked: {c.linked_type} • {c.linked_id}
-      </div>
-
-      <div className="mt-3">
-        <button className="rounded-lg bg-rose-600 px-3 py-1.5 text-white hover:bg-rose-700" onClick={()=>onDelete(c)}>Delete</button>
-      </div>
-    </div>
-  );
-}
-
-/* ───────── Componente principal ───────── */
-export default function OrderDetailsModal({ open, onClose, seed }) {
-  const [loading, setLoading] = useState(false);
-  const [header, setHeader]   = useState({ po_number: '', oci_number: '', created_date: '' });
-  const [lines, setLines]     = useState([]);
-  const [comms, setComms]     = useState([]);
-
-  const po  = String(seed?.po_number || '').trim();
-  const oci = String(seed?.oci_number || '').trim();
-
-  // Título “limpio”: OCI-xxx / PO-xxx (solo una vez)
-  const headerTitle = useMemo(() => {
-    const a = oci ? `OCI-${oci.replace(/^OCI-?/i, '')}` : '';
-    const b = po  ? `PO-${po.replace(/^PO-?/i, '')}`   : '';
-    return [a, b].filter(Boolean).join(' / ');
-  }, [po, oci]);
-
-  const totalUSD = useMemo(() => lines.reduce((acc, l) => acc + Number(l.cost_usd || 0) * Number(l.total_qty || 0), 0), [lines]);
-
-  const loadAll = useCallback(async () => {
-    if (!po) return;
-    setLoading(true);
-    try {
-      // 1) purchase_orders (backend ya acepta filtros)
-      const poRes  = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(po)}${oci ? `&oci=${encodeURIComponent(oci)}` : ''}`);
-      const rowsPO = (poRes.rows || []).filter(r => String(r.po_number || '').trim() === po);
-      const first  = rowsPO[0] || seed || {};
-      setHeader({ po_number: po, oci_number: first.oci_number || oci || '', created_date: first.created_date || seed?.created_date || '' });
-
-      const ociNow = (first.oci_number || oci || '').trim();
-
-      // 2) master (nombre y pack)
-      const pm1 = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`).catch(()=>({rows:[]}));
-      const pm2 = await fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`).catch(()=>({rows:[]}));
-      const master = new Map();
-      for (const m of (pm1.rows||[]).concat(pm2.rows||[])) {
-        const key = String(m.presentation_code || m.product_code || m.code || '').trim();
-        if (!key) continue;
-        master.set(key, { product_name: m.product_name || m.name || '', package_units: Number(m.package_units || m.units_per_package || m.units || 0) });
-      }
-
-      // 3) imports (estado + transporte)
-      let importRow = null;
-      if (ociNow || po) {
-        const impRes = await fetchJSON(`${API_BASE}?route=table&name=imports${po ? `&po=${encodeURIComponent(po)}` : ''}${ociNow ? `&oci=${encodeURIComponent(ociNow)}` : ''}`);
-        importRow = (impRes.rows || [])[0] || null;
-      }
-
-      // 4) import_items: sumatorias por presentation_code
-      const iiRes = await fetchJSON(`${API_BASE}?route=table&name=import_items${po ? `&po=${encodeURIComponent(po)}` : ''}${ociNow ? `&oci=${encodeURIComponent(ociNow)}` : ''}`);
-      const importedMap = new Map();
-      for (const it of (iiRes.rows || [])) {
-        const code = String(it.presentation_code || '').trim();
-        const qty  = Number(it.qty || it.quantity || 0);
-        if (!code) continue;
-        importedMap.set(code, (importedMap.get(code) || 0) + qty);
-      }
-
-      // 5) Consolidar líneas por presentation_code
-      const linesMap = new Map();
-      for (const r of rowsPO) {
-        const code = String(r.presentation_code || '').trim();
-        if (!code) continue;
-        if (!linesMap.has(code)) {
-          const m = master.get(code) || {};
-          linesMap.set(code, {
-            po_number: po,
-            oci_number: ociNow,
-            presentation_code: code,
-            product_name: m.product_name || '',
-            package_units: m.package_units || 0,
-            import_status: (importRow?.import_status || '').toLowerCase(),
-            transport_type: (importRow?.transport_type || '').toLowerCase(),
-            cost_usd: Number(r.cost_usd || r.unit_price_usd || r.unit_price || 0),
-            total_qty: Number(r.total_qty || r.ordered_qty || r.qty || 0),
-            imported_qty: Number(importedMap.get(code) || 0),
-          });
-        } else {
-          const acc = linesMap.get(code);
-          acc.total_qty += Number(r.total_qty || r.ordered_qty || r.qty || 0);
-          if (!acc.cost_usd && r.cost_usd) acc.cost_usd = Number(r.cost_usd);
-        }
-      }
-      setLines(Array.from(linesMap.values()));
-
-      // 6) communications
-      const commRes = await fetchJSON(`${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc`);
-      setComms(commRes.rows || []);
-    } finally {
-      setLoading(false);
-    }
-  }, [po, oci, seed]);
-
-  useEffect(() => { if (open) loadAll().catch(console.error); }, [open, loadAll]);
-
-  // estados/acciones para modales
-  const [editLine, setEditLine] = useState(null);
-  const [showComm, setShowComm] = useState(false);
-
-  async function handleDeleteComm(c) {
-    await postJSON(`${API_BASE}?route=write&action=delete&name=communications`, {
-      where: c.id ? { id: c.id } : { created_date: c.created_date, subject: c.subject },
-    });
-    await loadAll();
-  }
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4">
-      <div className="mx-auto w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-xl">
-        {/* Header: SOLO una vez “OCI-xxx / PO-xxx” */}
-        <div className="flex items-center justify-between border-b px-5 py-4">
-          <div className="text-xl font-semibold text-slate-900">Order Details — {headerTitle}</div>
-          <div className="text-sm text-slate-500">Created: {formatDate(header.created_date)}</div>
-        </div>
-
-        {/* Tabs propios */}
-        <Tabs>
-          <Tab title="Items">
-            <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-3">
-              <InfoTile label="PO Number" value={po} />
-              <InfoTile label="Created" value={formatDate(header.created_date)} />
-              <InfoTile label="Total (USD)" value={formatCurrency(totalUSD)} />
-            </div>
-
-            <div className="px-5 pb-5">
-              <div className="mb-2 text-sm font-medium text-slate-700">Products</div>
-              <div className="grid grid-cols-1 gap-4">
-                {lines.map(l => <ProductLine key={l.presentation_code} line={l} onEdit={setEditLine} />)}
-                {lines.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">No items found.</div>}
-              </div>
-            </div>
-          </Tab>
-
-          <Tab title="Communications">
-            <div className="flex items-center justify-between px-5 pt-5">
-              <div className="text-sm text-slate-600">
-                Linked to <b>Orders</b> • <b>{po}</b>{header.oci_number ? <> — <b>Imports</b> • <b>{header.oci_number}</b></> : null}
-              </div>
-              <button className="rounded-lg bg-violet-600 px-3 py-1.5 text-white hover:bg-violet-700" onClick={()=>setShowComm(true)}>+ Add</button>
-            </div>
-
-            <div className="grid gap-4 p-5">
-              {comms.map(c => <CommCard key={c.id || c._virtual_id || `${c.created_date}::${c.subject}`} c={c} onDelete={handleDeleteComm} />)}
-              {comms.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">No communications for this PO.</div>}
-            </div>
-          </Tab>
-        </Tabs>
-
-        <div className="flex items-center justify-end gap-2 border-t px-5 py-3">
-          <button className="rounded-lg border px-4 py-2" onClick={onClose}>Close</button>
-        </div>
-
-        {loading && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/60">
-            <div className="animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600 p-4" />
-          </div>
+        {expanded ? text : short}
+        {text.length > 280 && (
+          <button className="ml-2 text-xs text-indigo-600 underline" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Show less" : "Show more"}
+          </button>
         )}
       </div>
 
-      {/* Modales secundarios */}
-      <ItemEditModal open={!!editLine} onClose={()=>setEditLine(null)} line={editLine} onSaved={loadAll} />
-      <CommunicationModal open={showComm} onClose={()=>setShowComm(false)} defaultLinked={{ type: 'orders', id: po }} onSaved={loadAll} />
+      <div className="mt-3 text-xs text-slate-500">
+        Linked: <b>{c.linked_type}</b> • <b>{c.linked_id}</b>
+      </div>
     </div>
   );
 }
 
-/* ───────── Tabs minimal ───────── */
-function Tabs({ children }) {
-  const [idx, setIdx] = useState(0);
-  const items = Array.isArray(children) ? children : [children];
+/* ==========================
+   Modal principal de Orden
+   ========================== */
+export default function OrderDetailsModal({ open, onClose, order }) {
+  // Datos base
+  const { rows: poRows = [] } = useSheet("purchase_orders", mapPurchaseOrders); // líneas/ítems de PO
+  const { rows: impItems = [] } = useSheet("import_items", mapImportItems);     // si necesitás OCI por línea
+  const { rows: comms = [], refetch: refetchComms } = useSheet("communications", mapCommunications);
+
+  // Filtrar por esta orden
+  const poNumber = order?.poNumber || order?.po_number || "";
+  const ociNumber = order?.shipmentId || order?.ociNumber || order?.oci_number || "";
+  const lines = useMemo(
+    () => (poRows || []).filter((r) => r.poNumber === poNumber),
+    [poRows, poNumber]
+  );
+
+  // Encabezado limpio: “OCI-171 / PO-171” (una sola vez)
+  const headerLeft = [ociNumber && `OCI-${ociNumber}`.replace(/^OCI-OCI-/i, "OCI-"), poNumber].filter(Boolean).join(" / ");
+
+  // States auxiliares
+  const [editing, setEditing] = useState(null);
+  const [commOpen, setCommOpen] = useState(false);
+
+  // Comunicaciones vinculadas a este PO
+  const commsForOrder = useMemo(
+    () => (comms || []).filter((c) => String(c.linked_type).toLowerCase() === "orders" && String(c.linked_id) === poNumber),
+    [comms, poNumber]
+  );
+
+  // Totales
+  const sum = (arr, getter) => arr.reduce((acc, r) => acc + (Number(getter(r)) || 0), 0);
+  const totalQty = sum(lines, (r) => r.totalQty ?? r.total_qty);
+  const totalUsd = sum(lines, (r) => (r.unitPriceUsd ?? r.unit_price_usd) * (r.totalQty ?? r.total_qty));
+
   return (
-    <>
-      <div className="flex gap-6 border-b px-5 pt-3">
-        {items.map((c, i) => (
-          <button key={i} onClick={() => setIdx(i)} className={`-mb-px border-b-2 px-1.5 py-2 text-sm ${i === idx ? 'border-violet-600 text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-            {c.props.title}
-          </button>
-        ))}
+    <Modal open={open} onClose={onClose}>
+      {/* Header */}
+      <div className="flex items-center justify-between border-b p-6">
+        <div>
+          <h2 className="text-2xl font-semibold text-foreground">Order Details — {headerLeft}</h2>
+          <div className="text-xs text-muted-foreground">
+            Created: {formatDate(order?.created_date)}
+          </div>
+        </div>
+        <button className="rounded-lg p-2 hover:bg-slate-100" onClick={onClose}>
+          <Icon name="X" size={18} />
+        </button>
       </div>
-      <div>{items[idx]}</div>
-    </>
+
+      {/* Tabs muy simples */}
+      <div className="px-6 pt-4">
+        <div className="grid gap-4 sm:grid-cols-3">
+          <InfoTile label="PO Number" value={poNumber || "—"} />
+          <InfoTile label="Created" value={formatDate(order?.created_date) || "—"} />
+          <InfoTile label="Total (USD)" value={formatCurrency(totalUsd)} />
+        </div>
+
+        <div className="mt-6 rounded-xl border">
+          <div className="border-b p-4 font-medium">Products</div>
+          <div className="divide-y">
+            {(lines || []).length === 0 && (
+              <div className="p-8 text-center text-slate-500">No items found.</div>
+            )}
+            {lines.map((line, i) => {
+              const requested = Number(line.totalQty ?? line.total_qty) || 0;
+              const price = Number(line.unitPriceUsd ?? line.unit_price_usd) || 0;
+              const imported = Number(line.imported || 0);
+              const remaining = Math.max(requested - imported, 0);
+              return (
+                <div key={i} className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="font-medium text-slate-800">{line.productName || line.presentationCode}</div>
+                    <div className="text-xs text-slate-500">code: {line.presentationCode}</div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <InfoTile label="Requested" value={formatNumber(requested)} />
+                    <InfoTile label="Imported" value={formatNumber(imported)} />
+                    <InfoTile label="Remaining" value={formatNumber(remaining)} />
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-sm text-slate-500">{formatCurrency(price)} <span className="text-xs">/ unit</span></div>
+                    <button className="mt-2 rounded-lg border px-3 py-1.5 text-slate-700 hover:bg-slate-50" onClick={() => setEditing(line)}>
+                      Edit
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Communications */}
+        <div className="mt-8 rounded-xl border">
+          <div className="flex items-center justify-between border-b p-4">
+            <div className="font-medium">Communications</div>
+            <Button onClick={() => setCommOpen(true)} iconName="Plus">Add</Button>
+          </div>
+
+          <div className="divide-y">
+            {(commsForOrder || []).length === 0 && (
+              <div className="p-8 text-center text-slate-500">No communications yet.</div>
+            )}
+            {commsForOrder.map((c, i) => (
+              <div key={i} className="p-4">
+                <CommCard
+                  c={c}
+                  onDelete={async () => {
+                    await postJSON(`${API_BASE}?route=write&name=communications&action=delete`, {
+                      where: { id: c.id, subject: c.subject, linked_type: c.linked_type, linked_id: c.linked_id, created_date: c.created_date }
+                    });
+                    refetchComms();
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Modals secundarios */}
+      <ItemEditModal
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        line={editing}
+        onSaved={() => window.location.reload()}
+      />
+      <CommunicationModal
+        open={commOpen}
+        onClose={() => setCommOpen(false)}
+        defaultLinked={{ type: "orders", id: poNumber }}
+        onSaved={() => refetchComms()}
+      />
+
+      {/* Footer */}
+      <div className="flex justify-end border-t p-4">
+        <button onClick={onClose} className="rounded-lg border px-4 py-2">Close</button>
+      </div>
+    </Modal>
   );
 }
-function Tab({ children }) { return children; }
+
+/* ================
+   UI helpers
+   ================ */
+function InfoTile({ label, value }) {
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-sm font-medium">{value}</div>
+    </div>
+  );
+}
 
