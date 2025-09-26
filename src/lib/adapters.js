@@ -31,7 +31,6 @@ const toNumber = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-
 const toDateISO = (v) => {
   if (!v) return "";
   if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString();
@@ -253,6 +252,31 @@ export const mapCommunications = (row = {}) => {
   };
 };
 
+/** ================== PURCHASE_ORDERS (filas línea) ================== */
+/**
+ * Normaliza una fila de purchase_orders para usarla como “línea de PO”.
+ * No rompe nada existente; es solo para lectura en OrderDetails.
+ */
+export function mapPurchaseOrderRow(r = {}) {
+  const n = (x) => toNumber(x);
+  return {
+    poNumber: str(pick(r, ["po_number", "poNumber", "po"]) || ""),
+    ociNumber: str(pick(r, ["oci_number", "ociNumber", "oci"]) || ""),
+    presentationCode: str(pick(r, ["presentation_code", "presentationCode", "sku", "code"]) || ""),
+    productName: str(pick(r, ["product_name", "presentation_name", "product", "name"]) || ""),
+    unitPriceUsd: n(pick(r, ["unit_price_usd", "unit_price", "price", "unitPriceUsd"])),
+    totalQty: n(pick(r, ["total_qty", "requested", "qty", "quantity", "totalQty"])),
+    imported: n(pick(r, ["imported", "received"])),
+    remaining: Math.max(
+      n(pick(r, ["total_qty", "requested", "qty", "quantity", "totalQty"])) -
+        n(pick(r, ["imported", "received"])),
+      0
+    ),
+    transportType: str(pick(r, ["transport_type", "transport"]) || ""),
+    createdDate: toDateISO(pick(r, ["created_date", "created", "date"]) || ""),
+    _raw: r,
+  };
+}
+
 /** ================ Export utils ====================== */
 export const _utils = { str, toNumber, toDateISO, pick };
-
