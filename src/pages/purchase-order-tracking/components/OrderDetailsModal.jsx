@@ -1,222 +1,344 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
-import React, { useEffect, useMemo, useState } from "react";
-import Icon from "@/components/AppIcon";
-import Button from "@/components/ui/Button";
-import { API_BASE, fetchJSON, formatCurrency, formatNumber, formatDate } from "@/lib/utils";
-import { mapPurchaseOrderRow } from "@/lib/adapters";
+import { useEffect, useMemo, useState } from "react";
+import { API_BASE, fetchJSON, postJSON, formatNumber, formatCurrency, formatDate, badgeClass } from "@/lib/utils";
 import CommunicationList from "@/components/CommunicationList";
-import NewCommunicationModal from "@/components/NewCommunicationModal";
-import OrderItemEditModal from "./OrderItemEditModal";
+// ¡OJO! Esta es la ruta correcta en tu repo:
+import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx"; // ← existente en tu repo (no crear archivo nuevo) :contentReference[oaicite:2]{index=2}
 
-/* ---------- helpers UI ---------- */
-function ModalShell({ open, onClose, children, width = "max-w-5xl" }) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className={`relative mx-auto mt-10 w-full ${width} rounded-2xl bg-white shadow-xl`}>
-        {children}
-      </div>
-    </div>
-  );
-}
-// Limpia “OCI-OCI-171 / PO-PO-171” -> “OCI-171 / PO-171”
-const cleanId = (label, val) =>
-  val ? `${label}-${String(val).replace(new RegExp(`^${label}-${label}-`, "i"), `${label}-`).replace(new RegExp(`^${label}-`, "i"), `${label}-`)}` : "";
-const titleIds = (oci, po) => [cleanId("OCI", oci), cleanId("PO", po)].filter(Boolean).join(" / ");
-
-/* ---------- API ---------- */
-const fetchLinesByPO = async (poNumber) => {
-  // MUY IMPORTANTE: usamos filtro en el backend (rápido y fiable)
-  const url = `${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(poNumber)}`;
-  const json = await fetchJSON(url);
-  const rows = Array.isArray(json?.rows) ? json.rows : [];
-  return rows.map(mapPurchaseOrderRow).filter((r) => r.poNumber === poNumber);
+/* ================= Helpers muy simples ================= */
+const str = (v) => (v == null ? "" : String(v).trim());
+const numFromInput = (v) => {
+  // Sanitiza entradas como "1,1" o "1.234,56"
+  if (v == null || v === "") return 0;
+  const s = String(v).trim();
+  // Quita separadores de miles y usa punto como decimal
+  if (s.includes(".") && s.includes(",")) {
+    // "1.234,56" -> "1234.56"
+    if (s.lastIndexOf(",") > s.lastIndexOf(".")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
+    // "1,234.56" -> "1234.56"
+    return parseFloat(s.replace(/,/g, ""));
+  }
+  if (s.includes(",") && !s.includes(".")) return parseFloat(s.replace(",", "."));
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+};
+const pick = (obj, keys, d = "") => {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v != null && v !== "") return v;
+  }
+  return d;
 };
 
-/* ---------- Componente principal ---------- */
+/* ================= Modal principal ================= */
 export default function OrderDetailsModal({ open, onClose, order }) {
-  const poNumber = order?.poNumber || order?.po_number || "";
-  const ociNumber = order?.shipmentId || order?.oci_number || "";
+  const [tab, setTab] = useState("items"); // "items" | "communications"
+  const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState("items"); // "items" | "comms"
-  const [lines, setLines] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [openNewComm, setOpenNewComm] = useState(false);
-  const [editing, setEditing] = useState(null);
+  // Datos
+  const [poItems, setPoItems] = useState([]);
+  const [imports, setImports] = useState([]);
+  const [importItems, setImportItems] = useState([]);
 
-  const headerTitle = useMemo(() => titleIds(ociNumber, poNumber) || "—", [ociNumber, poNumber]);
+  // Edición header (costos)
+  const [editOpen, setEditOpen] = useState(false);
+  const [costUsd, setCostUsd] = useState("");
+  const [totalQty, setTotalQty] = useState("");
 
-  async function load() {
-    if (!poNumber) {
-      setLines([]);
-      setLoading(false);
-      return;
-    }
+  // Communications
+  const [newCommOpen, setNewCommOpen] = useState(false);
+
+  const poNumber = str(pick(order || {}, ["po_number", "po", "id"]));
+  const ociNumber = str(pick(order || {}, ["oci_number", "oci"]));
+
+  // CARGA con filtros del backend (rápido)
+  useEffect(() => {
+    if (!open || !poNumber) return;
+    let alive = true;
     setLoading(true);
+
+    (async () => {
+      try {
+        // Pedimos ya filtrado por PO al Apps Script (tu backend lo soporta)
+        const [poi, imps, impItems] = await Promise.all([
+          fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(poNumber)}`),
+          fetchJSON(`${API_BASE}?route=table&name=imports&po=${encodeURIComponent(poNumber)}`),
+          fetchJSON(`${API_BASE}?route=table&name=import_items&po=${encodeURIComponent(poNumber)}`),
+        ]);
+
+        if (!alive) return;
+
+        setPoItems(poi?.rows || []);
+        setImports(imps?.rows || []);
+        setImportItems(impItems?.rows || []);
+      } catch (e) {
+        console.error("OrderDetailsModal load error:", e);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [open, poNumber]);
+
+  // Etiqueta única “OCI-123 / PO-123”
+  const headerLabel = useMemo(() => {
+    const oci = ociNumber || str(pick(imports[0] || {}, ["oci_number", "oci"]));
+    const po  = poNumber;
+    if (oci && po) return `${oci} / ${po}`;
+    if (po) return `PO ${po}`;
+    if (oci) return `OCI ${oci}`;
+    return "Order Details";
+  }, [ociNumber, poNumber, imports]);
+
+  // Agregados para items (por código)
+  const items = useMemo(() => {
+    const byCode = new Map();
+    // ordered + unitPrice desde purchase_orders (unificada)
+    for (const r of poItems) {
+      const code = str(pick(r, ["presentation_code", "sku", "code"]));
+      if (!code) continue;
+      const ordered = Number(pick(r, ["ordered_qty", "qty", "quantity"], 0)) || 0;
+      const unitPrice = Number(pick(r, ["unit_price_usd", "unit_price", "price"], 0)) || 0;
+      const prev = byCode.get(code) || { presentationCode: code, ordered: 0, unitPrice, imported: 0 };
+      byCode.set(code, { ...prev, ordered: prev.ordered + ordered, unitPrice: unitPrice || prev.unitPrice });
+    }
+    // importados por código
+    for (const r of importItems) {
+      const code = str(pick(r, ["presentation_code", "sku", "code"]));
+      if (!code) continue;
+      const qty = Number(pick(r, ["qty", "quantity"], 0)) || 0;
+      const prev = byCode.get(code) || { presentationCode: code, ordered: 0, unitPrice: 0, imported: 0 };
+      byCode.set(code, { ...prev, imported: prev.imported + qty });
+    }
+    return Array.from(byCode.values()).map((r) => ({
+      ...r,
+      remaining: Math.max(0, Number(r.ordered) - Number(r.imported)),
+    }));
+  }, [poItems, importItems]);
+
+  // Guardar edición header (costos)
+  async function handleSaveHeader() {
     try {
-      const l = await fetchLinesByPO(poNumber);
-      setLines(l);
-    } finally {
-      setLoading(false);
+      const payload = {
+        po_number: poNumber, // clave de actualización
+        cost_usd: numFromInput(costUsd),
+        total_qty: numFromInput(totalQty),
+      };
+      const res = await postJSON(`${API_BASE}?route=write&action=update&name=purchase_orders`, payload);
+      if (!res?.ok && !res?.updated && !res?.upserted) throw new Error(JSON.stringify(res));
+      setEditOpen(false);
+      // recargar datos rápido
+      const re = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(poNumber)}`);
+      setPoItems(re?.rows || []);
+    } catch (e) {
+      alert("No se pudo guardar. Revisa el número y formato.\n" + String(e));
     }
   }
-  useEffect(() => { if (open) load(); }, [open, poNumber]);
 
-  const createdDate = useMemo(() => {
-    const d = lines.find((r) => r.createdDate)?.createdDate;
-    return d || order?.created_date || order?.created || "";
-  }, [lines, order]);
+  // Datos para el header (estado import / transporte)
+  const mainImport = useMemo(() => {
+    if (!imports?.length) return {};
+    const sorted = [...imports].sort((a, b) => {
+      const da = new Date(pick(a, ["eta", "arrival_date"]) || 0).getTime();
+      const db = new Date(pick(b, ["eta", "arrival_date"]) || 0).getTime();
+      return db - da;
+    });
+    return sorted[0] || {};
+  }, [imports]);
 
-  const totalUsd = useMemo(
-    () => lines.reduce((acc, r) => acc + (r.unitPriceUsd * r.totalQty), 0),
-    [lines]
-  );
+  if (!open || !order) return null;
 
   return (
-    <ModalShell open={open} onClose={onClose}>
-      {/* Header */}
-      <div className="flex items-center justify-between border-b px-6 py-4">
-        <div>
-          <h2 className="text-2xl font-semibold">Order Details — {headerTitle}</h2>
-          <div className="text-xs text-muted-foreground">Created: {createdDate ? formatDate(createdDate) : "—"}</div>
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-4">
+      <div className="mx-auto w-full max-w-6xl rounded-2xl bg-white shadow-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-6 py-4">
+          <div>
+            <div className="text-xs text-slate-500">Order</div>
+            <div className="text-lg font-semibold">{headerLabel}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={badgeClass("transport", pick(mainImport, ["transport_type"], ""))}>
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium">
+                {str(pick(mainImport, ["transport_type"], "—")).toUpperCase() || "—"}
+              </span>
+            </span>
+            <span className={badgeClass("import", pick(mainImport, ["import_status"], ""))}>
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium">
+                {str(pick(mainImport, ["import_status"], "—")) || "—"}
+              </span>
+            </span>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+              ETA: {formatDate(pick(mainImport, ["eta", "arrival_date"]) || "") || "—"}
+            </span>
+          </div>
         </div>
-        <button className="rounded-lg p-2 hover:bg-slate-100" onClick={onClose}>
-          <Icon name="X" size={18} />
-        </button>
-      </div>
 
-      {/* Tabs */}
-      <div className="px-6 pt-4">
-        <div className="mb-4 flex gap-6 border-b">
+        {/* Tabs */}
+        <div className="flex items-center gap-4 px-6 pt-4">
           <button
-            className={`pb-3 ${tab === "items" ? "border-b-2 border-primary text-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
+            className={`pb-2 text-sm ${tab === "items" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"}`}
             onClick={() => setTab("items")}
           >
             Items
           </button>
           <button
-            className={`pb-3 ${tab === "comms" ? "border-b-2 border-primary text-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
-            onClick={() => setTab("comms")}
+            className={`pb-2 text-sm ${tab === "communications" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"}`}
+            onClick={() => setTab("communications")}
           >
             Communications
           </button>
         </div>
 
-        {/* Resumen (solo Items) */}
-        {tab === "items" && (
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="rounded-lg bg-muted/30 p-4">
-              <div className="text-xs text-muted-foreground">PO Number</div>
-              <div className="text-lg font-medium">{poNumber || "—"}</div>
-            </div>
-            <div className="rounded-lg bg-muted/30 p-4">
-              <div className="text-xs text-muted-foreground">Created</div>
-              <div className="text-lg font-medium">{createdDate ? formatDate(createdDate) : "—"}</div>
-            </div>
-            <div className="rounded-lg bg-muted/30 p-4">
-              <div className="text-xs text-muted-foreground">Total (USD)</div>
-              <div className="text-lg font-medium">{formatCurrency(totalUsd)}</div>
-            </div>
-          </div>
-        )}
+        {/* Contenido */}
+        <div className="px-6 pb-6">
+          {loading ? (
+            <div className="p-6 text-slate-500">Cargando…</div>
+          ) : tab === "items" ? (
+            <div className="grid grid-cols-1 gap-4">
+              {/* Resumen rápido */}
+              <div className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-3">
+                <div>
+                  <div className="text-xs text-slate-500">Items</div>
+                  <div className="text-xl font-semibold">{formatNumber(items.length)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">Ordered (sum)</div>
+                  <div className="text-xl font-semibold">
+                    {formatNumber(items.reduce((s, r) => s + Number(r.ordered || 0), 0))}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">Remaining (sum)</div>
+                  <div className="text-xl font-semibold">
+                    {formatNumber(items.reduce((s, r) => s + Number(r.remaining || 0), 0))}
+                  </div>
+                </div>
+              </div>
 
-        {/* TAB: Items */}
-        {tab === "items" && (
-          <div className="rounded-xl border">
-            <div className="border-b p-4 font-medium">Products</div>
-            {loading ? (
-              <div className="p-8 text-center text-muted-foreground">Loading…</div>
-            ) : (lines || []).length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground">No items found.</div>
-            ) : (
-              <ul className="divide-y">
-                {lines.map((it, idx) => (
-                  <li key={`${it.poNumber}-${it.presentationCode}-${idx}`} className="p-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1">
-                        <div className="font-medium">
-                          {it.productName || it.presentationCode || "—"}
-                        </div>
-                        <div className="text-xs text-muted-foreground mt-1">
-                          Code: {it.presentationCode || "—"} • {it.transportType || "—"} • {it.ociNumber || "—"}
-                        </div>
-
-                        <div className="mt-3 grid grid-cols-3 gap-3">
-                          <div>
-                            <div className="text-xs text-muted-foreground">Requested</div>
-                            <div className="font-medium">{formatNumber(it.totalQty)}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Imported</div>
-                            <div className="font-medium">{formatNumber(it.imported)}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Remaining</div>
-                            <div className="font-medium">{formatNumber(it.remaining)}</div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="w-48 shrink-0 text-right">
-                        <div className="text-xs text-muted-foreground">Unit price</div>
-                        <div className="font-medium">{formatCurrency(it.unitPriceUsd)}</div>
-                        <button
-                          className="mt-2 rounded-lg border px-3 py-1.5 text-slate-700 hover:bg-slate-50"
-                          onClick={() => setEditing(it)}
-                        >
-                          Edit
-                        </button>
-                      </div>
-                    </div>
-                  </li>
+              {/* Tabla */}
+              <div className="rounded-xl border border-slate-200 bg-white">
+                <div className="grid grid-cols-5 gap-2 border-b px-4 py-2 text-xs text-slate-500">
+                  <div>Code</div>
+                  <div className="text-right">Ordered</div>
+                  <div className="text-right">Imported</div>
+                  <div className="text-right">Remaining</div>
+                  <div className="text-right">Unit Price</div>
+                </div>
+                {items.map((it) => (
+                  <div key={it.presentationCode} className="grid grid-cols-5 gap-2 px-4 py-2 text-sm">
+                    <div className="font-medium">{it.presentationCode}</div>
+                    <div className="text-right">{formatNumber(it.ordered)}</div>
+                    <div className="text-right">{formatNumber(it.imported)}</div>
+                    <div className="text-right">{formatNumber(it.remaining)}</div>
+                    <div className="text-right">{formatCurrency(it.unitPrice)}</div>
+                  </div>
                 ))}
-              </ul>
-            )}
-          </div>
-        )}
+              </div>
 
-        {/* TAB: Communications */}
-        {tab === "comms" && (
-          <div className="rounded-xl border">
-            <div className="flex items-center justify-between border-b p-4">
-              <div className="font-medium">Communications</div>
-              <Button onClick={() => setOpenNewComm(true)} iconName="Plus">
-                Add
-              </Button>
+              {/* Botón editar header (costos) */}
+              <div className="flex justify-end">
+                <button
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+                  onClick={() => {
+                    // precargar valores para editar
+                    const row0 = poItems[0] || {};
+                    setCostUsd(str(pick(row0, ["cost_usd", "usd", "amount_usd"], "")));
+                    setTotalQty(str(pick(row0, ["total_qty", "qty_total"], "")));
+                    setEditOpen(true);
+                  }}
+                >
+                  Edit header (costs)
+                </button>
+              </div>
             </div>
-            <div className="p-4">
-              {/* Mismo componente que usas en Tenders/Imports */}
-              <CommunicationList linkedType="orders" linkedId={poNumber} />
+          ) : (
+            // Communications
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-slate-600">
+                  Linked to: <span className="font-medium">orders</span> / <span className="font-mono">{poNumber || "—"}</span>
+                </div>
+                <button
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+                  onClick={() => setNewCommOpen(true)}
+                >
+                  + Add
+                </button>
+              </div>
+
+              <CommunicationList
+                // CommunicationList ya usa adapters/mapCommunications para mostrar "unread" y "order"
+                // Solo pasamos el filtro del backend vía props si tu componente lo soporta; si no, el
+                // propio OrderDetailsModal ya está filtrando arriba.
+                rows={null} // deja que el propio componente consulte si así está en tu repo
+                linkedType="orders"
+                linkedId={poNumber}
+              />
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Footer */}
-        <div className="flex justify-end py-6">
-          <Button variant="secondary" onClick={onClose}>
+        <div className="flex items-center justify-end gap-2 border-t px-6 py-4">
+          <button className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50" onClick={onClose}>
             Close
-          </Button>
+          </button>
         </div>
       </div>
 
-      {/* Modales secundarios */}
-      <OrderItemEditModal
-        open={!!editing}
-        onClose={() => setEditing(null)}
-        line={editing}
-        onSaved={() => load()}
-      />
-      <NewCommunicationModal
-        open={openNewComm}
-        onClose={() => setOpenNewComm(false)}
-        defaultLinkedType="orders"
-        defaultLinkedId={poNumber}
-        onSaved={() => {
-          // CommunicationList ya refresca internamente; si quisieras forzar, pasa una key.
-          setOpenNewComm(false);
-        }}
-      />
-    </ModalShell>
+      {/* Modal editar header */}
+      {editOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-3 text-lg font-semibold">Edit costs (header)</div>
+            <div className="space-y-3">
+              <label className="block text-sm">
+                <span className="text-slate-600">Cost USD</span>
+                <input
+                  className="mt-1 w-full rounded-lg border px-3 py-2"
+                  value={costUsd}
+                  onChange={(e) => setCostUsd(e.target.value)}
+                  placeholder="Ej: 1,10 o 1.10"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="text-slate-600">Total Qty</span>
+                <input
+                  className="mt-1 w-full rounded-lg border px-3 py-2"
+                  value={totalQty}
+                  onChange={(e) => setTotalQty(e.target.value)}
+                  placeholder="Ej: 1.000 o 1000"
+                />
+              </label>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="rounded-lg border px-3 py-2 text-sm" onClick={() => setEditOpen(false)}>
+                Cancel
+              </button>
+              <button className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700" onClick={handleSaveHeader}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal nuevo mensaje */}
+      {newCommOpen && (
+        <NewCommunicationModal
+          open={newCommOpen}
+          onClose={() => setNewCommOpen(false)}
+          defaultValues={{
+            linked_type: "orders",
+            linked_id: poNumber,
+            unread: true,
+          }}
+        />
+      )}
+    </div>
   );
 }
