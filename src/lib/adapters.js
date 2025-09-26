@@ -256,8 +256,3 @@ export const mapCommunications = (row = {}) => {
 /** ================ Export utils ====================== */
 export const _utils = { str, toNumber, toDateISO, pick };
 
-
-
-// Export utilidades para pruebas o usos avanzados
-export const _utils = { S, N, pick, toISO, toBool };
-
