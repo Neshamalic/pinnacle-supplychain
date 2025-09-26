@@ -1,458 +1,381 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
-import { useEffect, useMemo, useState } from "react";
-import { API_BASE, fetchJSON, postJSON, formatCurrency, formatDate, formatNumber, badgeClass } from "../../../lib/utils";
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { API_BASE, fetchJSON, postJSON, formatCurrency, formatDate, formatNumber, badgeClass } from '../../../lib/utils';
 
-/** UI helpers */
-function Chip({ children, className = "" }) {
+function Badge({ children, className = '' }) {
+  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${className}`} >{children}</span>;
+}
+
+function SectionCard({ title, children }) {
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>{children}</span>
+    <div className="rounded-xl border border-slate-200 bg-white">
+      {title ? <div className="border-b px-4 py-3 font-medium text-slate-700">{title}</div> : null}
+      <div className="p-4">{children}</div>
+    </div>
   );
 }
-function Card({ children }) {
-  return <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">{children}</div>;
+
+function InfoTile({ label, value }) {
+  return (
+    <div className="rounded-lg bg-slate-50 px-4 py-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-slate-800 font-medium">{value ?? '—'}</div>
+    </div>
+  );
 }
-function SectionTitle({ children }) {
-  return <h3 className="mb-2 text-sm font-semibold text-slate-600">{children}</h3>;
+
+function ProductLine({ line, onEdit }) {
+  const price = Number(line.cost_usd || 0);
+  const imported = Number(line.imported_qty || 0);
+  const requested = Number(line.total_qty || 0);
+  const remaining = Math.max(requested - imported, 0);
+
+  const transportCls = badgeClass('transport', line.transport_type);
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-base font-semibold text-slate-800">
+            {line.product_name || line.presentation_code}
+          </div>
+          <div className="text-xs text-slate-500">
+            Code: {line.presentation_code} {line.package_units ? `• ${formatNumber(line.package_units)} units/pack` : ''}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {line.import_status ? <Badge className="bg-emerald-50 text-emerald-700">{line.import_status}</Badge> : null}
+            {line.transport_type ? <Badge className={transportCls}>{line.transport_type}</Badge> : null}
+            {line.oci_number ? <Badge className="bg-indigo-50 text-indigo-700">OCI {line.oci_number}</Badge> : null}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className="text-sm text-slate-500">{formatCurrency(price)} <span className="text-xs">/ unit</span></div>
+          <button
+            className="mt-2 rounded-lg border px-3 py-1.5 text-slate-700 hover:bg-slate-50"
+            onClick={() => onEdit(line)}
+          >
+            Edit
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <InfoTile label="Requested" value={formatNumber(requested)} />
+        <InfoTile label="Imported" value={formatNumber(imported)} />
+        <InfoTile label="Remaining" value={formatNumber(remaining)} />
+      </div>
+    </div>
+  );
 }
 
-/** Small helpers */
-const num = (v) => {
-  const n = Number(String(v ?? "").replace(/\./g, "").replace(/,/g, "."));
-  return Number.isFinite(n) ? n : 0;
-};
-const by = (prop) => (a, b) => (a[prop] > b[prop] ? 1 : a[prop] < b[prop] ? -1 : 0);
+function CommCard({ c, onDelete }) {
+  const isUnread = String(c.unread) === 'true';
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="text-base font-semibold text-slate-800">{c.subject || '(no subject)'}</div>
+            {isUnread && <Badge className="bg-amber-100 text-amber-700">Unread</Badge>}
+          </div>
+          <div className="text-xs text-slate-500">{(c.type || '').toLowerCase()} • {c.participants || ''}</div>
+        </div>
+        <div className="text-xs text-slate-500">{formatDate(c.created_date)}</div>
+      </div>
 
-/** ---- Main modal ---- */
-export default function OrderDetailsModal({ open, onClose, order }) {
-  const po = String(order?.po_number || order?.po || "").trim();
-  const oci = String(order?.oci_number || order?.oci || "").trim();
+      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700">
+        {c.content || c.preview || ''}
+      </div>
 
-  const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("items"); // items | comms
-  const [rowsPO, setRowsPO] = useState([]);
-  const [rowsImports, setRowsImports] = useState([]);
-  const [rowsImportItems, setRowsImportItems] = useState([]);
-  const [rowsMaster, setRowsMaster] = useState([]);
+      <div className="mt-3 text-xs text-slate-500">
+        Linked: {c.linked_type} • {c.linked_id}
+      </div>
 
-  // communications
-  const [comms, setComms] = useState([]);
-  const [busyComm, setBusyComm] = useState(false);
+      <div className="mt-3">
+        <button
+          className="rounded-lg bg-rose-600 px-3 py-1.5 text-white hover:bg-rose-700"
+          onClick={() => onDelete(c)}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
 
-  // ---- load all data needed for this PO (and OCI) ----
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        setLoading(true);
+export default function OrderDetailsModal({ open, onClose, seed }) {
+  const [loading, setLoading] = useState(false);
+  const [header, setHeader] = useState({ po_number: '', oci_number: '', tender_ref: '', created_date: '' });
+  const [lines, setLines] = useState([]);          // productos (una línea por presentation_code)
+  const [comms, setComms] = useState([]);          // comunicaciones de esta PO
+  const po = String(seed?.po_number || '').trim();
+  const oci = String(seed?.oci_number || '').trim();
 
-        // All purchase_orders (we’ll filter below)
-        const [poRes, impRes, impItemsRes] = await Promise.all([
-          fetchJSON(`${API_BASE}?route=table&name=purchase_orders`),
-          fetchJSON(`${API_BASE}?route=table&name=imports`),
-          fetchJSON(`${API_BASE}?route=table&name=import_items`),
-        ]);
-
-        // product master: try common sheet names, use first that returns ok
-        let masterRows = [];
-        const candidateSheets = [
-          "product_presentation_master",
-          "producto_presentation_master",
-          "product_presentation",
-          "presentation_master",
-        ];
-        for (const name of candidateSheets) {
-          try {
-            const r = await fetchJSON(`${API_BASE}?route=table&name=${name}`);
-            if (r?.ok && Array.isArray(r.rows)) {
-              masterRows = r.rows;
-              break;
-            }
-          } catch {
-            /* try next name */
-          }
-        }
-
-        if (!alive) return;
-        setRowsPO(poRes?.rows || []);
-        setRowsImports(impRes?.rows || []);
-        setRowsImportItems(impItemsRes?.rows || []);
-        setRowsMaster(masterRows);
-
-        // communications – only for Orders + this PO
-        try {
-          const commRes = await fetchJSON(
-            `${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc`
-          );
-          if (alive) setComms(commRes?.rows || []);
-        } catch {
-          if (alive) setComms([]);
-        }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+  const title = useMemo(() => {
+    const left = [`PO-${po || '—'}`, oci ? `OCI-${oci}` : ''].filter(Boolean).join('  ');
+    return left;
   }, [po, oci]);
 
-  /** index master by presentation_code */
-  const masterByCode = useMemo(() => {
-    const map = new Map();
-    for (const r of rowsMaster) {
-      const code =
-        String(r.presentation_code || r.product_code || r.presentationCode || r.sku || r.code || "").trim();
-      if (!code) continue;
-      const name = String(r.product_name || r.productName || r.name || "").trim();
-      const units =
-        num(r.package_units || r.units_per_package || r.packageUnits || r.units || r.package_size || 0) || 1;
-      map.set(code, { code, name, units });
-    }
-    return map;
-  }, [rowsMaster]);
+  // ────────────────────────────────────────────────────────────────────────────────
+  // Carga de datos
+  // ────────────────────────────────────────────────────────────────────────────────
+  const loadAll = useCallback(async () => {
+    if (!po) return;
 
-  /** imports info for this OCI */
-  const importInfo = useMemo(() => {
-    const r = rowsImports.find(
-      (x) => String(x.oci_number || x.oci || "").trim() === oci
-    );
-    const import_status = String(r?.import_status || r?.status || "").toLowerCase();
-    const transport = String(r?.transport_type || r?.transport || "").toLowerCase();
-    return { import_status, transport };
-  }, [rowsImports, oci]);
+    setLoading(true);
+    try {
+      // 1) purchase_orders (filtrado por po/oci en backend si aplica)
+      const poRes = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(po)}${oci ? `&oci=${encodeURIComponent(oci)}` : ''}`);
+      const poRows = (poRes.rows || []).filter(r => String(r.po_number || '').trim() === po);
 
-  /** Build product lines from purchase_orders */
-  const productLines = useMemo(() => {
-    if (!po) return [];
-    // filter rows for this PO (and, if present, same OCI)
-    const filtered = rowsPO.filter((r) => {
-      const rpo = String(r.po_number || r.po || "").trim();
-      const roci = String(r.oci_number || r.oci || "").trim();
-      if (oci) return rpo === po && roci === oci;
-      return rpo === po;
-    });
-
-    // group by presentation_code
-    const byCode = new Map();
-    for (const r of filtered) {
-      const code = String(r.presentation_code || r.product_code || r.sku || r.code || "").trim();
-      if (!code) continue;
-
-      const unitPrice =
-        num(r.cost_usd || r.unit_price_usd || r.unit_price || r.price_usd || r.price);
-
-      const totalQty = num(r.total_qty || r.ordered_qty || r.req_qty || r.qty);
-
-      const m = masterByCode.get(code) || { name: "", units: 1 };
-
-      // sum per code (in case you have more than one row)
-      const prev = byCode.get(code) || { code, name: m.name, units: m.units, unitPrice: 0, requested: 0 };
-      byCode.set(code, {
-        code,
-        name: m.name,
-        units: m.units || 1,
-        unitPrice: unitPrice || prev.unitPrice, // keep first non-zero
-        requested: prev.requested + totalQty,
+      // si en la cabecera aún no hay valores, los tomamos de la primera fila
+      const first = poRows[0] || seed || {};
+      setHeader({
+        po_number: po,
+        oci_number: first.oci_number || oci || '',
+        tender_ref: first.tender_ref || seed?.tender_ref || '',
+        created_date: first.created_date || seed?.created_date || '',
       });
+
+      const ociNow = (first.oci_number || oci || '').trim();
+
+      // 2) master de presentaciones (nombre + pack)
+      // soporta nombre de hoja "product_presentation_master" o "producto_presentation_master"
+      const masterTry1 = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`).catch(() => ({ ok: false, rows: [] }));
+      const masterTry2 = await fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`).catch(() => ({ ok: false, rows: [] }));
+      const master = (masterTry1.rows || []).concat(masterTry2.rows || []);
+      const mapMaster = new Map();
+      for (const m of master) {
+        const key = String(m.presentation_code || m.product_code || m.code || '').trim();
+        if (!key) continue;
+        mapMaster.set(key, {
+          product_name: m.product_name || m.name || '',
+          package_units: Number(m.package_units || m.units_per_package || m.units || 0),
+        });
+      }
+
+      // 3) imports (estado + transporte) (filtrado por po/oci en backend)
+      let importRow = null;
+      if (ociNow || po) {
+        const impRes = await fetchJSON(`${API_BASE}?route=table&name=imports${po ? `&po=${encodeURIComponent(po)}` : ''}${ociNow ? `&oci=${encodeURIComponent(ociNow)}` : ''}`);
+        importRow = (impRes.rows || [])[0] || null;
+      }
+
+      // 4) import_items para calcular "Imported" por presentación
+      const iiRes = await fetchJSON(`${API_BASE}?route=table&name=import_items${po ? `&po=${encodeURIComponent(po)}` : ''}${ociNow ? `&oci=${encodeURIComponent(ociNow)}` : ''}`);
+      const iiRows = iiRes.rows || [];
+
+      const sumImportedByCode = new Map();
+      for (const it of iiRows) {
+        const code = String(it.presentation_code || '').trim();
+        const qty = Number(it.qty || it.quantity || 0);
+        if (!code) continue;
+        sumImportedByCode.set(code, (sumImportedByCode.get(code) || 0) + qty);
+      }
+
+      // 5) Construimos líneas de producto desde purchase_orders (una por presentation_code)
+      const linesMap = new Map();
+      for (const r of poRows) {
+        const code = String(r.presentation_code || '').trim();
+        if (!code) continue;
+        if (!linesMap.has(code)) {
+          const m = mapMaster.get(code) || {};
+          linesMap.set(code, {
+            po_number: po,
+            oci_number: ociNow,
+            presentation_code: code,
+            product_name: m.product_name || '',
+            package_units: m.package_units || 0,
+            import_status: (importRow?.import_status || '').toLowerCase() || '',
+            transport_type: (importRow?.transport_type || '').toLowerCase() || '',
+            cost_usd: Number(r.cost_usd || r.unit_price_usd || r.unit_price || 0),
+            total_qty: Number(r.total_qty || r.ordered_qty || r.qty || 0),
+            imported_qty: Number(sumImportedByCode.get(code) || 0),
+          });
+        } else {
+          // si hubiera filas duplicadas, acumulamos cantidades
+          const acc = linesMap.get(code);
+          acc.total_qty += Number(r.total_qty || r.ordered_qty || r.qty || 0);
+          if (!acc.cost_usd && r.cost_usd) acc.cost_usd = Number(r.cost_usd);
+        }
+      }
+
+      setLines(Array.from(linesMap.values()));
+
+      // 6) communications (solo de esta PO)
+      const commRes = await fetchJSON(`${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc`);
+      setComms(commRes.rows || []);
+    } finally {
+      setLoading(false);
     }
+  }, [po, oci, seed]);
 
-    // compute “imported” from import_items (oci + code)
-    for (const [code, obj] of byCode) {
-      const imported = rowsImportItems
-        .filter(
-          (ii) =>
-            String(ii.oci_number || ii.oci || "").trim() === oci &&
-            String(ii.presentation_code || ii.product_code || ii.sku || ii.code || "").trim() === code
-        )
-        .reduce((acc, ii) => acc + num(ii.qty || ii.quantity), 0);
-      obj.imported = imported;
-      obj.remaining = Math.max(0, (obj.requested || 0) - (obj.imported || 0));
-    }
+  useEffect(() => {
+    if (open) loadAll().catch(console.error);
+  }, [open, loadAll]);
 
-    return Array.from(byCode.values()).sort(by("code"));
-  }, [rowsPO, rowsImportItems, masterByCode, po, oci]);
+  const totalUSD = useMemo(() => {
+    return lines.reduce((acc, l) => acc + Number(l.cost_usd || 0) * Number(l.total_qty || 0), 0);
+  }, [lines]);
 
-  const totalUSD = useMemo(
-    () => productLines.reduce((acc, l) => acc + (l.requested || 0) * (l.unitPrice || 0), 0),
-    [productLines]
-  );
-
-  /** ---- Edit per product (qty + unit price) ---- */
-  async function onEditLine(line) {
-    // simple 2-step prompt editor
-    const currentPrice = line.unitPrice || 0;
-    const priceStr = window.prompt(`Unit price (USD)\nActual: ${currentPrice}\n\nDeja en blanco para no cambiar.`, "");
+  // ────────────────────────────────────────────────────────────────────────────────
+  // Editar línea: cost_usd + total_qty
+  // ────────────────────────────────────────────────────────────────────────────────
+  async function handleEditLine(line) {
+    const priceStr = window.prompt(
+      `Unit price (USD)\nActual: ${line.cost_usd}\n\nDeja en blanco para no cambiar.`,
+      line.cost_usd ? String(line.cost_usd) : ''
+    );
     if (priceStr === null) return;
 
-    const currentQty = line.requested || 0;
-    const qtyStr = window.prompt(`Requested quantity\nActual: ${currentQty}\n\nDeja en blanco para no cambiar.`, "");
+    const qtyStr = window.prompt(
+      `Requested quantity\nActual: ${line.total_qty}\n\nDeja en blanco para no cambiar.`,
+      line.total_qty ? String(line.total_qty) : ''
+    );
     if (qtyStr === null) return;
 
-    const nextPrice = priceStr.trim() ? num(priceStr) : currentPrice;
-    const nextQty = qtyStr.trim() ? num(qtyStr) : currentQty;
-    if (!po || !line?.code) return;
+    const newPrice = priceStr.trim() === '' ? line.cost_usd : Number(priceStr.replace(',', '.'));
+    const newQty   = qtyStr.trim() === '' ? line.total_qty : Number(qtyStr.replace(',', '.'));
 
-    // update row in purchase_orders (key: po_number + presentation_code)
-    await postJSON(API_BASE, {
-      route: "write",
-      action: "update",
-      name: "purchase_orders",
+    await postJSON(`${API_BASE}?route=write&action=update&name=purchase_orders`, {
       row: {
-        po_number: po,
-        presentation_code: line.code,
-        total_qty: nextQty,
-        cost_usd: nextPrice,
+        po_number: line.po_number,
+        presentation_code: line.presentation_code,
+        cost_usd: newPrice,
+        total_qty: newQty,
       },
     });
 
-    // reload locally
-    const res = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders`);
-    setRowsPO(res?.rows || []);
+    // refrescamos
+    await loadAll();
   }
 
-  /** ---- Communications (filtered to Orders + this PO) ---- */
-  async function reloadComms() {
-    const commRes = await fetchJSON(
-      `${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc`
-    );
-    setComms(commRes?.rows || []);
-  }
+  // ────────────────────────────────────────────────────────────────────────────────
+  // Communications: add / delete
+  // ────────────────────────────────────────────────────────────────────────────────
+  async function handleAddComm() {
+    // Modal simple, igual a los otros formularios (type/subject/participants/content)
+    // linked_type: 'orders', linked_id: po
+    const type = window.prompt('Type (meeting, mail, call, whatsapp, other):', 'meeting');
+    if (type == null) return;
+    const subject = window.prompt('Subject:', '');
+    if (subject == null) return;
+    const participants = window.prompt('Participants (comma separated):', '');
+    if (participants == null) return;
+    const content = window.prompt('Content:', '');
+    if (content == null) return;
 
-  async function onAddComm() {
-    // Open the full form used elsewhere? If not available, use a guided prompt (simple & quick).
-    try {
-      setBusyComm(true);
-
-      // If tienes tu modal “New Communication”, reemplaza esta sección por abrir ese modal.
-      const type = window.prompt("Type (meeting, mail, call, whatsapp, other):", "meeting");
-      if (!type) return;
-      const subject = window.prompt("Subject:", "") || "";
-      const participants = window.prompt("Participants (comma separated):", "") || "";
-      const content = window.prompt("Content:", "") || "";
-
-      await postJSON(API_BASE, {
-        route: "write",
-        action: "create",
-        name: "communications",
-        row: {
-          type,
-          subject,
-          participants,
-          content,
-          linked_type: "orders",
-          linked_id: po,
-          unread: "true",
-        },
-      });
-
-      await reloadComms();
-    } finally {
-      setBusyComm(false);
-    }
-  }
-
-  async function onDeleteComm(c) {
-    if (!c?.id && !c?._virtual_id) return;
-    if (!window.confirm("Are you sure you want to delete?")) return;
-
-    // prefer id; fallback to created_date+subject key used by your script
-    const where = c.id ? { id: c.id } : { created_date: c.created_date || c.created || c.date, subject: c.subject };
-    await postJSON(API_BASE, {
-      route: "write",
-      action: "delete",
-      name: "communications",
-      where,
+    await postJSON(`${API_BASE}?route=write&action=create&name=communications`, {
+      row: {
+        type, subject, participants, content,
+        linked_type: 'orders',
+        linked_id: po,
+        unread: 'true',
+      },
     });
-    await reloadComms();
+    await loadAll();
+  }
+
+  async function handleDeleteComm(c) {
+    await postJSON(`${API_BASE}?route=write&action=delete&name=communications`, {
+      where: c.id ? { id: c.id } : { created_date: c.created_date, subject: c.subject },
+    });
+    await loadAll();
   }
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4">
-      <div className="h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4">
+      <div className="mx-auto w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b px-5 py-4">
           <div className="flex items-center gap-2">
-            <h2 className="text-xl font-semibold">Order Details – PO</h2>
-            {po && <Chip className="bg-slate-100 text-slate-700">{po}</Chip>}
-            {oci && <Chip className="bg-slate-100 text-slate-700">{oci}</Chip>}
+            <div className="text-xl font-semibold text-slate-900">Order Details — {oci ? `OCI-${oci} / ` : ''}PO-{po}</div>
+            {po ? <Badge className="bg-slate-100 text-slate-700">PO-{po}</Badge> : null}
+            {oci ? <Badge className="bg-slate-100 text-slate-700">OCI-{oci}</Badge> : null}
           </div>
-          <div className="text-sm text-slate-500">Created: {formatDate(order?.created_date)}</div>
-          <button
-            onClick={onClose}
-            className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
-            aria-label="Close"
-          >
-            ✕
-          </button>
+          <div className="text-sm text-slate-500">Created: {formatDate(header.created_date)}</div>
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center gap-6 border-b px-5">
-          <button
-            className={`-mb-px border-b-2 px-1 py-3 text-sm ${
-              tab === "items" ? "border-indigo-500 font-medium text-indigo-700" : "border-transparent text-slate-500"
-            }`}
-            onClick={() => setTab("items")}
-          >
-            Items
-          </button>
-          <button
-            className={`-mb-px border-b-2 px-1 py-3 text-sm ${
-              tab === "comms" ? "border-indigo-500 font-medium text-indigo-700" : "border-transparent text-slate-500"
-            }`}
-            onClick={() => setTab("comms")}
-          >
-            Communications
-          </button>
-        </div>
+        <Tabs>
+          <Tab title="Items">
+            <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-3">
+              <InfoTile label="PO Number" value={po} />
+              <InfoTile label="Created" value={formatDate(header.created_date)} />
+              <InfoTile label="Total (USD)" value={formatCurrency(totalUSD)} />
+            </div>
 
-        {/* Content */}
-        <div className="h-[calc(90vh-96px)] overflow-y-auto p-5">
-          {/* ITEMS TAB */}
-          {tab === "items" && (
-            <div className="space-y-4">
-              {/* header cards */}
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <Card>
-                  <SectionTitle>PO Number</SectionTitle>
-                  <div className="text-lg font-semibold">{po || "—"}</div>
-                </Card>
-                <Card>
-                  <SectionTitle>Created</SectionTitle>
-                  <div className="text-lg font-semibold">{formatDate(order?.created_date) || "—"}</div>
-                </Card>
-                <Card>
-                  <SectionTitle>Total (USD)</SectionTitle>
-                  <div className="text-lg font-semibold">{formatCurrency(totalUSD)}</div>
-                </Card>
-              </div>
-
-              <h3 className="mt-2 text-base font-semibold text-slate-700">Products</h3>
-
-              {loading && <div className="text-sm text-slate-500">Loading…</div>}
-
-              {!loading && productLines.length === 0 && (
-                <div className="text-sm text-slate-500">No items found.</div>
-              )}
-
-              {!loading &&
-                productLines.map((l) => (
-                  <div key={l.code} className="rounded-xl border border-slate-200 bg-slate-50/40 p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div>
-                        <div className="text-lg font-semibold text-slate-800">
-                          {l.name || l.code}
-                          {l.units ? (
-                            <span className="ml-2 text-sm font-normal text-slate-500">• {l.units} units/pack</span>
-                          ) : null}
-                        </div>
-                        <div className="text-xs text-slate-500">Code: {l.code}</div>
-                        <div className="mt-2 flex items-center gap-2">
-                          {/* import status & transport */}
-                          {importInfo.import_status && (
-                            <Chip className={badgeClass("transport", importInfo.transport)}>
-                              {importInfo.import_status || "—"}
-                            </Chip>
-                          )}
-                          {importInfo.transport && (
-                            <Chip className={badgeClass("transport", importInfo.transport)}>
-                              {importInfo.transport || "—"}
-                            </Chip>
-                          )}
-                          {oci && <Chip className="bg-slate-100 text-slate-700">{oci}</Chip>}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="text-sm text-slate-500">{formatCurrency(l.unitPrice)} / unit</div>
-                        <button
-                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                          onClick={() => onEditLine(l)}
-                        >
-                          Edit
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                      <Card>
-                        <SectionTitle>Requested</SectionTitle>
-                        <div className="text-2xl font-semibold">{formatNumber(l.requested)}</div>
-                      </Card>
-                      <Card>
-                        <SectionTitle>Imported</SectionTitle>
-                        <div className="text-2xl font-semibold">{formatNumber(l.imported)}</div>
-                      </Card>
-                      <Card>
-                        <SectionTitle>Remaining</SectionTitle>
-                        <div className="text-2xl font-semibold">{formatNumber(l.remaining)}</div>
-                      </Card>
-                    </div>
-                  </div>
+            <div className="px-5 pb-5">
+              <div className="mb-2 text-sm font-medium text-slate-700">Products</div>
+              <div className="grid grid-cols-1 gap-4">
+                {lines.map(line => (
+                  <ProductLine key={line.presentation_code} line={line} onEdit={handleEditLine} />
                 ))}
-            </div>
-          )}
-
-          {/* COMMUNICATIONS TAB */}
-          {tab === "comms" && (
-            <div className="space-y-4">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-sm text-slate-500">
-                  Linked to <b>Orders</b> • <span className="font-medium">{po}</span>
-                  {oci ? (
-                    <>
-                      {" "}
-                      — <b>Imports</b> • <span className="font-medium">{oci}</span>
-                    </>
-                  ) : null}
-                </div>
-                <button
-                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                  onClick={onAddComm}
-                  disabled={busyComm}
-                >
-                  + Add
-                </button>
+                {lines.length === 0 && (
+                  <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">
+                    No items found.
+                  </div>
+                )}
               </div>
+            </div>
+          </Tab>
 
-              {comms.map((c) => (
-                <div key={c.id || c._virtual_id} className="rounded-xl border border-slate-200 bg-white p-4">
-                  <div className="mb-1 flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-base font-semibold">{c.subject || "(no subject)"}</div>
-                      <div className="text-xs text-slate-500">
-                        {String(c.type || "").toLowerCase()} • {c.participants || "—"}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="text-xs text-slate-400">{formatDate(c.created_date || c.created || c.date)}</div>
-                      <button
-                        className="rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700"
-                        onClick={() => onDeleteComm(c)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                  <p className="whitespace-pre-wrap text-sm text-slate-700">
-                    {String(c.content || c.preview || "").slice(0, 600)}
-                  </p>
-                  <div className="mt-2 text-xs text-slate-500">
-                    Linked: orders • {po}
-                  </div>
-                </div>
+          <Tab title="Communications">
+            <div className="flex items-center justify-between px-5 pt-5">
+              <div className="text-sm text-slate-600">
+                Linked to <b>Orders</b> • <b>{po}</b>
+                {oci ? <> — <b>Imports</b> • <b>{oci}</b></> : null}
+              </div>
+              <button className="rounded-lg bg-violet-600 px-3 py-1.5 text-white hover:bg-violet-700" onClick={handleAddComm}>+ Add</button>
+            </div>
+
+            <div className="grid gap-4 p-5">
+              {comms.map(c => (
+                <CommCard key={c.id || c._virtual_id || `${c.created_date}::${c.subject}`} c={c} onDelete={handleDeleteComm} />
               ))}
-
               {comms.length === 0 && (
-                <div className="text-sm text-slate-500">No communications for this PO.</div>
+                <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">
+                  No communications for this PO.
+                </div>
               )}
             </div>
-          )}
+          </Tab>
+        </Tabs>
+
+        <div className="flex items-center justify-end gap-2 border-t px-5 py-3">
+          <button className="rounded-lg border px-4 py-2" onClick={onClose}>Close</button>
         </div>
+
+        {loading && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/60">
+            <div className="animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600 p-4" />
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+/* ───────── Tabs minimal ───────── */
+function Tabs({ children }) {
+  const [idx, setIdx] = useState(0);
+  const items = Array.isArray(children) ? children : [children];
+  return (
+    <>
+      <div className="flex gap-6 border-b px-5 pt-3">
+        {items.map((c, i) => (
+          <button
+            key={i}
+            onClick={() => setIdx(i)}
+            className={`-mb-px border-b-2 px-1.5 py-2 text-sm ${i === idx ? 'border-violet-600 text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+          >
+            {c.props.title}
+          </button>
+        ))}
+      </div>
+      <div>{items[idx]}</div>
+    </>
+  );
+}
+function Tab({ children }) { return children; }
