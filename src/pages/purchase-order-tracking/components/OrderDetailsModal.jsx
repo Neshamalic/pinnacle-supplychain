@@ -178,43 +178,54 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           </button>
         </div>
 
-        {/* ===== NUEVO: si no hay PO, pedirlo aquí ===== */}
-        {!poNumber && (
-          <div className="px-6 py-4">
-            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
-              <div className="mb-2 text-sm text-amber-900">
-                No recibí el <b>PO Number</b> desde la tabla. Escríbelo para cargar los datos:
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  className="w-full rounded-lg border px-3 py-2"
-                  placeholder="Ej: PO-171"
-                  value={poInput}
-                  onChange={(e) => setPoInput(e.target.value)}
-                />
-                <button
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
-                  onClick={() => poInput && refetchAll()}
-                >
-                  Cargar
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+      {/* ===== NUEVO bloque cuando no hay PO ===== */}
+{!poNumber && (
+  <div className="px-6 py-4">
+    <div
+      className="rounded-xl border border-amber-300 bg-amber-50 p-4"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="mb-2 text-sm text-amber-900">
+        No recibí el <b>PO Number</b> desde la tabla. Escríbelo para cargar los datos:
+      </div>
 
-        {/* Tabs */}
-        <div className="flex items-center gap-4 px-6 pt-4">
-          <button
-            className={`pb-2 text-sm ${tab === "items" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"}`}
-            onClick={() => setTab("items")}
-          >
-            Items
-          </button>
-          <button
-            className={`pb-2 text-sm ${tab === "comms" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"}`}
-            onClick={() => setTab("comms")}
-          >
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          tabIndex={0}
+          className="w-full rounded-lg border px-3 py-2"
+          placeholder="Ej: PO-171"
+          value={poInput}
+          onChange={(e) => setPoInput(e.target.value)}
+        />
+
+        <button
+          className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
+          onClick={() => poInput && refetchAll()}
+        >
+          Cargar
+        </button>
+
+        {/* Fallback por si el input no deja escribir */}
+        <button
+          className="rounded-lg border border-blue-600 px-3 py-2 text-sm text-blue-700 hover:bg-blue-50"
+          onClick={() => {
+            const v = window.prompt("Escribe el PO Number (ej: PO-171):", poInput || "");
+            if (v) {
+              setPoInput(v.trim());
+              // Disparamos fetch en el próximo ciclo; si quieres inmediato:
+              // setTimeout(refetchAll, 0);
+              refetchAll();
+            }
+          }}
+        >
+          Escribir PO
+        </button>
+      </div>
+    </div>
+  </div>
+)}
             Communications
           </button>
         </div>
