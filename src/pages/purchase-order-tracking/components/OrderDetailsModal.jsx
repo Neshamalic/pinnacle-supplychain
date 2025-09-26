@@ -1,7 +1,8 @@
+// src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { API_BASE, fetchJSON, postJSON, formatNumber, formatCurrency, formatDate } from "@/lib/utils";
 
-// ===== Helpers locales y robustos =====
+// ===== Helpers =====
 const str = (v) => (v == null ? "" : String(v).trim());
 const pick = (obj, keys, d = "") => {
   for (const k of keys) {
@@ -10,13 +11,11 @@ const pick = (obj, keys, d = "") => {
   }
   return d;
 };
-/** Convierte "1.234,56" -> 1234.56 | "1,234.56" -> 1234.56 | "1,14" -> 1.14 | "1.14" -> 1.14 */
 const numFromInput = (v) => {
   if (v == null || v === "") return 0;
   if (typeof v === "number" && Number.isFinite(v)) return v;
   const s = String(v).trim();
   if (s.includes(".") && s.includes(",")) {
-    // Último separador es el decimal
     if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
       return parseFloat(s.replace(/\./g, "").replace(",", "."));
     }
@@ -29,37 +28,39 @@ const numFromInput = (v) => {
 
 export default function OrderDetailsModal({ open, onClose, order }) {
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState("items"); // 'items' | 'comms'
+  const [tab, setTab] = useState("items");
+
+  // ===== NUEVO: soporte si el padre no pasa PO =====
+  const initialPO =
+    str(pick(order || {}, ["po_number", "po", "poNumber", "id"])) || ""; // lo que venga
+  const [poInput, setPoInput] = useState(initialPO);
+
+  // si hay input, lo uso como poNumber
+  const poNumber = str(poInput);
 
   // Data
-  const [poRows, setPoRows] = useState([]);           // purchase_orders (filtrada por PO)
-  const [importItems, setImportItems] = useState([]); // import_items (filtrada por PO)
-  const [comms, setComms] = useState([]);             // communications (filtrada por orders + PO)
+  const [poRows, setPoRows] = useState([]);
+  const [importItems, setImportItems] = useState([]);
+  const [comms, setComms] = useState([]);
 
-  // Edit header
   const [editOpen, setEditOpen] = useState(false);
   const [costUsd, setCostUsd] = useState("");
   const [totalQty, setTotalQty] = useState("");
 
-  // New communication
   const [newOpen, setNewOpen] = useState(false);
   const [commType, setCommType] = useState("meeting");
   const [commSubject, setCommSubject] = useState("");
   const [commParticipants, setCommParticipants] = useState("");
   const [commContent, setCommContent] = useState("");
 
-  const poNumber = str(pick(order || {}, ["po_number", "po", "poNumber", "id"]));
-
-  // Header label: "OCI-171 / PO-171" (una sola vez)
+  const ociFromOrder = str(pick(order || {}, ["oci_number", "oci"]));
   const headerLabel = useMemo(() => {
-    const oci = str(pick(order || {}, ["oci_number", "oci"]));
-    if (oci && poNumber) return `${oci} / ${poNumber}`;
+    if (ociFromOrder && poNumber) return `${ociFromOrder} / ${poNumber}`;
     if (poNumber) return `PO ${poNumber}`;
-    if (oci) return `OCI ${oci}`;
+    if (ociFromOrder) return `OCI ${ociFromOrder}`;
     return "Order Details";
-  }, [order, poNumber]);
+  }, [ociFromOrder, poNumber]);
 
-  // Carga
   async function refetchAll() {
     if (!poNumber) return;
     setLoading(true);
@@ -85,10 +86,10 @@ export default function OrderDetailsModal({ open, onClose, order }) {
 
   useEffect(() => {
     if (!open) return;
-    refetchAll();
+    // si el padre no pasó PO, no disparo hasta que el usuario lo ingrese
+    if (poNumber) refetchAll();
   }, [open, poNumber]);
 
-  // Items agregados por código (ordered/imported/remaining)
   const items = useMemo(() => {
     const byCode = new Map();
     for (const r of poRows) {
@@ -116,7 +117,6 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     }));
   }, [poRows, importItems]);
 
-  // Guardar header (cost_usd, total_qty)
   async function handleSaveHeader() {
     try {
       const payload = {
@@ -135,7 +135,6 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     }
   }
 
-  // Crear communication
   async function handleCreateComm() {
     try {
       const body = {
@@ -179,20 +178,41 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           </button>
         </div>
 
+        {/* ===== NUEVO: si no hay PO, pedirlo aquí ===== */}
+        {!poNumber && (
+          <div className="px-6 py-4">
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+              <div className="mb-2 text-sm text-amber-900">
+                No recibí el <b>PO Number</b> desde la tabla. Escríbelo para cargar los datos:
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  className="w-full rounded-lg border px-3 py-2"
+                  placeholder="Ej: PO-171"
+                  value={poInput}
+                  onChange={(e) => setPoInput(e.target.value)}
+                />
+                <button
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
+                  onClick={() => poInput && refetchAll()}
+                >
+                  Cargar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex items-center gap-4 px-6 pt-4">
           <button
-            className={`pb-2 text-sm ${
-              tab === "items" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"
-            }`}
+            className={`pb-2 text-sm ${tab === "items" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"}`}
             onClick={() => setTab("items")}
           >
             Items
           </button>
           <button
-            className={`pb-2 text-sm ${
-              tab === "comms" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"
-            }`}
+            className={`pb-2 text-sm ${tab === "comms" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"}`}
             onClick={() => setTab("comms")}
           >
             Communications
@@ -205,7 +225,6 @@ export default function OrderDetailsModal({ open, onClose, order }) {
             <div className="p-6 text-slate-500">Cargando…</div>
           ) : tab === "items" ? (
             <>
-              {/* Summary + botón editar header */}
               <div className="mb-4 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-3">
                 <div>
                   <div className="text-xs text-slate-500">Products</div>
@@ -226,13 +245,13 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                       setTotalQty(str(pick(row0, ["total_qty", "qty_total"], "")));
                       setEditOpen(true);
                     }}
+                    disabled={!poNumber}
                   >
                     Edit header (costs)
                   </button>
                 </div>
               </div>
 
-              {/* Tabla items */}
               <div className="rounded-xl border border-slate-200 bg-white">
                 <div className="grid grid-cols-5 gap-2 border-b px-4 py-2 text-xs text-slate-500">
                   <div>Code</div>
@@ -258,7 +277,6 @@ export default function OrderDetailsModal({ open, onClose, order }) {
             </>
           ) : (
             <>
-              {/* Header Communications */}
               <div className="mb-3 flex items-center justify-between">
                 <div className="text-sm text-slate-600">
                   Linked to: <span className="font-medium">orders</span> /{" "}
@@ -267,12 +285,12 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                 <button
                   className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
                   onClick={() => setNewOpen(true)}
+                  disabled={!poNumber}
                 >
                   + Add
                 </button>
               </div>
 
-              {/* Listado Communications simple */}
               <div className="space-y-3">
                 {comms.length === 0 ? (
                   <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
@@ -304,7 +322,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
         </div>
       </div>
 
-      {/* Modal editar header */}
+      {/* Edit header */}
       {editOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
@@ -344,7 +362,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
         </div>
       )}
 
-      {/* Modal +Add Communication simple */}
+      {/* New Communication */}
       {newOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-xl bg-white p-4 shadow-xl">
@@ -400,6 +418,7 @@ export default function OrderDetailsModal({ open, onClose, order }) {
               <button
                 className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
                 onClick={handleCreateComm}
+                disabled={!poNumber}
               >
                 Save
               </button>
