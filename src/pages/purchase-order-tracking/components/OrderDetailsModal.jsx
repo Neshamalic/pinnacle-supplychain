@@ -1,21 +1,25 @@
-// src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
+// HOTFIX: versión sin NewCommunicationModal para que el modal abra sí o sí
 import { useEffect, useMemo, useState } from "react";
-import { API_BASE, fetchJSON, postJSON, formatNumber, formatCurrency, formatDate, badgeClass } from "@/lib/utils";
+import {
+  API_BASE,
+  fetchJSON,
+  postJSON,
+  formatNumber,
+  formatCurrency,
+  formatDate,
+  badgeClass,
+} from "@/lib/utils";
 import CommunicationList from "@/components/CommunicationList";
-// ¡OJO! Esta es la ruta correcta en tu repo:
-import NewCommunicationModal from "@/pages/communications-log/components/NewCommunicationModal.jsx"; // ← existente en tu repo (no crear archivo nuevo) :contentReference[oaicite:2]{index=2}
 
-/* ================= Helpers muy simples ================= */
+// Helpers
 const str = (v) => (v == null ? "" : String(v).trim());
 const numFromInput = (v) => {
-  // Sanitiza entradas como "1,1" o "1.234,56"
   if (v == null || v === "") return 0;
   const s = String(v).trim();
-  // Quita separadores de miles y usa punto como decimal
   if (s.includes(".") && s.includes(",")) {
-    // "1.234,56" -> "1234.56"
-    if (s.lastIndexOf(",") > s.lastIndexOf(".")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
-    // "1,234.56" -> "1234.56"
+    if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
+      return parseFloat(s.replace(/\./g, "").replace(",", "."));
+    }
     return parseFloat(s.replace(/,/g, ""));
   }
   if (s.includes(",") && !s.includes(".")) return parseFloat(s.replace(",", "."));
@@ -30,7 +34,6 @@ const pick = (obj, keys, d = "") => {
   return d;
 };
 
-/* ================= Modal principal ================= */
 export default function OrderDetailsModal({ open, onClose, order }) {
   const [tab, setTab] = useState("items"); // "items" | "communications"
   const [loading, setLoading] = useState(false);
@@ -45,13 +48,11 @@ export default function OrderDetailsModal({ open, onClose, order }) {
   const [costUsd, setCostUsd] = useState("");
   const [totalQty, setTotalQty] = useState("");
 
-  // Communications
-  const [newCommOpen, setNewCommOpen] = useState(false);
+  // 🔑 Claves
+  const poNumber = str(pick(order || {}, ["po_number", "po", "id", "poNumber"]));
+  const ociNumber = str(pick(order || {}, ["oci_number", "oci", "shipmentId", "OCI"]));
 
-  const poNumber = str(pick(order || {}, ["po_number", "po", "id"]));
-  const ociNumber = str(pick(order || {}, ["oci_number", "oci"]));
-
-  // CARGA con filtros del backend (rápido)
+  // Carga con filtros del backend
   useEffect(() => {
     if (!open || !poNumber) return;
     let alive = true;
@@ -59,15 +60,12 @@ export default function OrderDetailsModal({ open, onClose, order }) {
 
     (async () => {
       try {
-        // Pedimos ya filtrado por PO al Apps Script (tu backend lo soporta)
         const [poi, imps, impItems] = await Promise.all([
           fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(poNumber)}`),
           fetchJSON(`${API_BASE}?route=table&name=imports&po=${encodeURIComponent(poNumber)}`),
           fetchJSON(`${API_BASE}?route=table&name=import_items&po=${encodeURIComponent(poNumber)}`),
         ]);
-
         if (!alive) return;
-
         setPoItems(poi?.rows || []);
         setImports(imps?.rows || []);
         setImportItems(impItems?.rows || []);
@@ -86,26 +84,24 @@ export default function OrderDetailsModal({ open, onClose, order }) {
   // Etiqueta única “OCI-123 / PO-123”
   const headerLabel = useMemo(() => {
     const oci = ociNumber || str(pick(imports[0] || {}, ["oci_number", "oci"]));
-    const po  = poNumber;
+    const po = poNumber;
     if (oci && po) return `${oci} / ${po}`;
     if (po) return `PO ${po}`;
     if (oci) return `OCI ${oci}`;
     return "Order Details";
   }, [ociNumber, poNumber, imports]);
 
-  // Agregados para items (por código)
+  // Agregados por código
   const items = useMemo(() => {
     const byCode = new Map();
-    // ordered + unitPrice desde purchase_orders (unificada)
     for (const r of poItems) {
       const code = str(pick(r, ["presentation_code", "sku", "code"]));
       if (!code) continue;
-      const ordered = Number(pick(r, ["ordered_qty", "qty", "quantity"], 0)) || 0;
+      const ordered = Number(pick(r, ["ordered_qty", "qty", "quantity", "total_qty"], 0)) || 0;
       const unitPrice = Number(pick(r, ["unit_price_usd", "unit_price", "price"], 0)) || 0;
       const prev = byCode.get(code) || { presentationCode: code, ordered: 0, unitPrice, imported: 0 };
       byCode.set(code, { ...prev, ordered: prev.ordered + ordered, unitPrice: unitPrice || prev.unitPrice });
     }
-    // importados por código
     for (const r of importItems) {
       const code = str(pick(r, ["presentation_code", "sku", "code"]));
       if (!code) continue;
@@ -119,18 +115,20 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     }));
   }, [poItems, importItems]);
 
-  // Guardar edición header (costos)
+  // Guardar header (cost_usd, total_qty) con sanitización
   async function handleSaveHeader() {
     try {
       const payload = {
-        po_number: poNumber, // clave de actualización
-        cost_usd: numFromInput(costUsd),
-        total_qty: numFromInput(totalQty),
+        row: {
+          po_number: poNumber,
+          cost_usd: numFromInput(costUsd),
+          total_qty: numFromInput(totalQty),
+        },
       };
       const res = await postJSON(`${API_BASE}?route=write&action=update&name=purchase_orders`, payload);
       if (!res?.ok && !res?.updated && !res?.upserted) throw new Error(JSON.stringify(res));
       setEditOpen(false);
-      // recargar datos rápido
+      // recargar
       const re = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(poNumber)}`);
       setPoItems(re?.rows || []);
     } catch (e) {
@@ -138,7 +136,6 @@ export default function OrderDetailsModal({ open, onClose, order }) {
     }
   }
 
-  // Datos para el header (estado import / transporte)
   const mainImport = useMemo(() => {
     if (!imports?.length) return {};
     const sorted = [...imports].sort((a, b) => {
@@ -159,6 +156,9 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           <div>
             <div className="text-xs text-slate-500">Order</div>
             <div className="text-lg font-semibold">{headerLabel}</div>
+            <div className="mt-1 text-xs text-slate-500">
+              ETA: {formatDate(pick(mainImport, ["eta", "arrival_date"]) || "") || "—"}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <span className={badgeClass("transport", pick(mainImport, ["transport_type"], ""))}>
@@ -171,22 +171,23 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                 {str(pick(mainImport, ["import_status"], "—")) || "—"}
               </span>
             </span>
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
-              ETA: {formatDate(pick(mainImport, ["eta", "arrival_date"]) || "") || "—"}
-            </span>
           </div>
         </div>
 
         {/* Tabs */}
         <div className="flex items-center gap-4 px-6 pt-4">
           <button
-            className={`pb-2 text-sm ${tab === "items" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"}`}
+            className={`pb-2 text-sm ${
+              tab === "items" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"
+            }`}
             onClick={() => setTab("items")}
           >
             Items
           </button>
           <button
-            className={`pb-2 text-sm ${tab === "communications" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"}`}
+            className={`pb-2 text-sm ${
+              tab === "communications" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500"
+            }`}
             onClick={() => setTab("communications")}
           >
             Communications
@@ -244,7 +245,6 @@ export default function OrderDetailsModal({ open, onClose, order }) {
                 <button
                   className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
                   onClick={() => {
-                    // precargar valores para editar
                     const row0 = poItems[0] || {};
                     setCostUsd(str(pick(row0, ["cost_usd", "usd", "amount_usd"], "")));
                     setTotalQty(str(pick(row0, ["total_qty", "qty_total"], "")));
@@ -258,33 +258,23 @@ export default function OrderDetailsModal({ open, onClose, order }) {
           ) : (
             // Communications
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm text-slate-600">
-                  Linked to: <span className="font-medium">orders</span> / <span className="font-mono">{poNumber || "—"}</span>
-                </div>
-                <button
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
-                  onClick={() => setNewCommOpen(true)}
-                >
-                  + Add
-                </button>
+              <div className="text-sm text-slate-600">
+                Linked to: <span className="font-medium">orders</span> /{" "}
+                <span className="font-mono">{poNumber || "—"}</span>
               </div>
 
-              <CommunicationList
-                // CommunicationList ya usa adapters/mapCommunications para mostrar "unread" y "order"
-                // Solo pasamos el filtro del backend vía props si tu componente lo soporta; si no, el
-                // propio OrderDetailsModal ya está filtrando arriba.
-                rows={null} // deja que el propio componente consulte si así está en tu repo
-                linkedType="orders"
-                linkedId={poNumber}
-              />
+              {/* OJO: sin modal de +Add en este hotfix para evitar errores de import */}
+              <CommunicationList linkedType="orders" linkedId={poNumber} />
             </div>
           )}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 border-t px-6 py-4">
-          <button className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50" onClick={onClose}>
+          <button
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+            onClick={onClose}
+          >
             Close
           </button>
         </div>
@@ -319,25 +309,15 @@ export default function OrderDetailsModal({ open, onClose, order }) {
               <button className="rounded-lg border px-3 py-2 text-sm" onClick={() => setEditOpen(false)}>
                 Cancel
               </button>
-              <button className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700" onClick={handleSaveHeader}>
+              <button
+                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
+                onClick={handleSaveHeader}
+              >
                 Save
               </button>
             </div>
           </div>
         </div>
-      )}
-
-      {/* Modal nuevo mensaje */}
-      {newCommOpen && (
-        <NewCommunicationModal
-          open={newCommOpen}
-          onClose={() => setNewCommOpen(false)}
-          defaultValues={{
-            linked_type: "orders",
-            linked_id: poNumber,
-            unread: true,
-          }}
-        />
       )}
     </div>
   );
