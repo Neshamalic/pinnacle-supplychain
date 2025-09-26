@@ -1,258 +1,149 @@
 // src/lib/adapters.js
-
-/** ===================== Utils ===================== */
-const str = (v) => (v == null ? "" : String(v).trim());
-
-// src/lib/adapters.js  (reemplaza SOLO esta función)
-const toNumber = (v) => {
-  if (v == null || v === "") return 0;
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-
-  const s = String(v).trim();
-
-  // Caso 1: tiene punto y coma → elegimos el separador decimal correcto
-  if (s.includes(".") && s.includes(",")) {
-    // Si la coma está al final tipo "1.234,56" → coma decimal
-    if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
-      return parseFloat(s.replace(/\./g, "").replace(",", "."));
-    }
-    // Si el punto está al final tipo "1,234.56" → punto decimal
-    return parseFloat(s.replace(/,/g, ""));
-  }
-
-  // Caso 2: solo coma → coma decimal
-  if (s.includes(",") && !s.includes(".")) {
-    return parseFloat(s.replace(",", "."));
-  }
-
-  // Caso 3: solo punto → PUNTO decimal (no tocar)
-  // Caso 4: sin separadores → número simple
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
+// ============================================================
+// Helpers seguros (strings, números, fechas y "pick" de claves)
+// ============================================================
+const S = (v) => (v ?? "").toString().trim();
+const N = (v, fallback = 0) => {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : fallback;
 };
-
-
-const toDateISO = (v) => {
-  if (!v) return "";
-  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString();
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
-};
-
-/** pick(row, ["colA","colB"]) -> primer valor existente */
-const pick = (row, keys) => {
+const pick = (row, keys = []) => {
   for (const k of keys) {
-    if (Object.prototype.hasOwnProperty.call(row, k)) return row[k];
+    if (row?.[k] != null && row[k] !== "") return row[k];
   }
   return undefined;
 };
-
-/** ===================== TENDERS ===================== */
-export const mapTenders = (row = {}) => {
-  const tenderId = str(pick(row, ["tender_id", "tender_number", "id", "tender"]));
-  return {
-    id: tenderId || str(row.id || ""),
-    tenderId,
-    title: str(pick(row, ["title", "tender_title", "name", "description"]) || ""),
-    status: str(pick(row, ["status", "tender_status"]) || "").toLowerCase(),
-    buyer: str(pick(row, ["buyer", "organization", "org", "customer"]) || ""),
-    deliveryDate: toDateISO(pick(row, ["delivery_date", "delivery", "eta", "due_date"])),
-    // Métricas opcionales (si no vienen, las calculamos con tender_items)
-    productsCount: toNumber(pick(row, ["products_count", "items_count", "n_items"])),
-    totalValue: toNumber(pick(row, ["total_value", "total_usd"])),
-    stockCoverage: toNumber(pick(row, ["stock_coverage", "coverage"])),
-    _raw: row,
-  };
+const toISO = (v) => {
+  try {
+    if (!v) return "";
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? "" : d.toISOString();
+  } catch { return ""; }
+};
+const toBool = (v) => {
+  if (typeof v === "boolean") return v;
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "y";
 };
 
-/** ================ TENDER ITEMS ===================== */
-export const mapTenderItems = (row = {}) => {
-  const tenderId = str(pick(row, ["tender_number", "tender_id", "tender"]));
-  const qty = toNumber(pick(row, ["awarded_qty", "awarded_quantity", "qty", "quantity"]));
-  const price = toNumber(pick(row, ["unit_price", "price"]));
-  const currency = str(pick(row, ["currency", "curr"]) || "USD").toUpperCase();
-
-  const sc = pick(row, [
-    "stock_coverage_days",
-    "stock_coverage",
-    "coverage_days",
-    "days_coverage",
-    "coverage",
-  ]);
-  const stockCoverageDays = sc === undefined ? undefined : toNumber(sc);
-
-  const contractStart = pick(row, ["contract_start", "contractStart", "start_date"]);
-  const contractEnd = pick(row, ["contract_end", "contractEnd", "end_date"]);
-
+// ============================================================
+// PURCHASE ORDERS  (hoja: purchase_orders)
+// ============================================================
+export function mapPurchaseOrders(r = {}) {
   return {
-    tenderId,
-    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
-    awardedQty: qty,
-    unitPrice: price,
-    currency,
-    stockCoverageDays,
-    contractStart,
-    contractEnd,
-    lineTotal: qty * price,
-    _raw: row,
+    id: r.id ?? S(r.po_number ?? r.poNumber),
+    poNumber: S(r.po_number ?? r.poNumber),
+    presentationCode: S(r.presentation_code ?? r.presentationCode ?? r.code),
+    productName: S(r.product_name ?? r.product),
+    quantity: N(r.quantity ?? r.qty ?? r.units),
+    unitPriceUsd: N(r.unit_price_usd ?? r.unitPriceUsd),
+    totalUsd: N(r.total_usd ?? r.totalUsd ?? (N(r.unit_price_usd) * N(r.quantity))),
+    ociNumber: S(r.oci_number ?? r.oci),
+    status: S(r.status).toLowerCase(),
+    createdDate: toISO(r.created_date ?? r.created),
+    _raw: r,
   };
-};
+}
 
-/** ===== PRODUCT PRESENTATION MASTER (enrichment) ===== */
-export const mapPresentationMaster = (row = {}) => {
+// ============================================================
+// PURCHASE ORDER ITEMS (alias, por compatibilidad de vistas)
+// Si alguna vista pide "items", mapeamos igual desde purchase_orders
+// ============================================================
+export function mapPurchaseOrderItems(r = {}) {
   return {
-    presentationCode: str(
-      pick(row, ["presentation_code", "presentationCode", "presentation", "sku", "code"]) || ""
-    ),
-    productName: str(pick(row, ["product_name", "productName", "name"]) || ""),
-    packageUnits:
-      toNumber(pick(row, ["package_units", "packageUnits", "units_per_package", "units"])) || 1,
-    _raw: row,
+    id: r.id ?? `${S(r.po_number ?? r.poNumber)}-${S(r.presentation_code ?? r.presentationCode)}`,
+    poNumber: S(r.po_number ?? r.poNumber),
+    presentationCode: S(r.presentation_code ?? r.presentationCode),
+    quantity: N(r.quantity ?? r.qty ?? r.units),
+    unitPriceUsd: N(r.unit_price_usd ?? r.unitPriceUsd),
+    totalUsd: N(r.total_usd ?? r.totalUsd),
+    _raw: r,
   };
-};
+}
 
-/** ================ PURCHASE ORDERS ================== */
-export const mapPurchaseOrders = (row = {}) => {
-  const poNumber = str(pick(row, ["po_number", "po", "id", "poNumber"]));
+// ============================================================
+// TENDERS  (si usas licitaciones)
+// ============================================================
+export function mapTenders(r = {}) {
   return {
-    id: str(pick(row, ["id", "po_id"]) || poNumber),
-    poNumber,
-    tenderRef: str(pick(row, ["tender_ref", "tender_id", "tender_number", "tenderRef"]) || ""),
-    manufacturingStatus: str(
-      pick(row, ["manufacturing_status", "mfg_status", "manufacturing"]) || ""
-    ).toLowerCase(),
-    qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
-    transportType: str(pick(row, ["transport_type", "transport", "shipping"]) || "").toLowerCase(),
-    eta: toDateISO(pick(row, ["eta", "arrival_date", "delivery_date"])),
-    costUsd: toNumber(pick(row, ["cost_usd", "usd", "amount_usd"])),
-    costClp: toNumber(pick(row, ["cost_clp", "clp", "amount_clp"])),
-    createdDate: toDateISO(pick(row, ["created_date", "created", "date_created"])),
-    _raw: row,
+    id: r.tender_id ?? r.tender_number ?? S(r.id ?? r.tender),
+    tenderNumber: S(r.tender_number ?? r.tenderNumber),
+    title: S(r.title),
+    status: S(r.status).toLowerCase(),
+    deliveryDate: r.delivery_date ?? r.deliveryDate ?? "",
+    _raw: r,
   };
-};
+}
 
-/** ============ PURCHASE ORDER ITEMS (líneas) ========== */
-export const mapPurchaseOrderItems = (row = {}) => {
-  const ordered = toNumber(pick(row, ["ordered_qty", "qty", "quantity"]));
-  const price = toNumber(pick(row, ["unit_price", "price", "unit_price_usd"]));
+// ============================================================
+// IMPORTS  (hojas: imports, import_items)
+// ============================================================
+export function mapImports(r = {}) {
   return {
-    poNumber: str(pick(row, ["po_number", "po", "poNumber"]) || ""),
-    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
-    qty: ordered,
-    unitPrice: price,
-    itemManufacturingStatus: str(
-      pick(row, ["manufacturing_status", "mfg_status", "status"]) || ""
-    ).toLowerCase(),
-    lineTotal: ordered * price,
-    _raw: row,
+    id: r.id ?? S(r.oci_number ?? r.oci ?? r.shipment_id),
+    ociNumber: S(r.oci_number ?? r.oci ?? r.shipment_id),
+    transportType: S(r.transport_type ?? r.transport ?? r.mode).toLowerCase(),
+    eta: toISO(r.eta ?? r.arrival_date ?? r.arrival),
+    status: S(r.status ?? r.import_status ?? r.customs_status).toLowerCase(),
+    totalCostClp: N(r.total_cost_clp ?? r.cost_clp ?? r.amount_clp),
+    totalCostUsd: N(r.total_cost_usd ?? r.cost_usd ?? r.amount_usd),
+    createdDate: toISO(r.created_date ?? r.created),
+    _raw: r,
   };
-};
+}
 
-/** ===================== IMPORTS ====================== */
-export const mapImports = (row = {}) => {
-  const shipmentId = str(pick(row, ["shipment_id", "shipment", "shipmentId", "id"]) || "");
-  const oci = str(pick(row, ["oci_number", "oci"]) || "");
-  const po = str(pick(row, ["po_number", "po"]) || "");
+export const mapImportItems = (r = {}) => ({
+  shipmentId: S(pick(r, ["shipment_id", "shipment"])),
+  ociNumber: S(pick(r, ["oci_number", "oci"]) ?? ""),
+  poNumber: S(pick(r, ["po_number", "po"]) ?? ""),
+  productCode: S(pick(r, ["product_code", "presentation_code", "sku", "code"]) ?? ""),
+  lotNumber: S(pick(r, ["lot_number", "lot"]) ?? ""),
+  qty: N(pick(r, ["qty", "quantity", "units"])),
+  unitPrice: N(pick(r, ["unit_price", "price"])),
+  currency: S(pick(r, ["currency", "curr"]) ?? "CLP").toUpperCase(),
+  qcStatus: S(pick(r, ["qc_status", "quality_status", "qc"]) ?? "").toLowerCase(),
+  _raw: r,
+});
 
-  let importStatus = str(pick(row, ["import_status", "status", "customs_status"]) || "").toLowerCase();
-  if (importStatus === "in customs" || importStatus === "customs") importStatus = "transit";
-  if (importStatus === "cleared" || importStatus === "arrived") importStatus = "warehouse";
+// ============================================================
+// DEMAND  (hoja: demand)
+// ============================================================
+export const mapDemand = (r = {}) => ({
+  monthOfSupply: S(pick(r, ["month_of_supply", "month"]) ?? ""),
+  presentationCode: S(pick(r, ["presentation_code", "sku", "code"]) ?? ""),
+  productName: S(r.product ?? r.product_name ?? r.name),
+  packageSize: N(r.package_size, null),
+  monthlyDemandUnits: N(r.monthly_demand_units ?? r.demand_units, 0),
+  forecastUnits: N(r.forecast_units ?? r.forecast, 0),
+  currentStockUnits: N(r.current_stock_units ?? r.stock_units, 0),
+  daysSupply: N(r.days_supply ?? r.coverage_days ?? r.stock_coverage_days, null),
+  suggestedOrder: N(r.suggested_order ?? r.order, 0),
+  status: S(r.status).toLowerCase(),
+  createdDate: toISO(r.created_date ?? r.created),
+  _raw: r,
+});
 
+// ============================================================
+// COMMUNICATIONS  (hoja: communications)
+// ============================================================
+export const mapCommunications = (r = {}) => {
+  const preview = S(r.preview) || S(r.content).slice(0, 160);
   return {
-    id: shipmentId || oci || po || str(row.id || ""),
-    shipmentId,
-    ociNumber: oci,
-    poNumber: po,
-    transportType: str(pick(row, ["transport_type", "transport", "mode"]) || "").toLowerCase(),
-    eta: toDateISO(pick(row, ["eta", "arrival_date", "arrival"])),
-    importStatus,
-    qcStatus: str(pick(row, ["qc_status", "quality_status", "qc"]) || "").toLowerCase(),
-    customsStatus: str(pick(row, ["customs_status", "customs", "in_customs"]) || "").toLowerCase(),
-    location: str(pick(row, ["location", "warehouse", "site", "port"]) || ""),
-    totalCostUsd: toNumber(pick(row, ["cif_cost_usd", "total_cost_usd", "cost_usd"])),
-    totalCostClp: toNumber(pick(row, ["total_cost_clp", "cost_clp", "amount_clp"])),
-    _raw: row,
-  };
-};
-
-/** ================== IMPORT ITEMS ==================== */
-export const mapImportItems = (row = {}) => {
-  const shipmentId = str(pick(row, ["shipment_id", "shipmentId", "shipment", "ShipmentId"]) || "");
-
-  const normalized = {
-    shipmentId,
-    poNumber: str(pick(row, ["po_number", "po", "PO", "poNumber"]) || ""),
-    ociNumber: str(pick(row, ["oci_number", "oci", "OCI"]) || ""),
-    presentationCode: str(pick(row, ["presentation_code", "product_code", "sku", "code"]) || ""),
-    productName: str(pick(row, ["product_name", "name", "presentation_name"]) || ""),
-    packageUnits: toNumber(pick(row, ["package_units", "units_per_pack"])),
-    lotNumber: str(pick(row, ["lot_number", "lot"]) || ""),
-    qty: toNumber(pick(row, ["qty", "quantity"])),
-    unitPrice: toNumber(pick(row, ["unit_price_usd", "unit_price", "price", "unitPrice"])),
-    currency: str(pick(row, ["currency", "curr"]) || "USD").toUpperCase(),
-    qcStatus: str(pick(row, ["qc_status", "qcStatus", "quality_status", "qc"]) || "").toLowerCase(),
-    expiryDate: toDateISO(pick(row, ["expiry_date", "expiry", "exp_date"])),
-    _raw: row,
-  };
-
-  return {
-    ...normalized,
-    unit_price_usd: normalized.unitPrice,
-    unit_price: normalized.unitPrice,
-    lot_number: normalized.lotNumber,
-    presentation_code: normalized.presentationCode,
-  };
-};
-
-/** ====================== DEMAND ====================== */
-export const mapDemand = (row = {}) => {
-  return {
-    monthOfSupply: str(pick(row, ["month_of_supply", "month"]) || ""),
-    presentationCode: str(pick(row, ["presentation_code", "sku", "code"]) || ""),
-    forecastUnits: toNumber(pick(row, ["forecast_units", "forecast", "units"])),
-    historicalUnits: toNumber(pick(row, ["historical_units", "history_units", "hist_units"])),
-    currentStockUnits: toNumber(
-      pick(row, ["current_stock_units", "currentStockUnits", "stock_units"])
-    ),
-    monthlyDemandUnits: toNumber(
-      pick(row, ["monthly_demand_units", "monthlyDemandUnits", "demand_units"])
-    ),
-    packageSize: toNumber(pick(row, ["package_size", "packageSize", "pkg_size"])),
-    suggestedOrder: toNumber(pick(row, ["suggested_order", "suggestedOrder", "order"])),
-    status: str(pick(row, ["status"])) || "",
-    daysSupply: toNumber(pick(row, ["days_supply", "daysSupply"]) || null),
-    _raw: row,
-  };
-};
-
-/** ================== COMMUNICATIONS ================= */
-export const mapCommunications = (row = {}) => {
-  const content = str(pick(row, ["content", "body", "text"]) || "");
-  const previewExisting = str(pick(row, ["preview", "snippet"]) || "");
-  const preview = previewExisting || content.slice(0, 160);
-
-  // linked_type esperado: "orders" | "imports" | "tender"
-  const linkedType = str(pick(row, ["linked_type", "entity_type", "link_type"]) || "").toLowerCase();
-
-  const unreadRaw   = pick(row, ["unread", "is_unread"]);
-  const deletedRaw  = pick(row, ["deleted", "is_deleted", "removed"]);
-
-  return {
-    id: str(pick(row, ["id", "comm_id"]) || ""),
-    createdDate: toDateISO(pick(row, ["created_date", "date", "created"])),
-    type: str(pick(row, ["type", "channel"]) || "").toLowerCase(), // meeting | mail | call | whatsapp | other
-    subject: str(pick(row, ["subject", "title"]) || ""),
-    participants: str(pick(row, ["participants", "from_to", "people"]) || ""), // "Name1@... Name2@..."
-    content,
+    id: S(pick(r, ["id", "comm_id"])) || `${S(r.linked_type)}-${S(r.linked_id)}-${S(r.created_date)}`,
+    createdDate: toISO(pick(r, ["created_date", "date", "created"])),
+    type: S(pick(r, ["type", "channel"])).toLowerCase(), // email/phone/whatsapp/etc
+    subject: S(r.subject),
+    participants: S(r.participants ?? r.from_to ?? r.people),
+    content: S(r.content),
     preview,
-    linked_type: linkedType,
-    linked_id: str(pick(row, ["linked_id", "entity_id", "link_id"]) || ""),
-    unread: String(unreadRaw).toLowerCase() === "true",
-    deleted: String(deletedRaw).toLowerCase() === "true",
-    _raw: row,
+    linked_type: S(pick(r, ["linked_type", "entity_type", "link_type"])).toLowerCase(),
+    linked_id: S(pick(r, ["linked_id", "entity_id", "link_id"])),
+    unread: toBool(pick(r, ["unread", "is_unread"])),
+    deleted: toBool(pick(r, ["deleted", "is_deleted", "archived"])),
+    _raw: r,
   };
 };
 
-/** ================ Export utils ====================== */
-export const _utils = { str, toNumber, toDateISO, pick };
+// Export utilidades para pruebas o usos avanzados
+export const _utils = { S, N, pick, toISO, toBool };
 
