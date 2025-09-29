@@ -3,17 +3,14 @@ import React, { useEffect, useMemo, useState } from "react";
 /**
  * DemandPlanningTable (JS)
  *
- * Reglas y orígenes:
  * - Stock desde "demand" (current_stock_units por presentation_code).
  * - Demand (mensual) desde "tender_items": awarded_qty / meses calendario inclusivos
- *   (si no hay tender_items, usa fallback demand.monthlydemandunits si viene en "demand").
+ *   (si no hay tender_items, usa fallback demand.monthlydemandunits).
  * - Status: <2 Critical | 2..4 Urgent | >4..6 Normal | >6 Optimal
- * - Transit: une "imports" (import_status, eta) + "import_items" (oci_number, presentation_code, qty),
- *   acepta "Transit", "In transit", "En tránsito", etc. (case/acentos-insensible) y
- *   si una OCI aparece varias veces en imports, se considera tránsito si **cualquiera** lo es.
- * - Product: muestra "CÓDIGO — NOMBRE (xPACK)".
- *
- * Backend: usa "/api/gas-proxy" (o VITE_SHEETS_API_URL).
+ * - Transit: usa SOLO filas de "imports" con import_status = tránsito (case/acentos-insensible).
+ *   Para esas OCIs, lista qty desde "import_items" y ETA desde "imports" (mínima fecha).
+ * - Product: "CÓDIGO — NOMBRE (xPACK)". Normalizo códigos para empatar catálogo aunque
+ *   en demand aparezcan con ceros extra (p.ej. PC000630 -> PC00063).
  */
 
 const BASE_URL = (import.meta?.env?.VITE_SHEETS_API_URL) || "/api/gas-proxy";
@@ -54,7 +51,7 @@ function monthsCalendarInclusive(first, last) {
   const total = y * 12 + m + 1;
   return Math.max(1, total);
 }
-// Suma "meses" como fracción para estimar fecha de quiebre (≈30.437 días/mes)
+// Suma "meses" como fracción para estimar fecha OOS (≈30.437 días/mes)
 function addMonthsApprox(base, monthsFloat) {
   const DAYS_PER_MONTH = 30.437;
   const ms = monthsFloat * DAYS_PER_MONTH * 24 * 60 * 60 * 1000;
@@ -79,14 +76,12 @@ async function readTable(name) {
   try { data = JSON.parse(text); }
   catch { console.warn(`[readTable] ${name}: respuesta no JSON`, text.slice(0, 120)); return []; }
 
-  // Tu backend: { ok:true, sheet:"...", rows:[...] }
+  // backend: { ok:true, sheet:"...", rows:[...] }
   if (data && typeof data === "object" && Array.isArray(data.rows)) return data.rows;
 
-  // Otros formatos comunes
   for (const k of ["values", "data", "records", "items"]) {
     if (data && typeof data === "object" && Array.isArray(data[k])) return data[k];
   }
-
   if (data && data.ok === false) throw new Error(String(data.error || `ok:false para ${name}`));
 
   console.warn(`[readTable] ${name}: formato desconocido`, Object.keys(data || {}));
@@ -111,9 +106,9 @@ async function writeTable(name, action, payload) {
 }
 
 /* ========================= Normalización de códigos ========================= */
-/** Intenta normalizar un código para que haga match con el catálogo.
- *  - Si existe exacto en el catálogo, lo usa.
- *  - Si no, prueba quitando ceros finales (ej: PC000630 -> PC00063) hasta hacer match.
+/** Normaliza un código para empatar con el catálogo:
+ *  - Si existe exacto en catálogo, lo usa.
+ *  - Si no, elimina ceros al final (PC000630 -> PC00063) hasta encontrar match.
  *  - Si no encuentra, retorna el original.
  */
 function normalizeToCatalog(code, catByCode) {
@@ -129,7 +124,6 @@ function normalizeToCatalog(code, catByCode) {
 
 /* ========================= Reglas de negocio ========================= */
 function coverageStatus(months) {
-  // <2 ⇒ Critical, 2..4 ⇒ Urgent, >4..6 ⇒ Normal, >6 ⇒ Optimal
   if (!isFinite(months) || months <= 0) return "Critical";
   if (months < 2) return "Critical";
   if (months <= 4) return "Urgent";
@@ -138,7 +132,7 @@ function coverageStatus(months) {
 }
 
 function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importItems }) {
-  // 1) Catálogo por código (tal cual vienen los códigos en la hoja)
+  // 1) Catálogo por código
   const catByCode = new Map();
   for (const c of (Array.isArray(catalog) ? catalog : [])) {
     const code = String(pick(c, ["presentation_code","presentationCode","code"]) || "").trim();
@@ -149,10 +143,10 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     });
   }
 
-  // 2) Stock y fallback de demanda mensual desde 'demand' (normalizando código contra catálogo)
-  const stockByCode = new Map();                    // código-normalizado => stock
-  const displayCodeByCode = new Map();              // código-normalizado => código a mostrar (raw de demand)
-  const demandMonthlyFallbackByCode = new Map();    // código-normalizado => monthly demand fallback
+  // 2) Stock + fallback demanda mensual desde 'demand' (normalizando contra catálogo)
+  const stockByCode = new Map();                 // código-normalizado => stock
+  const displayCodeByCode = new Map();           // código-normalizado => código original de demand (para mostrar)
+  const demandMonthlyFallbackByCode = new Map(); // código-normalizado => monthly demand fallback
   for (const d of (Array.isArray(demandSheet) ? demandSheet : [])) {
     const raw = String(pick(d, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!raw) continue;
@@ -165,8 +159,8 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     if (dm > 0) demandMonthlyFallbackByCode.set(code, dm);
   }
 
-  // 3) Demanda mensual desde tender_items (normalizando código contra catálogo)
-  const monthlyDemandByCode = new Map(); // código-normalizado => monthly demand calculada
+  // 3) Demanda mensual desde tender_items (normalizando)
+  const monthlyDemandByCode = new Map();
   for (const ti of (Array.isArray(tenderItems) ? tenderItems : [])) {
     const raw = String(pick(ti, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!raw) continue;
@@ -179,44 +173,44 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     monthlyDemandByCode.set(code, (monthlyDemandByCode.get(code) || 0) + monthly);
   }
 
-  // 4) Imports: agrupar por OCI; si alguna fila es "transit", se marca transit; ETA = mínima fecha vista
-  const headerByOCI = new Map(); // OCI => { isTransit, eta }
+  // 4) IMPORTS: considerar SOLO filas en tránsito; agrupar por OCI y tomar ETA mínima de esas filas
+  const transitHeaderByOCI = new Map(); // OCI => { eta }
   for (const h of (Array.isArray(importHeaders) ? importHeaders : [])) {
     const oci = String(pick(h, ["oci_number","ociNumber","oci"]) || "").trim();
     if (!oci) continue;
     const statusRaw = pick(h, ["import_status","importStatus","status"]) || "";
+    if (!isTransitStatus(statusRaw)) continue; // <- SOLO filas tránsito
     const etaRaw = pick(h, ["eta","arrival_date","arrivalDate","eta_date","ETD"]);
     const eta = parseDateISO(etaRaw);
 
-    const prev = headerByOCI.get(oci) || { isTransit: false, eta: undefined };
-    const nextIsTransit = prev.isTransit || isTransitStatus(statusRaw);
-    let nextEta = prev.eta;
-    if (eta && (!nextEta || eta.getTime() < nextEta.getTime())) nextEta = eta;
-
-    headerByOCI.set(oci, { isTransit: nextIsTransit, eta: nextEta });
+    const prev = transitHeaderByOCI.get(oci);
+    if (!prev || (eta && (!prev.eta || eta.getTime() < prev.eta.getTime()))) {
+      transitHeaderByOCI.set(oci, { eta: eta || prev?.eta });
+    }
   }
 
-  // 5) Import items: sumar por código-normalizado (solo si su OCI está en tránsito)
+  // 5) IMPORT_ITEMS: sumar por código-normalizado SOLO si su OCI está en tránsito
   const transitByCode = new Map(); // código-normalizado => [{ oci, qty, eta }, ...]
   for (const ii of (Array.isArray(importItems) ? importItems : [])) {
     const oci = String(pick(ii, ["oci_number","ociNumber","oci"]) || "").trim();
-    const head = headerByOCI.get(oci);
-    if (!head || !head.isTransit) continue;
+    const head = transitHeaderByOCI.get(oci);
+    if (!head) continue; // esta OCI no está en tránsito
 
     const raw = String(pick(ii, [
-      "presentation_code","presentationCode","product_code","productCode","sku","item_code","presentation"
+      "presentation_code","presentationCode",
+      "product_code","productCode","sku","item_code","presentation"
     ]) || "").trim();
     if (!raw) continue;
     const code = normalizeToCatalog(raw, catByCode);
 
     const qty = Number(pick(ii, ["qty","quantity","units","units_qty","qty_units"]) || 0);
-    const eta = head.eta;
     const list = transitByCode.get(code) || [];
-    list.push({ oci, qty, eta });
+    list.push({ oci, qty, eta: head.eta });
     transitByCode.set(code, list);
   }
 
-  // 6) Construcción de filas
+  // 6) Construcción de filas (mantenemos el universo de productos por stock/demanda;
+  //    la columna Transit solo se llena si hay OCIs en tránsito para ese código)
   const allCodes = new Set([
     ...Array.from(stockByCode.keys()),
     ...Array.from(monthlyDemandByCode.keys()),
@@ -249,7 +243,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
 
     return {
       presentation_code: code,                                // código normalizado para joins
-      product_code: displayCodeByCode.get(code) || code,      // código a mostrar (el que venía en demand)
+      product_code: displayCodeByCode.get(code) || code,      // código visible (raw de demand)
       product_name: productName,
       package_units: packageUnits,
       currentStockUnits: stock,
@@ -257,7 +251,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
       monthSupply: months,
       status: coverageStatus(months),
       outOfStockDate,
-      transitList: trList, // [{oci, qty, eta}]
+      transitList: trList, // [{oci, qty, eta}] (vacío si no hay tránsito)
     };
   });
 
@@ -271,42 +265,12 @@ export default function DemandPlanningTable() {
   const [rows, setRows] = useState([]);
   const [viewRow, setViewRow] = useState(null);
 
-  const demo = typeof window !== "undefined" &&
-               new URLSearchParams(window.location.search).get("demo") === "1";
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setLoading(true);
         setError(null);
-
-        if (demo) {
-          const demandSheet = [
-            { presentation_code: "PC000630", current_stock_units: 533, monthlydemandunits: 400 },
-            { presentation_code: "PC000640", current_stock_units: 8445, monthlydemandunits: 1100 },
-          ];
-          const tenderItems = [];
-
-          const importHeaders = [
-            { oci_number: "OCI-171", import_status: "transit", eta: "2025-08-08T04:00:00.000Z" },
-            { oci_number: "OCI-171", import_status: "wharehouse", eta: "2025-08-08T04:00:00.000Z" },
-          ];
-          const importItems = [
-            { oci_number: "OCI-171", presentation_code: "PC00064", qty: 4144 },
-            { oci_number: "OCI-171", presentation_code: "PC00064", qty: 4309 },
-            { oci_number: "OCI-171", presentation_code: "PC00063", qty: 539  },
-          ];
-
-          const catalog = [
-            { presentation_code: "PC00063", product_name: "RIXAPIN 10 MG (RIVAROXABAN)", package_units: 60 },
-            { presentation_code: "PC00064", product_name: "RIXAPIN 10 MG (RIVAROXABAN)", package_units: 112 },
-          ];
-
-          const built = buildRows({ catalog, demandSheet, tenderItems, importHeaders, importItems });
-          if (!cancelled) setRows(built);
-          return;
-        }
 
         const [demandSheet, tenderItems, importHeaders, importItems, catalog] = await Promise.all([
           readTable("demand"),
@@ -325,7 +289,7 @@ export default function DemandPlanningTable() {
       }
     })();
     return () => { cancelled = true; };
-  }, [demo]);
+  }, []);
 
   const columns = useMemo(() => [
     { key: "product", header: "Product" },
