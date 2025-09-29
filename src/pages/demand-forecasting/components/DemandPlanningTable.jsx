@@ -3,29 +3,30 @@ import React, { useEffect, useMemo, useState } from "react";
 /**
  * DemandPlanningTable (JS)
  *
- * Reglas y orígenes (según lo que pediste):
- * - Stock desde hoja "demand" (campo current_stock_units por presentation_code).
- * - Demand (mensual) calculada desde "tender_items":
+ * Reglas y orígenes:
+ * - Stock desde hoja "demand" (current_stock_units por presentation_code).
+ * - Demand (mensual) desde "tender_items":
  *     monthly = awarded_qty / mesesCalendarioInclusivos(first_delivery_date..last_delivery_date)
  *   (si no hay tender_items para un code, usa fallback: demand.monthlydemandunits si existe).
- * - Meses calendario inclusivos: Ej: 2025-01..2025-03 => 3
+ * - Meses calendario inclusivos: Ej: 2025-01..2025-03 => 3.
  * - Status:
  *     <2           ⇒ Critical
  *     2..4 (incl.) ⇒ Urgent
  *     >4..6 (incl.)⇒ Normal
  *     >6           ⇒ Optimal
- * - Transit: lee "imports" + "import_items", case-insensitive y tolerante
- *   (acepta "Transit", "transit", "In transit", etc.) y muestra **listado detallado** por OCI con qty y ETA.
- * - Actions: "View" (modal con detalle) y "Update stock" (POST a Apps Script via proxy).
+ * - Transit: une "imports" (import_status, eta) + "import_items" (oci_number, presentation_code, qty),
+ *   y acepta "Transit", "In transit", "TRANSIT", "En tránsito", etc. (case y acentos-insensible).
+ * - Actions:
+ *     - View: modal con detalle.
+ *     - Update stock: POST via proxy a route=write&action=update&name=demand.
  *
- * Para evitar 404: por defecto usa "/api/gas-proxy" (tu serverless actual).
- * Si prefieres variable de entorno, en .env.local pon: VITE_SHEETS_API_URL=/api/gas-proxy
+ * Backend:
+ * - Por defecto usa "/api/gas-proxy". Puedes sobrescribir con VITE_SHEETS_API_URL.
  */
 
-// ========================= Config =========================
 const BASE_URL = (import.meta?.env?.VITE_SHEETS_API_URL) || "/api/gas-proxy";
 
-// ========================= Utilidades generales =========================
+/* ========================= Utils generales ========================= */
 function normKey(s) {
   return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
 }
@@ -38,14 +39,21 @@ function pick(obj, candidates) {
   }
   return undefined;
 }
+function stripAccents(s = "") {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+function isTransitStatus(s = "") {
+  const x = stripAccents(String(s)).toLowerCase();
+  // admite "transit", "in transit", "en transito", etc.
+  return x.includes("transit") || x.includes("transito");
+}
 
-// ========================= Utilidades de fecha =========================
+/* ========================= Utils de fecha ========================= */
 function parseDateISO(x) {
   if (!x) return undefined;
   const d = new Date(x);
   return isNaN(d.getTime()) ? undefined : d;
 }
-
 // Meses calendario exactos (inclusivo): 2025-01-01 a 2025-03-31 => 3 meses
 function monthsCalendarInclusive(first, last) {
   if (!first || !last) return 1;
@@ -54,14 +62,12 @@ function monthsCalendarInclusive(first, last) {
   const total = y * 12 + m + 1;
   return Math.max(1, total);
 }
-
-// Suma "meses" como fracción para estimar fecha de quiebre (aprox. 30.437 días/mes)
+// Suma "meses" como fracción para estimar fecha de quiebre (≈30.437 días/mes)
 function addMonthsApprox(base, monthsFloat) {
   const DAYS_PER_MONTH = 30.437;
   const ms = monthsFloat * DAYS_PER_MONTH * 24 * 60 * 60 * 1000;
   return new Date(base.getTime() + ms);
 }
-
 function formatDate(d) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -69,41 +75,27 @@ function formatDate(d) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// ========================= Lectura / escritura =========================
+/* ========================= IO (leer/escribir) ========================= */
 async function readTable(name) {
   const url = `${BASE_URL}?route=table&name=${encodeURIComponent(name)}`;
   const res = await fetch(url);
   const text = await res.text();
 
-  if (!res.ok) {
-    throw new Error(`Error leyendo ${name}: ${res.status}`);
-  }
+  if (!res.ok) throw new Error(`Error leyendo ${name}: ${res.status}`);
 
-  // Intenta JSON
   let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    console.warn(`[readTable] ${name}: respuesta no JSON`, text.slice(0, 120));
-    return [];
+  try { data = JSON.parse(text); }
+  catch { console.warn(`[readTable] ${name}: respuesta no JSON`, text.slice(0, 120)); return []; }
+
+  // Tu backend: { ok:true, sheet:"...", rows:[...] }
+  if (data && typeof data === "object" && Array.isArray(data.rows)) return data.rows;
+
+  // Otros formatos comunes
+  for (const k of ["values", "data", "records", "items"]) {
+    if (data && typeof data === "object" && Array.isArray(data[k])) return data[k];
   }
 
-  // Caso backend: { ok:true, sheet:"...", rows:[...] }
-  if (data && typeof data === "object" && Array.isArray(data.rows)) {
-    return data.rows;
-  }
-
-  // Otros formatos posibles
-  const candidates = ["values", "data", "records", "items"];
-  for (const k of candidates) {
-    if (data && typeof data === "object" && Array.isArray(data[k])) {
-      return data[k];
-    }
-  }
-
-  if (data && data.ok === false) {
-    throw new Error(String(data.error || `Backend devolvió ok:false para ${name}`));
-  }
+  if (data && data.ok === false) throw new Error(String(data.error || `ok:false para ${name}`));
 
   console.warn(`[readTable] ${name}: formato desconocido`, Object.keys(data || {}));
   return [];
@@ -118,7 +110,7 @@ async function writeTable(name, action, payload) {
   });
   const text = await res.text();
   let data = null;
-  try { data = JSON.parse(text); } catch { /* texto plano u HTML */ }
+  try { data = JSON.parse(text); } catch {}
   if (!res.ok || (data && data.ok === false)) {
     const err = data?.error || `Error escribiendo en ${name}: ${res.status}`;
     throw new Error(err);
@@ -126,7 +118,7 @@ async function writeTable(name, action, payload) {
   return data || { ok: true };
 }
 
-// ========================= Reglas de negocio =========================
+/* ========================= Reglas de negocio ========================= */
 function coverageStatus(months) {
   // <2 ⇒ Critical, 2..4 ⇒ Urgent, >4..6 ⇒ Normal, >6 ⇒ Optimal
   if (!isFinite(months) || months <= 0) return "Critical";
@@ -137,7 +129,7 @@ function coverageStatus(months) {
 }
 
 function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importItems }) {
-  // Catálogo por código (nombres flexibles)
+  // Catálogo por código
   const catByCode = new Map();
   for (const c of (Array.isArray(catalog) ? catalog : [])) {
     const code = String(pick(c, ["presentation_code","presentationCode","code"]) || "").trim();
@@ -148,7 +140,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     });
   }
 
-  // Stock por código desde hoja demand y fallback de demanda mensual
+  // Stock por código y fallback de demanda mensual desde 'demand'
   const stockByCode = new Map();
   const demandMonthlyFallbackByCode = new Map();
   for (const d of (Array.isArray(demandSheet) ? demandSheet : [])) {
@@ -161,7 +153,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     if (dm > 0) demandMonthlyFallbackByCode.set(code, dm);
   }
 
-  // Demanda mensual por tender_items (meses calendario exactos)
+  // Demanda mensual desde tender_items (meses calendario inclusivos)
   const monthlyDemandByCode = new Map();
   for (const ti of (Array.isArray(tenderItems) ? tenderItems : [])) {
     const code = String(pick(ti, ["presentation_code","presentationCode","code"]) || "").trim();
@@ -174,32 +166,33 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     monthlyDemandByCode.set(code, (monthlyDemandByCode.get(code) || 0) + monthly);
   }
 
-  // Encabezados de importaciones por OCI (muy tolerante con status)
+  // Encabezados de importaciones por OCI
   const headerByOCI = new Map();
   for (const h of (Array.isArray(importHeaders) ? importHeaders : [])) {
     const oci = String(pick(h, ["oci_number","ociNumber","oci"]) || "").trim();
     if (!oci) continue;
-    const statusRaw = pick(h, ["import_status","importStatus","status"]) || "";
-    const statusLc = String(statusRaw).toLowerCase();
-    const isTransit = statusLc === "transit" || statusLc.includes("transit"); // también "in transit"
     headerByOCI.set(oci, {
       oci_number: oci,
-      import_status: isTransit ? "transit" : statusRaw,
-      eta: pick(h, ["eta","arrival_date","arrivalDate"]) || undefined,
+      import_status: pick(h, ["import_status","importStatus","status"]) || "",
+      eta: pick(h, ["eta","arrival_date","arrivalDate","eta_date","ETD"]) || undefined,
     });
   }
 
-  // Tránsito detallado por código
+  // Tránsito detallado por código (status insensible a acentos/case)
   const transitByCode = new Map(); // code => [{oci, qty, eta}, ...]
   for (const ii of (Array.isArray(importItems) ? importItems : [])) {
     const oci = String(pick(ii, ["oci_number","ociNumber","oci"]) || "").trim();
     const head = headerByOCI.get(oci);
     if (!head) continue;
-    const statusLc = String(head.import_status || "").toLowerCase();
-    if (!(statusLc === "transit" || statusLc.includes("transit"))) continue;
-    const code = String(pick(ii, ["presentation_code","presentationCode","code","sku","item_code"]) || "").trim();
+    if (!isTransitStatus(head.import_status)) continue;
+
+    const code = String(pick(ii, [
+      "presentation_code","presentationCode",
+      "product_code","productCode","sku","item_code","presentation"
+    ]) || "").trim();
     if (!code) continue;
-    const qty = Number(pick(ii, ["qty","quantity","units","units_qty"]) || 0);
+
+    const qty = Number(pick(ii, ["qty","quantity","units","units_qty","qty_units"]) || 0);
     const eta = parseDateISO(head.eta);
     const list = transitByCode.get(code) || [];
     list.push({ oci, qty, eta });
@@ -216,6 +209,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
   const today = new Date();
   const rows = Array.from(allCodes).map((code) => {
     const stock = Number(stockByCode.get(code) || 0);
+
     // usa tender_items; si no hay, intenta fallback desde 'demand'
     let demandM = Number(monthlyDemandByCode.get(code) || 0);
     if (!demandM) demandM = Number(demandMonthlyFallbackByCode.get(code) || 0);
@@ -226,13 +220,17 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     const productName = cat.product_name || "";
     const packageUnits = cat.package_units || 0;
 
-    const outOfStockDate = demandM > 0 && stock > 0 ? addMonthsApprox(today, stock / demandM) : undefined;
+    const outOfStockDate = (demandM > 0 && stock > 0)
+      ? addMonthsApprox(today, stock / demandM)
+      : undefined;
 
-    const trList = (transitByCode.get(code) || []).slice().sort((a, b) => {
-      const ta = a.eta ? a.eta.getTime() : Infinity;
-      const tb = b.eta ? b.eta.getTime() : Infinity;
-      return ta - tb;
-    });
+    const trList = (transitByCode.get(code) || [])
+      .slice()
+      .sort((a, b) => {
+        const ta = a.eta ? a.eta.getTime() : Infinity;
+        const tb = b.eta ? b.eta.getTime() : Infinity;
+        return ta - tb;
+      });
 
     return {
       presentation_code: code,
@@ -251,15 +249,15 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
   return rows;
 }
 
-// ========================= Componente =========================
+/* ========================= Componente ========================= */
 export default function DemandPlanningTable() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [rows, setRows] = useState([]);
-  const [viewRow, setViewRow] = useState(null); // para modal View
+  const [viewRow, setViewRow] = useState(null);
 
-  // Vista previa sin backend (si quisieras usar datos mock): agrega ?demo=1
-  const demo = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "1";
+  const demo = typeof window !== "undefined" &&
+               new URLSearchParams(window.location.search).get("demo") === "1";
 
   useEffect(() => {
     let cancelled = false;
@@ -269,20 +267,21 @@ export default function DemandPlanningTable() {
         setError(null);
 
         if (demo) {
-          // Datos de ejemplo
           const demandSheet = [
             { presentation_code: "PC00063", current_stock_units: 533, monthlydemandunits: 400 },
             { presentation_code: "PC00064", current_stock_units: 8445, monthlydemandunits: 1100 },
           ];
-          const tenderItems = []; // deja vacío para probar fallback desde 'demand'
+          const tenderItems = [];
+
           const importHeaders = [
             { oci_number: "OCI-123", import_status: "In transit", eta: "2025-10-15" },
-            { oci_number: "OCI-124", import_status: "TRANSIT", eta: "2025-09-10" },
+            { oci_number: "OCI-124", import_status: "TRANSIT",     eta: "2025-09-10" },
           ];
           const importItems = [
             { oci_number: "OCI-123", presentation_code: "PC00063", qty: 800 },
             { oci_number: "OCI-124", presentation_code: "PC00063", qty: 200 },
           ];
+
           const catalog = [
             { presentation_code: "PC00063", product_name: "RIXAPIN 10 MG (RIVAROXABAN)", package_units: 60 },
             { presentation_code: "PC00064", product_name: "RIXAPIN 10 MG (RIVAROXABAN)", package_units: 120 },
@@ -293,7 +292,6 @@ export default function DemandPlanningTable() {
           return;
         }
 
-        // Carga real desde backend
         const [demandSheet, tenderItems, importHeaders, importItems, catalog] = await Promise.all([
           readTable("demand"),
           readTable("tender_items"),
@@ -329,24 +327,28 @@ export default function DemandPlanningTable() {
     const input = window.prompt(`Nuevo stock para ${code}:`, String(current));
     if (input == null) return;
     const value = Number(input);
-    if (!Number.isFinite(value) || value < 0) {
-      alert("Ingresa un número válido (>= 0)");
-      return;
-    }
+    if (!Number.isFinite(value) || value < 0) { alert("Ingresa un número válido (>= 0)"); return; }
+
     try {
-      // Actualiza en la hoja demand por claves (presentation_code)
       await writeTable("demand", "update", { presentation_code: code, current_stock_units: value });
-      // Refresca en memoria
-      setRows(prev => prev.map(r => r.presentation_code === code ? { ...r, currentStockUnits: value, monthSupply: (r.monthlyDemandUnits>0? value/r.monthlyDemandUnits : Infinity), status: coverageStatus(r.monthlyDemandUnits>0? value/r.monthlyDemandUnits : Infinity), outOfStockDate: (r.monthlyDemandUnits>0 && value>0)? addMonthsApprox(new Date(), value/r.monthlyDemandUnits) : undefined } : r));
+      setRows(prev => prev.map(r => {
+        if (r.presentation_code !== code) return r;
+        const monthSupply = r.monthlyDemandUnits > 0 ? value / r.monthlyDemandUnits : Infinity;
+        return {
+          ...r,
+          currentStockUnits: value,
+          monthSupply,
+          status: coverageStatus(monthSupply),
+          outOfStockDate: (r.monthlyDemandUnits > 0 && value > 0) ? addMonthsApprox(new Date(), monthSupply) : undefined,
+        };
+      }));
       alert("Stock actualizado");
     } catch (e) {
       alert(`No se pudo actualizar: ${e?.message || e}`);
     }
   }
 
-  function onView(row) {
-    setViewRow(row);
-  }
+  function onView(row) { setViewRow(row); }
 
   if (loading) return <div className="p-4">Cargando Demand Planning…</div>;
 
@@ -381,9 +383,12 @@ export default function DemandPlanningTable() {
             {rows.map((r) => (
               <tr key={r.presentation_code} className="border-t align-top">
                 <td className="px-3 py-2">
-                  <div className="font-semibold">• {r.product_code}</div>
-                  <div className="text-gray-700">{r.product_name || "—"}</div>
-                  <div className="text-gray-500">{r.package_units ? `Pack x ${r.package_units}` : ""}</div>
+                  <div className="font-semibold">
+                    {r.product_code}
+                    {(r.product_name || r.package_units) && " — "}
+                    {r.product_name || ""}
+                    {r.package_units ? ` (x${r.package_units})` : ""}
+                  </div>
                 </td>
                 <td className="px-3 py-2">{Math.round(r.currentStockUnits)}</td>
                 <td className="px-3 py-2">{r.monthlyDemandUnits ? r.monthlyDemandUnits.toFixed(2) : "0.00"}</td>
@@ -400,7 +405,7 @@ export default function DemandPlanningTable() {
                         </li>
                       ))}
                     </ul>
-                  ) : ("—")}
+                  ) : "—"}
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2">
@@ -425,7 +430,7 @@ export default function DemandPlanningTable() {
         * Meses de demanda calculados como meses calendario inclusivos entre <code>first_delivery_date</code> y <code>last_delivery_date</code>. Si faltan fechas, se asume 1 mes.
       </p>
 
-      {/* Modal simple para View */}
+      {/* Modal View */}
       {viewRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
           <div className="bg-white rounded-2xl shadow-xl p-4 w-full max-w-lg">
@@ -449,9 +454,7 @@ export default function DemandPlanningTable() {
                       <li key={i}>OCI <b>{t.oci}</b>: {t.qty || 0} u.{t.eta ? ` · ETA ${formatDate(t.eta)}` : ""}</li>
                     ))}
                   </ul>
-                ) : (
-                  <div className="mt-1">—</div>
-                )}
+                ) : <div className="mt-1">—</div>}
               </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
@@ -464,6 +467,7 @@ export default function DemandPlanningTable() {
   );
 }
 
+/* ========================= UI helpers ========================= */
 function StatusPill({ status }) {
   const base = "inline-flex items-center px-2 py-1 rounded-full text-xs font-medium";
   const colors = {
@@ -475,4 +479,3 @@ function StatusPill({ status }) {
   };
   return <span className={`${base} ${colors[status] || colors["N/A"]}`}>{status}</span>;
 }
-
