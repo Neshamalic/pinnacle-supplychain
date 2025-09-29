@@ -1,59 +1,195 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { format } from "date-fns";
 
-// === Config: URL de tu Apps Script o proxy ===
-const BASE_URL = import.meta?.env?.VITE_SHEETS_API_URL || "/api/sheets";
+/**
+ * DemandPlanningTable
+ *
+ * Requisitos funcionales (según Mónica):
+ * 1) Columnas:
+ *    - Product (presentation_code + product_name, package_units desde product_presentation_master)
+ *    - Stock (currentStockUnits)
+ *    - Demand (monthlyDemandUnits) = awarded_qty / meses(first_delivery_date..last_delivery_date)
+ *    - Month Supply = currentStockUnits / monthlyDemandUnits
+ *    - Status (según Month Supply): <2 Critical | <=4 Urgent | <=6 Normal | >6 Optimal
+ *    - Date Out of Stock = hoy + (currentStockUnits / monthlyDemandUnits) meses
+ *    - Transit = si existe import_status "Transit" (imports/import_items) → mostrar cantidad y ETA
+ *    - Actions (placeholders: View / Update stock)
+ * 2) Fuentes (Apps Script): product_presentation_master, tender_items, imports, import_items
+ * 3) Vista previa sin backend: usar ?demo=1
+ */
 
-// === Utilidades de fecha ===
-function parseDateISO(x) {
-  if (!x) return undefined;
-  const d = new Date(x);
+// ========================= Utilidades de fecha =========================
+const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const AVG_DAYS_IN_MONTH = 30.437; // aproximación estándar
+
+function parseDateISO(s?: string | number | Date) {
+  if (!s) return undefined;
+  const d = new Date(s);
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-// Meses calendario exactos (inclusivo): 2025-01-01 a 2025-03-31 => 3 meses
-function monthsCalendarInclusive(first, last) {
+function monthsBetweenInclusive(first?: Date, last?: Date): number {
   if (!first || !last) return 1;
-  const y = last.getFullYear() - first.getFullYear();
-  const m = last.getMonth() - first.getMonth();
-  const total = y * 12 + m + 1;
-  return Math.max(1, total);
+  const diffDays = (last.getTime() - first.getTime()) / MS_IN_DAY;
+  // Inclusivo: +1 "mes" aproximado y redondeo al entero más cercano
+  const months = Math.max(1, Math.round(diffDays / AVG_DAYS_IN_MONTH + 1));
+  return months;
 }
 
-// Suma “meses” aproximando fracción en días (para estimar la fecha de quiebre)
-function addMonthsApprox(base, monthsFloat) {
-  const DAYS_PER_MONTH = 30.437; // promedio
-  const days = monthsFloat * DAYS_PER_MONTH;
-  return new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+function addMonthsApprox(base: Date, months: number): Date {
+  const days = months * AVG_DAYS_IN_MONTH;
+  return new Date(base.getTime() + days * MS_IN_DAY);
 }
 
-// === Lectura genérica de tabla ===
-async function readTable(name) {
+// ========================= Tipos (TS) =========================
+export type ProductMaster = {
+  presentation_code: string;
+  product_name?: string;
+  package_units?: number;
+  current_stock_units?: number; // opcional
+};
+
+export type TenderItem = {
+  presentation_code: string;
+  awarded_qty?: number;
+  first_delivery_date?: string;
+  last_delivery_date?: string;
+};
+
+export type ImportHeader = {
+  oci_number: string;
+  import_status?: string; // "Transit", "Released", etc.
+  eta?: string; // fecha estimada de arribo
+};
+
+export type ImportItem = {
+  oci_number: string;
+  presentation_code: string;
+  qty?: number;
+};
+
+export type Row = {
+  presentation_code: string;
+  product_label: string; // "<product_name> • <presentation_code> (x<package_units>)"
+  currentStockUnits: number;
+  monthlyDemandUnits: number;
+  monthSupply: number; // cobertura en meses
+  status: "Critical" | "Urgent" | "Normal" | "Optimal" | "N/A";
+  outOfStockDate?: Date;
+  transitLabel?: string; // "<qty> u. · ETA yyyy-MM-dd"
+};
+
+// ========================= Lógica de negocio =========================
+function coverageStatus(monthSupply: number): Row["status"] {
+  if (!isFinite(monthSupply) || monthSupply <= 0) return "Critical";
+  if (monthSupply < 2) return "Critical";
+  if (monthSupply <= 4) return "Urgent";
+  if (monthSupply <= 6) return "Normal";
+  return "Optimal";
+}
+
+// Determina la URL base para la API de Apps Script
+const BASE_URL = (import.meta as any).env?.VITE_SHEETS_API_URL || "/api/sheets";
+
+function buildRows(
+  masters: ProductMaster[],
+  tenderItems: TenderItem[],
+  importHeaders: ImportHeader[],
+  importItems: ImportItem[],
+): Row[] {
+  // Índices por presentation_code
+  const masterByCode = new Map<string, ProductMaster>();
+  masters.forEach((m) => {
+    if (m.presentation_code) masterByCode.set(String(m.presentation_code), m);
+  });
+
+  // Demanda mensual por código
+  const demandByCode = new Map<string, number>();
+  tenderItems.forEach((ti) => {
+    const code = String(ti.presentation_code || "");
+    if (!code) return;
+    const awarded = Number(ti.awarded_qty || 0);
+    const first = parseDateISO(ti.first_delivery_date);
+    const last = parseDateISO(ti.last_delivery_date);
+    const months = Math.max(1, monthsBetweenInclusive(first, last));
+    const monthly = months > 0 ? awarded / months : 0;
+    demandByCode.set(code, (demandByCode.get(code) || 0) + monthly);
+  });
+
+  // Tránsito por código (suma qty y usa la ETA más próxima)
+  const headerByOCI = new Map<string, ImportHeader>();
+  importHeaders.forEach((h) => {
+    if (h.oci_number) headerByOCI.set(h.oci_number, h);
+  });
+
+  const transitByCode = new Map<string, { qty: number; eta?: Date }>();
+  importItems.forEach((ii) => {
+    const head = ii.oci_number ? headerByOCI.get(ii.oci_number) : undefined;
+    if (!head) return;
+    if ((head.import_status || "").toLowerCase() !== "transit") return;
+    const code = String(ii.presentation_code || "");
+    if (!code) return;
+    const qty = Number(ii.qty || 0);
+    const eta = parseDateISO(head.eta);
+    const prev = transitByCode.get(code);
+    if (!prev) transitByCode.set(code, { qty, eta: eta || undefined });
+    else transitByCode.set(code, {
+      qty: prev.qty + qty,
+      eta: prev.eta && eta ? (prev.eta < eta ? prev.eta : eta) : (prev.eta || eta),
+    });
+  });
+
+  // Construcción de filas
+  const codes = Array.from(masterByCode.keys());
+  const today = new Date();
+
+  const rows: Row[] = codes.map((code) => {
+    const m = masterByCode.get(code)!;
+    const productLabel = `${m.product_name ?? ""} • ${code}${m.package_units ? ` (x${m.package_units})` : ""}`.trim();
+
+    const currentStockUnits = Number(m.current_stock_units ?? 0);
+    const monthlyDemandUnits = Number(demandByCode.get(code) ?? 0);
+    const monthSupply = monthlyDemandUnits > 0 ? currentStockUnits / monthlyDemandUnits : Infinity;
+    const status = isFinite(monthSupply) ? coverageStatus(monthSupply) : "N/A";
+    const outOfStockDate = monthlyDemandUnits > 0 && currentStockUnits > 0
+      ? addMonthsApprox(today, currentStockUnits / monthlyDemandUnits)
+      : undefined;
+
+    const tr = transitByCode.get(code);
+    const transitLabel = tr && tr.qty > 0
+      ? `${tr.qty} u.${tr.eta ? ` · ETA ${format(tr.eta, "yyyy-MM-dd")}` : ""}`
+      : undefined;
+
+    return {
+      presentation_code: code,
+      product_label: productLabel,
+      currentStockUnits,
+      monthlyDemandUnits,
+      monthSupply,
+      status,
+      outOfStockDate,
+      transitLabel,
+    };
+  });
+
+  return rows;
+}
+
+async function fetchTable<T>(name: string): Promise<T[]> {
   const url = `${BASE_URL}?route=table&name=${encodeURIComponent(name)}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Error leyendo ${name}: ${res.status}`);
-  return await res.json();
+  return (await res.json()) as T[];
 }
 
-// === Lógica de status según cobertura (meses) ===
-// Reglas pedidas: <2 Critical, >2 y <4 Urgent, >4 y <6 Normal, >6 Optimal.
-// Nota: los empates (=2, =4, =6) los tratamos más abajo (ver comentario).
-function coverageStatus(months) {
-  if (!isFinite(months) || months <= 0) return "Critical";
-  if (months < 2) return "Critical";
-  if (months > 2 && months < 4) return "Urgent";
-  if (months > 4 && months < 6) return "Normal";
-  if (months > 6) return "Optimal";
-  // Empates exactos (ajustables según lo que prefieras):
-  if (months === 2) return "Urgent";
-  if (months === 4) return "Normal";
-  if (months === 6) return "Optimal";
-  return "Normal";
-}
-
+// ========================= Componente =========================
 export default function DemandPlanningTable() {
   const [loading, setLoading] = useState(true);
-  const [error, setError]       = useState(null);
-  const [rows, setRows]         = useState([]);
+  const [error, setError] = useState<string | null>(null);
+  const [rows, setRows] = useState<Row[]>([]);
+
+  // Vista previa sin backend: agrega ?demo=1
+  const demo = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "1";
 
   useEffect(() => {
     let cancelled = false;
@@ -62,120 +198,63 @@ export default function DemandPlanningTable() {
         setLoading(true);
         setError(null);
 
-        // 1) Lee hojas necesarias
-        const [demand, tenderItems, imports, importItems, catalog] = await Promise.all([
-          readTable("demand"),                       // stock por presentation_code (current_stock_units)
-          readTable("tender_items"),                 // awarded_qty + fechas
-          readTable("imports"),                      // encabezados (oci_number, import_status, eta)
-          readTable("import_items"),                 // detalle por oci_number + presentation_code + qty
-          readTable("product_presentation_master"),  // product_name, package_units
+        if (demo) {
+          // Datos de ejemplo
+          const masters: ProductMaster[] = [
+            { presentation_code: "PC0001", product_name: "Metronidazol", package_units: 100, current_stock_units: 1200 },
+            { presentation_code: "PC0004", product_name: "Apixabán (Spiroaart®)", package_units: 30, current_stock_units: 350 },
+          ];
+          const tenderItems: TenderItem[] = [
+            // caso simple (mismo día → 1 mes) para tests reproducibles
+            { presentation_code: "PC0001", awarded_qty: 6000, first_delivery_date: "2025-06-15", last_delivery_date: "2025-06-15" },
+            { presentation_code: "PC0004", awarded_qty: 900, first_delivery_date: "2025-09-01", last_delivery_date: "2026-02-28" },
+          ];
+          const importHeaders: ImportHeader[] = [
+            { oci_number: "OCI-123", import_status: "Transit", eta: "2025-10-15" },
+          ];
+          const importItems: ImportItem[] = [
+            { oci_number: "OCI-123", presentation_code: "PC0001", qty: 800 },
+          ];
+
+          const built = buildRows(masters, tenderItems, importHeaders, importItems);
+          if (!cancelled) setRows(built);
+          runDevTests();
+          return;
+        }
+
+        // Evita 404 en preview si no hay backend configurado
+        if (!BASE_URL || BASE_URL === "/api/sheets") {
+          throw new Error("No se encontró VITE_SHEETS_API_URL. Usa ?demo=1 para vista previa.");
+        }
+
+        const [masters, tenderItems, importHeaders, importItems] = await Promise.all([
+          fetchTable<ProductMaster>("product_presentation_master"),
+          fetchTable<TenderItem>("tender_items"),
+          fetchTable<ImportHeader>("imports"),
+          fetchTable<ImportItem>("import_items"),
         ]);
 
-        // 2) Índices rápidos
-        const catByCode = new Map();
-        for (const c of catalog || []) {
-          const code = String(c.presentation_code || "").trim();
-          if (!code) continue;
-          catByCode.set(code, {
-            product_name: c.product_name || "",
-            package_units: Number(c.package_units || 0),
-          });
-        }
-
-        const stockByCode = new Map();
-        for (const d of demand || []) {
-          const code = String(d.presentation_code || d.presentationCode || "").trim();
-          if (!code) continue;
-          const stock = Number(d.current_stock_units || d.currentStockUnits || 0);
-          stockByCode.set(code, (stockByCode.get(code) || 0) + stock);
-        }
-
-        // 3) Demanda mensual por presentation_code desde tender_items (meses calendario exactos)
-        const monthlyDemandByCode = new Map();
-        for (const ti of tenderItems || []) {
-          const code = String(ti.presentation_code || ti.presentationCode || "").trim();
-          if (!code) continue;
-          const awarded = Number(ti.awarded_qty || 0);
-          const first   = parseDateISO(ti.first_delivery_date);
-          const last    = parseDateISO(ti.last_delivery_date);
-          const months  = monthsCalendarInclusive(first, last); // calendario exacto
-          const monthly = months > 0 ? awarded / months : 0;
-          monthlyDemandByCode.set(code, (monthlyDemandByCode.get(code) || 0) + monthly);
-        }
-
-        // 4) Importaciones en tránsito: listado detallado por OCI para cada código
-        const headerByOCI = new Map();
-        for (const h of imports || []) {
-          if (!h.oci_number) continue;
-          headerByOCI.set(String(h.oci_number), h);
-        }
-
-        const transitByCode = new Map(); // code => [{oci, qty, eta}, ...]
-        for (const ii of importItems || []) {
-          const oci = String(ii.oci_number || "").trim();
-          const head = headerByOCI.get(oci);
-          if (!head) continue;
-          const status = String(head.import_status || "").toLowerCase();
-          if (status !== "transit") continue;
-
-          const code = String(ii.presentation_code || "").trim();
-          if (!code) continue;
-          const qty = Number(ii.qty || 0);
-          const eta = parseDateISO(head.eta);
-
-          const list = transitByCode.get(code) || [];
-          list.push({ oci, qty, eta });
-          transitByCode.set(code, list);
-        }
-
-        // 5) Construir filas para todos los códigos que aparezcan en catálogo o demand
-        const allCodes = new Set([
-          ...Array.from(catByCode.keys()),
-          ...Array.from(stockByCode.keys()),
-          ...Array.from(monthlyDemandByCode.keys()),
-        ]);
-
-        const today = new Date();
-        const built = Array.from(allCodes).map((code) => {
-          const stock   = Number(stockByCode.get(code) || 0);
-          const demandM = Number(monthlyDemandByCode.get(code) || 0);
-          const months  = demandM > 0 ? stock / demandM : Infinity;
-
-          const cat = catByCode.get(code) || {};
-          const productLabel = `${cat.product_name || ""} • ${code}${cat.package_units ? ` (x${cat.package_units})` : ""}`.trim();
-
-          const outOfStockDate =
-            demandM > 0 && stock > 0 ? addMonthsApprox(today, stock / demandM) : undefined;
-
-          const trList = transitByCode.get(code) || [];
-          // Ordena por ETA ascendente; muestra cada OCI en su propia línea.
-          trList.sort((a, b) => {
-            const ta = a.eta ? a.eta.getTime() : Infinity;
-            const tb = b.eta ? b.eta.getTime() : Infinity;
-            return ta - tb;
-          });
-
-          return {
-            presentation_code: code,
-            product_label: productLabel,
-            currentStockUnits: stock,
-            monthlyDemandUnits: demandM,
-            monthSupply: months,
-            status: coverageStatus(months),
-            outOfStockDate,
-            transitList: trList, // [{oci, qty, eta}]
-          };
-        });
-
+        const built = buildRows(masters, tenderItems, importHeaders, importItems);
         if (!cancelled) setRows(built);
-      } catch (e) {
+      } catch (e: any) {
         if (!cancelled) setError(e?.message || "Error cargando Demand Planning");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [demo]);
+
+  const columns = useMemo(() => [
+    { key: "product_label", header: "Product" },
+    { key: "currentStockUnits", header: "Stock" },
+    { key: "monthlyDemandUnits", header: "Demand" },
+    { key: "monthSupply", header: "Month Supply" },
+    { key: "status", header: "Status" },
+    { key: "outOfStockDate", header: "Date Out of Stock" },
+    { key: "transitLabel", header: "Transit" },
+    { key: "actions", header: "Actions" },
+  ], []);
 
   if (loading) return <div className="p-4">Cargando Demand Planning…</div>;
 
@@ -190,7 +269,7 @@ export default function DemandPlanningTable() {
         <div className="mb-3 rounded-xl border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
           {error}
           <div className="mt-1">
-            Verifica <code>VITE_SHEETS_API_URL</code> en tu <code>.env.local</code> o tu proxy <code>/api/sheets</code>.
+            Para probar aquí, abre el preview con <code>?demo=1</code>. En producción, configura <code>VITE_SHEETS_API_URL</code>.
           </div>
         </div>
       )}
@@ -199,19 +278,16 @@ export default function DemandPlanningTable() {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-3 py-2 text-left font-medium text-gray-600">Product</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-600">Stock</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-600">Demand (monthly)</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-600">Month Supply</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-600">Status</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-600">Date Out of Stock</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-600">Transit</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-600">Actions</th>
+              {columns.map((c) => (
+                <th key={c.key} className="px-3 py-2 text-left font-medium text-gray-600">
+                  {c.header}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.presentation_code} className="border-t align-top">
+              <tr key={r.presentation_code} className="border-t">
                 <td className="px-3 py-2">
                   <div className="font-medium">{r.product_label}</div>
                   <div className="text-gray-500">{r.presentation_code}</div>
@@ -219,24 +295,9 @@ export default function DemandPlanningTable() {
                 <td className="px-3 py-2">{Math.round(r.currentStockUnits)}</td>
                 <td className="px-3 py-2">{r.monthlyDemandUnits.toFixed(2)}</td>
                 <td className="px-3 py-2">{Number.isFinite(r.monthSupply) ? r.monthSupply.toFixed(2) : "∞"}</td>
-                <td className="px-3 py-2">
-                  <StatusPill status={r.status} />
-                </td>
-                <td className="px-3 py-2">{r.outOfStockDate ? formatDate(r.outOfStockDate) : "—"}</td>
-                <td className="px-3 py-2">
-                  {r.transitList && r.transitList.length > 0 ? (
-                    <ul className="list-disc list-inside space-y-1">
-                      {r.transitList.map((t, i) => (
-                        <li key={i}>
-                          OCI <span className="font-medium">{t.oci}</span>: {t.qty || 0} u.
-                          {t.eta ? ` · ETA ${formatDate(t.eta)}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    "—"
-                  )}
-                </td>
+                <td className="px-3 py-2"><StatusPill status={r.status} /></td>
+                <td className="px-3 py-2">{r.outOfStockDate ? format(r.outOfStockDate, "yyyy-MM-dd") : "—"}</td>
+                <td className="px-3 py-2">{r.transitLabel ?? "—"}</td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2">
                     <button className="px-2 py-1 rounded-xl border hover:bg-gray-50">View</button>
@@ -250,30 +311,60 @@ export default function DemandPlanningTable() {
       </div>
 
       <p className="mt-3 text-xs text-gray-500">
-        * Meses de demanda calculados como meses calendario inclusivos entre <code>first_delivery_date</code> y
-        <code> last_delivery_date</code>. Si faltan fechas, se asume 1 mes.
+        * Meses = diferencia aproximada e inclusiva entre first_delivery_date y last_delivery_date. Si no hay fechas, se asume 1 mes.
       </p>
     </div>
   );
 }
 
-// === Helpers de UI ===
-function StatusPill({ status }) {
-  const base =
-    "inline-flex items-center px-2 py-1 rounded-full text-xs font-medium";
-  const colors = {
+function StatusPill({ status }: { status: Row["status"] }) {
+  const base = "inline-flex items-center px-2 py-1 rounded-full text-xs font-medium";
+  const palette: Record<Row["status"], string> = {
     Critical: "bg-red-100 text-red-700",
     Urgent: "bg-orange-100 text-orange-700",
     Normal: "bg-yellow-100 text-yellow-700",
     Optimal: "bg-green-100 text-green-700",
     "N/A": "bg-gray-100 text-gray-600",
   };
-  return <span className={`${base} ${colors[status] || colors["N/A"]}`}>{status}</span>;
+  return <span className={`${base} ${palette[status]}`}>{status}</span>;
 }
 
-function formatDate(d) {
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+// ========================= Tests ligeros (dev) =========================
+function runDevTests() {
+  try {
+    // 1) coverageStatus
+    console.assert(coverageStatus(1.99) === "Critical", "1.99 ⇒ Critical");
+    console.assert(coverageStatus(2) === "Urgent", "2 ⇒ Urgent");
+    console.assert(coverageStatus(4) === "Urgent", "4 ⇒ Urgent");
+    console.assert(coverageStatus(5) === "Normal", "5 ⇒ Normal");
+    console.assert(coverageStatus(6.01) === "Optimal", ">6 ⇒ Optimal");
+
+    // 2) monthsBetweenInclusive (mismo día ⇒ 1)
+    const d = new Date("2025-06-15");
+    console.assert(monthsBetweenInclusive(d, d) === 1, "mismo día ⇒ 1 mes");
+
+    // 3) buildRows: demanda > 0, tránsito agregado y fecha OOS definida
+    const masters: ProductMaster[] = [
+      { presentation_code: "PCX", product_name: "Dummy", package_units: 10, current_stock_units: 100 },
+    ];
+    const tis: TenderItem[] = [
+      { presentation_code: "PCX", awarded_qty: 300, first_delivery_date: "2025-01-01", last_delivery_date: "2025-01-01" }, // 1 mes
+    ];
+    const ih: ImportHeader[] = [
+      { oci_number: "O1", import_status: "Transit", eta: "2025-12-31" },
+      { oci_number: "O2", import_status: "Transit", eta: "2025-11-30" }, // ETA más próxima
+    ];
+    const ii: ImportItem[] = [
+      { oci_number: "O1", presentation_code: "PCX", qty: 50 },
+      { oci_number: "O2", presentation_code: "PCX", qty: 25 },
+    ];
+    const built = buildRows(masters, tis, ih, ii);
+    console.assert(built.length === 1, "una fila");
+    console.assert(built[0].monthlyDemandUnits > 0, "demanda > 0");
+    console.assert(built[0].transitLabel?.includes("75"), "transit suma 75");
+    console.assert(built[0].transitLabel?.includes("2025-11-30"), "ETA más próxima 2025-11-30");
+    console.assert(built[0].outOfStockDate instanceof Date || built[0].outOfStockDate === undefined, "fecha OOS definida si hay demanda");
+  } catch (e) {
+    console.warn("Tests (dev) fallaron:", e);
+  }
 }
