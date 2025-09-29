@@ -7,15 +7,16 @@ import React, { useEffect, useMemo, useState } from "react";
  * - Stock desde hoja "demand" (campo current_stock_units por presentation_code).
  * - Demand (mensual) calculada desde "tender_items":
  *     monthly = awarded_qty / mesesCalendarioInclusivos(first_delivery_date..last_delivery_date)
- *   (si no hay tender_items para un code, se usa fallback: demand.monthlydemandunits si existe).
+ *   (si no hay tender_items para un code, usa fallback: demand.monthlydemandunits si existe).
  * - Meses calendario inclusivos: Ej: 2025-01..2025-03 => 3
  * - Status:
  *     <2           ⇒ Critical
  *     2..4 (incl.) ⇒ Urgent
  *     >4..6 (incl.)⇒ Normal
  *     >6           ⇒ Optimal
- * - Transit: lee "imports" + "import_items", case-insensitive ("Transit"/"transit"/etc.),
- *   y muestra listado detallado por OCI con qty y ETA ordenadas por fecha más próxima.
+ * - Transit: lee "imports" + "import_items", case-insensitive y tolerante
+ *   (acepta "Transit", "transit", "In transit", etc.) y muestra **listado detallado** por OCI con qty y ETA.
+ * - Actions: "View" (modal con detalle) y "Update stock" (POST a Apps Script via proxy).
  *
  * Para evitar 404: por defecto usa "/api/gas-proxy" (tu serverless actual).
  * Si prefieres variable de entorno, en .env.local pon: VITE_SHEETS_API_URL=/api/gas-proxy
@@ -68,7 +69,7 @@ function formatDate(d) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// ========================= Lectura de datos =========================
+// ========================= Lectura / escritura =========================
 async function readTable(name) {
   const url = `${BASE_URL}?route=table&name=${encodeURIComponent(name)}`;
   const res = await fetch(url);
@@ -87,9 +88,8 @@ async function readTable(name) {
     return [];
   }
 
-  // Caso tu backend: { ok:true, sheet:"...", rows:[...] }
+  // Caso backend: { ok:true, sheet:"...", rows:[...] }
   if (data && typeof data === "object" && Array.isArray(data.rows)) {
-    console.log(`[readTable] ${name}: ${data.rows.length} filas`);
     return data.rows;
   }
 
@@ -97,7 +97,6 @@ async function readTable(name) {
   const candidates = ["values", "data", "records", "items"];
   for (const k of candidates) {
     if (data && typeof data === "object" && Array.isArray(data[k])) {
-      console.log(`[readTable] ${name}: ${data[k].length} filas (campo ${k})`);
       return data[k];
     }
   }
@@ -108,6 +107,23 @@ async function readTable(name) {
 
   console.warn(`[readTable] ${name}: formato desconocido`, Object.keys(data || {}));
   return [];
+}
+
+async function writeTable(name, action, payload) {
+  const url = `${BASE_URL}?route=write&action=${encodeURIComponent(action)}&name=${encodeURIComponent(name)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: typeof payload === "string" ? payload : JSON.stringify(payload || {}),
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch { /* texto plano u HTML */ }
+  if (!res.ok || (data && data.ok === false)) {
+    const err = data?.error || `Error escribiendo en ${name}: ${res.status}`;
+    throw new Error(err);
+  }
+  return data || { ok: true };
 }
 
 // ========================= Reglas de negocio =========================
@@ -132,16 +148,15 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     });
   }
 
-  // Stock por código desde hoja demand
+  // Stock por código desde hoja demand y fallback de demanda mensual
   const stockByCode = new Map();
-  const demandMonthlyFallbackByCode = new Map(); // por si no hay tender_items
+  const demandMonthlyFallbackByCode = new Map();
   for (const d of (Array.isArray(demandSheet) ? demandSheet : [])) {
     const code = String(pick(d, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!code) continue;
     const stock = Number(pick(d, ["current_stock_units","currentStockUnits","stock_units","stock"]) || 0);
     stockByCode.set(code, (stockByCode.get(code) || 0) + stock);
 
-    // fallback para demanda mensual si viene del sheet 'demand'
     const dm = Number(pick(d, ["monthlydemandunits","monthly_demand_units","monthlyDemandUnits"]) || 0);
     if (dm > 0) demandMonthlyFallbackByCode.set(code, dm);
   }
@@ -159,29 +174,32 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     monthlyDemandByCode.set(code, (monthlyDemandByCode.get(code) || 0) + monthly);
   }
 
-  // Encabezados de importaciones por OCI
+  // Encabezados de importaciones por OCI (muy tolerante con status)
   const headerByOCI = new Map();
   for (const h of (Array.isArray(importHeaders) ? importHeaders : [])) {
     const oci = String(pick(h, ["oci_number","ociNumber","oci"]) || "").trim();
     if (!oci) continue;
+    const statusRaw = pick(h, ["import_status","importStatus","status"]) || "";
+    const statusLc = String(statusRaw).toLowerCase();
+    const isTransit = statusLc === "transit" || statusLc.includes("transit"); // también "in transit"
     headerByOCI.set(oci, {
       oci_number: oci,
-      import_status: pick(h, ["import_status","importStatus","status"]) || "",
+      import_status: isTransit ? "transit" : statusRaw,
       eta: pick(h, ["eta","arrival_date","arrivalDate"]) || undefined,
     });
   }
 
-  // Tránsito detallado por código (case-insensitive)
+  // Tránsito detallado por código
   const transitByCode = new Map(); // code => [{oci, qty, eta}, ...]
   for (const ii of (Array.isArray(importItems) ? importItems : [])) {
     const oci = String(pick(ii, ["oci_number","ociNumber","oci"]) || "").trim();
     const head = headerByOCI.get(oci);
     if (!head) continue;
-    const status = String(head.import_status || "").toLowerCase();
-    if (status !== "transit") continue; // acepta Transit/transit/TRANSIT
-    const code = String(pick(ii, ["presentation_code","presentationCode","code"]) || "").trim();
+    const statusLc = String(head.import_status || "").toLowerCase();
+    if (!(statusLc === "transit" || statusLc.includes("transit"))) continue;
+    const code = String(pick(ii, ["presentation_code","presentationCode","code","sku","item_code"]) || "").trim();
     if (!code) continue;
-    const qty = Number(pick(ii, ["qty","quantity"]) || 0);
+    const qty = Number(pick(ii, ["qty","quantity","units","units_qty"]) || 0);
     const eta = parseDateISO(head.eta);
     const list = transitByCode.get(code) || [];
     list.push({ oci, qty, eta });
@@ -205,7 +223,8 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     const months = demandM > 0 ? stock / demandM : Infinity;
 
     const cat = catByCode.get(code) || {};
-    const productLabel = `${cat.product_name || ""} • ${code}${cat.package_units ? ` (x${cat.package_units})` : ""}`.trim();
+    const productName = cat.product_name || "";
+    const packageUnits = cat.package_units || 0;
 
     const outOfStockDate = demandM > 0 && stock > 0 ? addMonthsApprox(today, stock / demandM) : undefined;
 
@@ -217,7 +236,9 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
 
     return {
       presentation_code: code,
-      product_label: productLabel,
+      product_code: code,
+      product_name: productName,
+      package_units: packageUnits,
       currentStockUnits: stock,
       monthlyDemandUnits: demandM,
       monthSupply: months,
@@ -235,6 +256,7 @@ export default function DemandPlanningTable() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [rows, setRows] = useState([]);
+  const [viewRow, setViewRow] = useState(null); // para modal View
 
   // Vista previa sin backend (si quisieras usar datos mock): agrega ?demo=1
   const demo = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "1";
@@ -253,8 +275,14 @@ export default function DemandPlanningTable() {
             { presentation_code: "PC00064", current_stock_units: 8445, monthlydemandunits: 1100 },
           ];
           const tenderItems = []; // deja vacío para probar fallback desde 'demand'
-          const importHeaders = [{ oci_number: "OCI-123", import_status: "Transit", eta: "2025-10-15" }];
-          const importItems = [{ oci_number: "OCI-123", presentation_code: "PC00063", qty: 800 }];
+          const importHeaders = [
+            { oci_number: "OCI-123", import_status: "In transit", eta: "2025-10-15" },
+            { oci_number: "OCI-124", import_status: "TRANSIT", eta: "2025-09-10" },
+          ];
+          const importItems = [
+            { oci_number: "OCI-123", presentation_code: "PC00063", qty: 800 },
+            { oci_number: "OCI-124", presentation_code: "PC00063", qty: 200 },
+          ];
           const catalog = [
             { presentation_code: "PC00063", product_name: "RIXAPIN 10 MG (RIVAROXABAN)", package_units: 60 },
             { presentation_code: "PC00064", product_name: "RIXAPIN 10 MG (RIVAROXABAN)", package_units: 120 },
@@ -286,7 +314,7 @@ export default function DemandPlanningTable() {
   }, [demo]);
 
   const columns = useMemo(() => [
-    { key: "product_label", header: "Product" },
+    { key: "product", header: "Product" },
     { key: "currentStockUnits", header: "Stock" },
     { key: "monthlyDemandUnits", header: "Demand (monthly)" },
     { key: "monthSupply", header: "Month Supply" },
@@ -295,6 +323,30 @@ export default function DemandPlanningTable() {
     { key: "transitList", header: "Transit" },
     { key: "actions", header: "Actions" },
   ], []);
+
+  async function onUpdateStock(code) {
+    const current = rows.find(r => r.presentation_code === code)?.currentStockUnits ?? 0;
+    const input = window.prompt(`Nuevo stock para ${code}:`, String(current));
+    if (input == null) return;
+    const value = Number(input);
+    if (!Number.isFinite(value) || value < 0) {
+      alert("Ingresa un número válido (>= 0)");
+      return;
+    }
+    try {
+      // Actualiza en la hoja demand por claves (presentation_code)
+      await writeTable("demand", "update", { presentation_code: code, current_stock_units: value });
+      // Refresca en memoria
+      setRows(prev => prev.map(r => r.presentation_code === code ? { ...r, currentStockUnits: value, monthSupply: (r.monthlyDemandUnits>0? value/r.monthlyDemandUnits : Infinity), status: coverageStatus(r.monthlyDemandUnits>0? value/r.monthlyDemandUnits : Infinity), outOfStockDate: (r.monthlyDemandUnits>0 && value>0)? addMonthsApprox(new Date(), value/r.monthlyDemandUnits) : undefined } : r));
+      alert("Stock actualizado");
+    } catch (e) {
+      alert(`No se pudo actualizar: ${e?.message || e}`);
+    }
+  }
+
+  function onView(row) {
+    setViewRow(row);
+  }
 
   if (loading) return <div className="p-4">Cargando Demand Planning…</div>;
 
@@ -329,8 +381,9 @@ export default function DemandPlanningTable() {
             {rows.map((r) => (
               <tr key={r.presentation_code} className="border-t align-top">
                 <td className="px-3 py-2">
-                  <div className="font-medium">{r.product_label}</div>
-                  <div className="text-gray-500">{r.presentation_code}</div>
+                  <div className="font-semibold">• {r.product_code}</div>
+                  <div className="text-gray-700">{r.product_name || "—"}</div>
+                  <div className="text-gray-500">{r.package_units ? `Pack x ${r.package_units}` : ""}</div>
                 </td>
                 <td className="px-3 py-2">{Math.round(r.currentStockUnits)}</td>
                 <td className="px-3 py-2">{r.monthlyDemandUnits ? r.monthlyDemandUnits.toFixed(2) : "0.00"}</td>
@@ -351,8 +404,8 @@ export default function DemandPlanningTable() {
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2">
-                    <button className="px-2 py-1 rounded-xl border hover:bg-gray-50">View</button>
-                    <button className="px-2 py-1 rounded-xl border hover:bg-gray-50">Update stock</button>
+                    <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={() => onView(r)}>View</button>
+                    <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={() => onUpdateStock(r.presentation_code)}>Update stock</button>
                   </div>
                 </td>
               </tr>
@@ -371,6 +424,42 @@ export default function DemandPlanningTable() {
       <p className="mt-3 text-xs text-gray-500">
         * Meses de demanda calculados como meses calendario inclusivos entre <code>first_delivery_date</code> y <code>last_delivery_date</code>. Si faltan fechas, se asume 1 mes.
       </p>
+
+      {/* Modal simple para View */}
+      {viewRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="bg-white rounded-2xl shadow-xl p-4 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold">Producto {viewRow.product_code}</h3>
+              <button className="text-gray-500 hover:text-gray-800" onClick={() => setViewRow(null)}>✕</button>
+            </div>
+            <div className="space-y-2 text-sm">
+              <div><span className="text-gray-500">Nombre:</span> {viewRow.product_name || "—"}</div>
+              <div><span className="text-gray-500">Pack:</span> {viewRow.package_units ? `x ${viewRow.package_units}` : "—"}</div>
+              <div><span className="text-gray-500">Stock:</span> {viewRow.currentStockUnits}</div>
+              <div><span className="text-gray-500">Demand (monthly):</span> {viewRow.monthlyDemandUnits?.toFixed(2) || "0.00"}</div>
+              <div><span className="text-gray-500">Month Supply:</span> {Number.isFinite(viewRow.monthSupply) ? viewRow.monthSupply.toFixed(2) : "∞"}</div>
+              <div><span className="text-gray-500">Status:</span> {viewRow.status}</div>
+              <div><span className="text-gray-500">Date OOS:</span> {viewRow.outOfStockDate ? formatDate(viewRow.outOfStockDate) : "—"}</div>
+              <div>
+                <span className="text-gray-500">Transit:</span>
+                {viewRow.transitList && viewRow.transitList.length > 0 ? (
+                  <ul className="list-disc list-inside space-y-1 mt-1">
+                    {viewRow.transitList.map((t, i) => (
+                      <li key={i}>OCI <b>{t.oci}</b>: {t.qty || 0} u.{t.eta ? ` · ETA ${formatDate(t.eta)}` : ""}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="mt-1">—</div>
+                )}
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="px-3 py-1.5 rounded-xl border hover:bg-gray-50" onClick={() => setViewRow(null)}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -386,3 +475,4 @@ function StatusPill({ status }) {
   };
   return <span className={`${base} ${colors[status] || colors["N/A"]}`}>{status}</span>;
 }
+
