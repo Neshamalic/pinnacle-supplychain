@@ -52,6 +52,28 @@ async function readTable(name) {
   if (!res.ok) {
     throw new Error(`Error leyendo ${name}: ${res.status}`);
   }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // Si no es JSON (p.ej., HTML por CAPTCHA), devolvemos arreglo vacío para no romper la UI
+    console.warn(`[readTable] ${name}: respuesta no JSON`);
+    return [];
+  }
+  // Apps Script puede envolver la data en distintos campos
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') {
+    const candidates = ['values','data','rows','result','records','items','sheet'];
+    for (const k of candidates) {
+      if (Array.isArray(data[k])) return data[k];
+    }
+    // algunos backends usan { ok:false, error:"..." }
+    if (data.ok === false) {
+      throw new Error(String(data.error || `Backend devolvió ok:false para ${name}`));
+    }
+  }
+  return [];
+}
   // Intenta parsear JSON; si no es JSON válido, devuelve [] para evitar errores de iteración
   let data;
   try {
@@ -81,34 +103,35 @@ function coverageStatus(months) {
 }
 
 function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importItems }) {
+  // Normalización flexible de campos para distintas variantes de encabezados
   // Catálogo por código
   const catByCode = new Map();
   for (const c of (Array.isArray(catalog) ? catalog : [])) {
-    const code = String(c.presentation_code || "").trim();
+    const code = String(pick(c, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!code) continue;
     catByCode.set(code, {
-      product_name: c.product_name || "",
-      package_units: Number(c.package_units || 0),
+      product_name: pick(c, ["product_name","productName","name"]) || "",
+      package_units: Number(pick(c, ["package_units","packageUnits","units_per_pack","units"]) ?? 0),
     });
   }
 
   // Stock por código desde hoja demand
   const stockByCode = new Map();
   for (const d of (Array.isArray(demandSheet) ? demandSheet : [])) {
-    const code = String(d.presentation_code || d.presentationCode || "").trim();
+    const code = String(pick(d, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!code) continue;
-    const stock = Number(d.current_stock_units || d.currentStockUnits || 0);
+    const stock = Number(pick(d, ["current_stock_units","currentStockUnits","stock_units","stock"]) || 0);
     stockByCode.set(code, (stockByCode.get(code) || 0) + stock);
   }
 
   // Demanda mensual por tender_items (meses calendario exactos)
   const monthlyDemandByCode = new Map();
   for (const ti of (Array.isArray(tenderItems) ? tenderItems : [])) {
-    const code = String(ti.presentation_code || ti.presentationCode || "").trim();
+    const code = String(pick(ti, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!code) continue;
-    const awarded = Number(ti.awarded_qty || 0);
-    const first = parseDateISO(ti.first_delivery_date);
-    const last = parseDateISO(ti.last_delivery_date);
+    const awarded = Number(pick(ti, ["awarded_qty","awardedQty","quantity","qty"]) || 0);
+    const first = parseDateISO(pick(ti, ["first_delivery_date","firstDeliveryDate","start_date","startDate"]))
+    const last  = parseDateISO(pick(ti, ["last_delivery_date","lastDeliveryDate","end_date","endDate"]))
     const months = monthsCalendarInclusive(first, last);
     const monthly = months > 0 ? awarded / months : 0;
     monthlyDemandByCode.set(code, (monthlyDemandByCode.get(code) || 0) + monthly);
@@ -117,21 +140,26 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
   // Encabezados de importaciones por OCI
   const headerByOCI = new Map();
   for (const h of (Array.isArray(importHeaders) ? importHeaders : [])) {
-    if (!h.oci_number) continue;
-    headerByOCI.set(String(h.oci_number), h);
+    const oci = String(pick(h, ["oci_number","ociNumber","oci"]) || "").trim();
+    if (!oci) continue;
+    headerByOCI.set(oci, {
+      oci_number: oci,
+      import_status: pick(h, ["import_status","importStatus","status"]) || "",
+      eta: pick(h, ["eta","arrival_date","arrivalDate"]) || undefined,
+    });
   }
 
   // Tránsito detallado por código (case-insensitive)
   const transitByCode = new Map(); // code => [{oci, qty, eta}, ...]
   for (const ii of (Array.isArray(importItems) ? importItems : [])) {
-    const oci = String(ii.oci_number || "").trim();
+    const oci = String(pick(ii, ["oci_number","ociNumber","oci"]) || "").trim();
     const head = headerByOCI.get(oci);
     if (!head) continue;
     const status = String(head.import_status || "").toLowerCase();
-    if (status !== "transit") continue; // acepta Transit/transit/TRANSIT
-    const code = String(ii.presentation_code || "").trim();
+    if (status !== "transit") continue;
+    const code = String(pick(ii, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!code) continue;
-    const qty = Number(ii.qty || 0);
+    const qty = Number(pick(ii, ["qty","quantity"]) || 0);
     const eta = parseDateISO(head.eta);
     const list = transitByCode.get(code) || [];
     list.push({ oci, qty, eta });
@@ -375,4 +403,3 @@ function runDevTests() {
     console.warn("Tests (dev) fallaron:", e);
   }
 }
-
