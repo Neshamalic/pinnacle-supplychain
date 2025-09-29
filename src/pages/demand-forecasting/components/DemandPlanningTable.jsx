@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useState } from "react";
  *   Para esas OCIs, lista qty desde "import_items" y ETA desde "imports" (mínima fecha).
  * - Product: "CÓDIGO — NOMBRE (xPACK)". Normalizo códigos para empatar catálogo aunque
  *   en demand aparezcan con ceros extra (p.ej. PC000630 -> PC00063).
+ * - UI: Transit en tabla -> Yes/No. En View -> resumen + tablita bonita.
  */
 
 const BASE_URL = (import.meta?.env?.VITE_SHEETS_API_URL) || "/api/gas-proxy";
@@ -33,7 +34,6 @@ function stripAccents(s = "") {
 }
 function isTransitStatus(s = "") {
   const x = stripAccents(String(s)).toLowerCase();
-  // admite "transit", "in transit", "en transito", etc.
   return x.includes("transit") || x.includes("transito");
 }
 
@@ -43,7 +43,7 @@ function parseDateISO(x) {
   const d = new Date(x);
   return isNaN(d.getTime()) ? undefined : d;
 }
-// Meses calendario exactos (inclusivo): 2025-01-01 a 2025-03-31 => 3 meses
+// Meses calendario exactos (inclusivo)
 function monthsCalendarInclusive(first, last) {
   if (!first || !last) return 1;
   const y = last.getFullYear() - first.getFullYear();
@@ -76,7 +76,6 @@ async function readTable(name) {
   try { data = JSON.parse(text); }
   catch { console.warn(`[readTable] ${name}: respuesta no JSON`, text.slice(0, 120)); return []; }
 
-  // backend: { ok:true, sheet:"...", rows:[...] }
   if (data && typeof data === "object" && Array.isArray(data.rows)) return data.rows;
 
   for (const k of ["values", "data", "records", "items"]) {
@@ -106,11 +105,6 @@ async function writeTable(name, action, payload) {
 }
 
 /* ========================= Normalización de códigos ========================= */
-/** Normaliza un código para empatar con el catálogo:
- *  - Si existe exacto en catálogo, lo usa.
- *  - Si no, elimina ceros al final (PC000630 -> PC00063) hasta encontrar match.
- *  - Si no encuentra, retorna el original.
- */
 function normalizeToCatalog(code, catByCode) {
   let c = String(code || "").trim();
   if (catByCode.has(c)) return c;
@@ -132,7 +126,7 @@ function coverageStatus(months) {
 }
 
 function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importItems }) {
-  // 1) Catálogo por código
+  // 1) Catálogo
   const catByCode = new Map();
   for (const c of (Array.isArray(catalog) ? catalog : [])) {
     const code = String(pick(c, ["presentation_code","presentationCode","code"]) || "").trim();
@@ -143,10 +137,10 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     });
   }
 
-  // 2) Stock + fallback demanda mensual desde 'demand' (normalizando contra catálogo)
-  const stockByCode = new Map();                 // código-normalizado => stock
-  const displayCodeByCode = new Map();           // código-normalizado => código original de demand (para mostrar)
-  const demandMonthlyFallbackByCode = new Map(); // código-normalizado => monthly demand fallback
+  // 2) Stock + fallback demand desde 'demand'
+  const stockByCode = new Map();
+  const displayCodeByCode = new Map();
+  const demandMonthlyFallbackByCode = new Map();
   for (const d of (Array.isArray(demandSheet) ? demandSheet : [])) {
     const raw = String(pick(d, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!raw) continue;
@@ -154,12 +148,11 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     const stock = Number(pick(d, ["current_stock_units","currentStockUnits","stock_units","stock"]) || 0);
     stockByCode.set(code, (stockByCode.get(code) || 0) + stock);
     if (!displayCodeByCode.has(code)) displayCodeByCode.set(code, raw);
-
     const dm = Number(pick(d, ["monthlydemandunits","monthly_demand_units","monthlyDemandUnits"]) || 0);
     if (dm > 0) demandMonthlyFallbackByCode.set(code, dm);
   }
 
-  // 3) Demanda mensual desde tender_items (normalizando)
+  // 3) Demanda mensual desde tender_items
   const monthlyDemandByCode = new Map();
   for (const ti of (Array.isArray(tenderItems) ? tenderItems : [])) {
     const raw = String(pick(ti, ["presentation_code","presentationCode","code"]) || "").trim();
@@ -173,16 +166,15 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     monthlyDemandByCode.set(code, (monthlyDemandByCode.get(code) || 0) + monthly);
   }
 
-  // 4) IMPORTS: considerar SOLO filas en tránsito; agrupar por OCI y tomar ETA mínima de esas filas
+  // 4) IMPORTS: SOLO filas en tránsito; agrupar por OCI y tomar ETA mínima
   const transitHeaderByOCI = new Map(); // OCI => { eta }
   for (const h of (Array.isArray(importHeaders) ? importHeaders : [])) {
     const oci = String(pick(h, ["oci_number","ociNumber","oci"]) || "").trim();
     if (!oci) continue;
     const statusRaw = pick(h, ["import_status","importStatus","status"]) || "";
-    if (!isTransitStatus(statusRaw)) continue; // <- SOLO filas tránsito
+    if (!isTransitStatus(statusRaw)) continue; // ← SOLO tránsito
     const etaRaw = pick(h, ["eta","arrival_date","arrivalDate","eta_date","ETD"]);
     const eta = parseDateISO(etaRaw);
-
     const prev = transitHeaderByOCI.get(oci);
     if (!prev || (eta && (!prev.eta || eta.getTime() < prev.eta.getTime()))) {
       transitHeaderByOCI.set(oci, { eta: eta || prev?.eta });
@@ -194,11 +186,10 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
   for (const ii of (Array.isArray(importItems) ? importItems : [])) {
     const oci = String(pick(ii, ["oci_number","ociNumber","oci"]) || "").trim();
     const head = transitHeaderByOCI.get(oci);
-    if (!head) continue; // esta OCI no está en tránsito
+    if (!head) continue; // OCI no en tránsito
 
     const raw = String(pick(ii, [
-      "presentation_code","presentationCode",
-      "product_code","productCode","sku","item_code","presentation"
+      "presentation_code","presentationCode","product_code","productCode","sku","item_code","presentation"
     ]) || "").trim();
     if (!raw) continue;
     const code = normalizeToCatalog(raw, catByCode);
@@ -209,8 +200,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     transitByCode.set(code, list);
   }
 
-  // 6) Construcción de filas (mantenemos el universo de productos por stock/demanda;
-  //    la columna Transit solo se llena si hay OCIs en tránsito para ese código)
+  // 6) Construcción de filas
   const allCodes = new Set([
     ...Array.from(stockByCode.keys()),
     ...Array.from(monthlyDemandByCode.keys()),
@@ -219,15 +209,12 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
   const today = new Date();
   const rows = Array.from(allCodes).map((code) => {
     const stock = Number(stockByCode.get(code) || 0);
-
     let demandM = Number(monthlyDemandByCode.get(code) || 0);
     if (!demandM) demandM = Number(demandMonthlyFallbackByCode.get(code) || 0);
-
     const months = demandM > 0 ? stock / demandM : Infinity;
-
-    const cat = catByCode.get(code) || {};
-    const productName = cat.product_name || "";
-    const packageUnits = cat.package_units || 0;
+    const cat = (new Map([[code, null]]) && catByCode.get(code)) || {};
+    const productName = cat?.product_name || "";
+    const packageUnits = cat?.package_units || 0;
 
     const outOfStockDate = (demandM > 0 && stock > 0)
       ? addMonthsApprox(today, stock / demandM)
@@ -241,9 +228,13 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
         return ta - tb;
       });
 
+    // agregados para UI
+    const transitTotal = trList.reduce((acc, t) => acc + (Number(t.qty) || 0), 0);
+    const transitEta = trList.length ? trList[0].eta : undefined;
+
     return {
-      presentation_code: code,                                // código normalizado para joins
-      product_code: displayCodeByCode.get(code) || code,      // código visible (raw de demand)
+      presentation_code: code,                                // normalizado
+      product_code: displayCodeByCode.get(code) || code,      // visible
       product_name: productName,
       package_units: packageUnits,
       currentStockUnits: stock,
@@ -251,7 +242,9 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
       monthSupply: months,
       status: coverageStatus(months),
       outOfStockDate,
-      transitList: trList, // [{oci, qty, eta}] (vacío si no hay tránsito)
+      transitList: trList,        // [{oci, qty, eta}]
+      transitTotal,               // agregado
+      transitEta,                 // agregado (ETA más próxima)
     };
   });
 
@@ -298,7 +291,7 @@ export default function DemandPlanningTable() {
     { key: "monthSupply", header: "Month Supply" },
     { key: "status", header: "Status" },
     { key: "outOfStockDate", header: "Date Out of Stock" },
-    { key: "transitList", header: "Transit" },
+    { key: "transit", header: "Transit" }, // ← muestra Yes/No
     { key: "actions", header: "Actions" },
   ], []);
 
@@ -360,41 +353,35 @@ export default function DemandPlanningTable() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.presentation_code} className="border-t align-top">
-                <td className="px-3 py-2">
-                  <div className="font-semibold">
-                    {r.product_code}
-                    {(r.product_name || r.package_units) && " — "}
-                    {r.product_name || ""}
-                    {r.package_units ? ` (x${r.package_units})` : ""}
-                  </div>
-                </td>
-                <td className="px-3 py-2">{Math.round(r.currentStockUnits)}</td>
-                <td className="px-3 py-2">{r.monthlyDemandUnits ? r.monthlyDemandUnits.toFixed(2) : "0.00"}</td>
-                <td className="px-3 py-2">{Number.isFinite(r.monthSupply) ? r.monthSupply.toFixed(2) : "∞"}</td>
-                <td className="px-3 py-2"><StatusPill status={r.status} /></td>
-                <td className="px-3 py-2">{r.outOfStockDate ? formatDate(r.outOfStockDate) : "—"}</td>
-                <td className="px-3 py-2">
-                  {r.transitList && r.transitList.length > 0 ? (
-                    <ul className="list-disc list-inside space-y-1">
-                      {r.transitList.map((t, i) => (
-                        <li key={i}>
-                          OCI <span className="font-medium">{t.oci}</span>: {t.qty || 0} u.
-                          {t.eta ? ` · ETA ${formatDate(t.eta)}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : "—"}
-                </td>
-                <td className="px-3 py-2">
-                  <div className="flex gap-2">
-                    <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={() => onView(r)}>View</button>
-                    <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={() => onUpdateStock(r.presentation_code)}>Update stock</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {rows.map((r) => {
+              const hasTransit = (r.transitList && r.transitList.length > 0);
+              return (
+                <tr key={r.presentation_code} className="border-t align-top">
+                  <td className="px-3 py-2">
+                    <div className="font-semibold">
+                      {r.product_code}
+                      {(r.product_name || r.package_units) && " — "}
+                      {r.product_name || ""}
+                      {r.package_units ? ` (x${r.package_units})` : ""}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">{Math.round(r.currentStockUnits)}</td>
+                  <td className="px-3 py-2">{r.monthlyDemandUnits ? r.monthlyDemandUnits.toFixed(2) : "0.00"}</td>
+                  <td className="px-3 py-2">{Number.isFinite(r.monthSupply) ? r.monthSupply.toFixed(2) : "∞"}</td>
+                  <td className="px-3 py-2"><StatusPill status={r.status} /></td>
+                  <td className="px-3 py-2">{r.outOfStockDate ? formatDate(r.outOfStockDate) : "—"}</td>
+                  <td className="px-3 py-2">
+                    <TransitPill yes={hasTransit} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-2">
+                      <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={() => onView(r)}>View</button>
+                      <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={() => onUpdateStock(r.presentation_code)}>Update stock</button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
             {rows.length === 0 && (
               <tr>
                 <td className="px-3 py-6 text-sm text-gray-500" colSpan={columns.length}>
@@ -413,30 +400,63 @@ export default function DemandPlanningTable() {
       {/* Modal View */}
       {viewRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-          <div className="bg-white rounded-2xl shadow-xl p-4 w-full max-w-lg">
+          <div className="bg-white rounded-2xl shadow-xl p-4 w-full max-w-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-semibold">Producto {viewRow.product_code}</h3>
               <button className="text-gray-500 hover:text-gray-800" onClick={() => setViewRow(null)}>✕</button>
             </div>
-            <div className="space-y-2 text-sm">
-              <div><span className="text-gray-500">Nombre:</span> {viewRow.product_name || "—"}</div>
-              <div><span className="text-gray-500">Pack:</span> {viewRow.package_units ? `x ${viewRow.package_units}` : "—"}</div>
-              <div><span className="text-gray-500">Stock:</span> {viewRow.currentStockUnits}</div>
-              <div><span className="text-gray-500">Demand (monthly):</span> {viewRow.monthlyDemandUnits?.toFixed(2) || "0.00"}</div>
-              <div><span className="text-gray-500">Month Supply:</span> {Number.isFinite(viewRow.monthSupply) ? viewRow.monthSupply.toFixed(2) : "∞"}</div>
-              <div><span className="text-gray-500">Status:</span> {viewRow.status}</div>
-              <div><span className="text-gray-500">Date OOS:</span> {viewRow.outOfStockDate ? formatDate(viewRow.outOfStockDate) : "—"}</div>
-              <div>
-                <span className="text-gray-500">Transit:</span>
+
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <InfoItem label="Nombre" value={viewRow.product_name || "—"} />
+                <InfoItem label="Pack" value={viewRow.package_units ? `x ${viewRow.package_units}` : "—"} />
+                <InfoItem label="Stock" value={String(viewRow.currentStockUnits)} />
+                <InfoItem label="Demand (monthly)" value={viewRow.monthlyDemandUnits?.toFixed(2) || "0.00"} />
+                <InfoItem label="Month Supply" value={Number.isFinite(viewRow.monthSupply) ? viewRow.monthSupply.toFixed(2) : "∞"} />
+                <InfoItem label="Status" value={viewRow.status} />
+                <InfoItem label="Date OOS" value={viewRow.outOfStockDate ? formatDate(viewRow.outOfStockDate) : "—"} />
+              </div>
+
+              <div className="mt-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium">Transit</h4>
+                  <TransitPill yes={viewRow.transitList && viewRow.transitList.length > 0} />
+                </div>
+
                 {viewRow.transitList && viewRow.transitList.length > 0 ? (
-                  <ul className="list-disc list-inside space-y-1 mt-1">
-                    {viewRow.transitList.map((t, i) => (
-                      <li key={i}>OCI <b>{t.oci}</b>: {t.qty || 0} u.{t.eta ? ` · ETA ${formatDate(t.eta)}` : ""}</li>
-                    ))}
-                  </ul>
-                ) : <div className="mt-1">—</div>}
+                  <>
+                    <div className="mt-2 grid grid-cols-2 gap-3">
+                      <InfoItem label="Total en tránsito" value={`${viewRow.transitTotal} u.`} />
+                      <InfoItem label="ETA más próxima" value={viewRow.transitEta ? formatDate(viewRow.transitEta) : "—"} />
+                    </div>
+
+                    <div className="mt-3 overflow-hidden rounded-xl border">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-gray-600 font-medium">OCI</th>
+                            <th className="px-3 py-2 text-right text-gray-600 font-medium">Qty</th>
+                            <th className="px-3 py-2 text-left text-gray-600 font-medium">ETA</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {viewRow.transitList.map((t, i) => (
+                            <tr key={i} className="border-t">
+                              <td className="px-3 py-2">{t.oci}</td>
+                              <td className="px-3 py-2 text-right">{t.qty || 0}</td>
+                              <td className="px-3 py-2">{t.eta ? formatDate(t.eta) : "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-1 text-gray-500">No hay unidades en tránsito.</div>
+                )}
               </div>
             </div>
+
             <div className="mt-4 flex justify-end gap-2">
               <button className="px-3 py-1.5 rounded-xl border hover:bg-gray-50" onClick={() => setViewRow(null)}>Cerrar</button>
             </div>
@@ -458,4 +478,20 @@ function StatusPill({ status }) {
     "N/A": "bg-gray-100 text-gray-600",
   };
   return <span className={`${base} ${colors[status] || colors["N/A"]}`}>{status}</span>;
+}
+
+function TransitPill({ yes }) {
+  const base = "inline-flex items-center px-2 py-1 rounded-full text-xs font-medium";
+  return yes
+    ? <span className={`${base} bg-green-100 text-green-700`}>Yes</span>
+    : <span className={`${base} bg-gray-100 text-gray-600`}>No</span>;
+}
+
+function InfoItem({ label, value }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-gray-500">{label}</span>
+      <span className="font-medium">{value}</span>
+    </div>
+  );
 }
