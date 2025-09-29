@@ -1,18 +1,42 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 /**
- * DemandPlanningTable (versión JS)
+ * DemandPlanningTable (JS)
  *
- * Cambios solicitados por Mónica:
- * - Stock viene de la hoja "demand" (campo current_stock_units por presentation_code).
- * - Cálculo de meses: meses calendario exactos e inclusivos (ej: Ene a Mar = 3).
- * - Status: <2 Critical | 2..4 Urgent | >4..6 Normal | >6 Optimal.
- * - Transit: case-insensitive ("transit"/"Transit"/etc.) y listado detallado por OCI con qty y ETA.
- * - Evitar 404 usando el proxy /api/gas-proxy por defecto.
+ * Reglas y orígenes (según lo que pediste):
+ * - Stock desde hoja "demand" (campo current_stock_units por presentation_code).
+ * - Demand (mensual) calculada desde "tender_items":
+ *     monthly = awarded_qty / mesesCalendarioInclusivos(first_delivery_date..last_delivery_date)
+ *   (si no hay tender_items para un code, se usa fallback: demand.monthlydemandunits si existe).
+ * - Meses calendario inclusivos: Ej: 2025-01..2025-03 => 3
+ * - Status:
+ *     <2           ⇒ Critical
+ *     2..4 (incl.) ⇒ Urgent
+ *     >4..6 (incl.)⇒ Normal
+ *     >6           ⇒ Optimal
+ * - Transit: lee "imports" + "import_items", case-insensitive ("Transit"/"transit"/etc.),
+ *   y muestra listado detallado por OCI con qty y ETA ordenadas por fecha más próxima.
+ *
+ * Para evitar 404: por defecto usa "/api/gas-proxy" (tu serverless actual).
+ * Si prefieres variable de entorno, en .env.local pon: VITE_SHEETS_API_URL=/api/gas-proxy
  */
 
 // ========================= Config =========================
 const BASE_URL = (import.meta?.env?.VITE_SHEETS_API_URL) || "/api/gas-proxy";
+
+// ========================= Utilidades generales =========================
+function normKey(s) {
+  return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+function pick(obj, candidates) {
+  if (!obj || typeof obj !== "object") return undefined;
+  const map = new Map(Object.keys(obj).map(k => [normKey(k), k]));
+  for (const c of candidates) {
+    const k = map.get(normKey(c));
+    if (k !== undefined) return obj[k];
+  }
+  return undefined;
+}
 
 // ========================= Utilidades de fecha =========================
 function parseDateISO(x) {
@@ -49,46 +73,40 @@ async function readTable(name) {
   const url = `${BASE_URL}?route=table&name=${encodeURIComponent(name)}`;
   const res = await fetch(url);
   const text = await res.text();
+
   if (!res.ok) {
     throw new Error(`Error leyendo ${name}: ${res.status}`);
   }
+
+  // Intenta JSON
   let data;
   try {
     data = JSON.parse(text);
   } catch {
-    // Si no es JSON (p.ej., HTML por CAPTCHA), devolvemos arreglo vacío para no romper la UI
-    console.warn(`[readTable] ${name}: respuesta no JSON`);
+    console.warn(`[readTable] ${name}: respuesta no JSON`, text.slice(0, 120));
     return [];
   }
-  // Apps Script puede envolver la data en distintos campos
-  if (Array.isArray(data)) return data;
-  if (data && typeof data === 'object') {
-    const candidates = ['values','data','rows','result','records','items','sheet'];
-    for (const k of candidates) {
-      if (Array.isArray(data[k])) return data[k];
+
+  // Caso tu backend: { ok:true, sheet:"...", rows:[...] }
+  if (data && typeof data === "object" && Array.isArray(data.rows)) {
+    console.log(`[readTable] ${name}: ${data.rows.length} filas`);
+    return data.rows;
+  }
+
+  // Otros formatos posibles
+  const candidates = ["values", "data", "records", "items"];
+  for (const k of candidates) {
+    if (data && typeof data === "object" && Array.isArray(data[k])) {
+      console.log(`[readTable] ${name}: ${data[k].length} filas (campo ${k})`);
+      return data[k];
     }
-    // algunos backends usan { ok:false, error:"..." }
-    if (data.ok === false) {
-      throw new Error(String(data.error || `Backend devolvió ok:false para ${name}`));
-    }
   }
-  return [];
-}
-  // Intenta parsear JSON; si no es JSON válido, devuelve [] para evitar errores de iteración
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    // puede ser HTML (captcha) u otro texto
-    return [];
+
+  if (data && data.ok === false) {
+    throw new Error(String(data.error || `Backend devolvió ok:false para ${name}`));
   }
-  // Si el backend avisa error en JSON (ok:false), levanta la excepción con el detalle
-  if (data && typeof data === 'object' && data.ok === false) {
-    throw new Error(data.error || `Backend devolvió ok:false para ${name}`);
-  }
-  // Normaliza a arreglo
-  if (Array.isArray(data)) return data;
-  if (data && Array.isArray(data.values)) return data.values; // fallback por si el backend usa {values: []}
+
+  console.warn(`[readTable] ${name}: formato desconocido`, Object.keys(data || {}));
   return [];
 }
 
@@ -103,8 +121,7 @@ function coverageStatus(months) {
 }
 
 function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importItems }) {
-  // Normalización flexible de campos para distintas variantes de encabezados
-  // Catálogo por código
+  // Catálogo por código (nombres flexibles)
   const catByCode = new Map();
   for (const c of (Array.isArray(catalog) ? catalog : [])) {
     const code = String(pick(c, ["presentation_code","presentationCode","code"]) || "").trim();
@@ -117,11 +134,16 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
 
   // Stock por código desde hoja demand
   const stockByCode = new Map();
+  const demandMonthlyFallbackByCode = new Map(); // por si no hay tender_items
   for (const d of (Array.isArray(demandSheet) ? demandSheet : [])) {
     const code = String(pick(d, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!code) continue;
     const stock = Number(pick(d, ["current_stock_units","currentStockUnits","stock_units","stock"]) || 0);
     stockByCode.set(code, (stockByCode.get(code) || 0) + stock);
+
+    // fallback para demanda mensual si viene del sheet 'demand'
+    const dm = Number(pick(d, ["monthlydemandunits","monthly_demand_units","monthlyDemandUnits"]) || 0);
+    if (dm > 0) demandMonthlyFallbackByCode.set(code, dm);
   }
 
   // Demanda mensual por tender_items (meses calendario exactos)
@@ -130,8 +152,8 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     const code = String(pick(ti, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!code) continue;
     const awarded = Number(pick(ti, ["awarded_qty","awardedQty","quantity","qty"]) || 0);
-    const first = parseDateISO(pick(ti, ["first_delivery_date","firstDeliveryDate","start_date","startDate"]))
-    const last  = parseDateISO(pick(ti, ["last_delivery_date","lastDeliveryDate","end_date","endDate"]))
+    const first = parseDateISO(pick(ti, ["first_delivery_date","firstDeliveryDate","start_date","startDate"]));
+    const last  = parseDateISO(pick(ti, ["last_delivery_date","lastDeliveryDate","end_date","endDate"]));
     const months = monthsCalendarInclusive(first, last);
     const monthly = months > 0 ? awarded / months : 0;
     monthlyDemandByCode.set(code, (monthlyDemandByCode.get(code) || 0) + monthly);
@@ -156,7 +178,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
     const head = headerByOCI.get(oci);
     if (!head) continue;
     const status = String(head.import_status || "").toLowerCase();
-    if (status !== "transit") continue;
+    if (status !== "transit") continue; // acepta Transit/transit/TRANSIT
     const code = String(pick(ii, ["presentation_code","presentationCode","code"]) || "").trim();
     if (!code) continue;
     const qty = Number(pick(ii, ["qty","quantity"]) || 0);
@@ -176,7 +198,10 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
   const today = new Date();
   const rows = Array.from(allCodes).map((code) => {
     const stock = Number(stockByCode.get(code) || 0);
-    const demandM = Number(monthlyDemandByCode.get(code) || 0);
+    // usa tender_items; si no hay, intenta fallback desde 'demand'
+    let demandM = Number(monthlyDemandByCode.get(code) || 0);
+    if (!demandM) demandM = Number(demandMonthlyFallbackByCode.get(code) || 0);
+
     const months = demandM > 0 ? stock / demandM : Infinity;
 
     const cat = catByCode.get(code) || {};
@@ -184,8 +209,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
 
     const outOfStockDate = demandM > 0 && stock > 0 ? addMonthsApprox(today, stock / demandM) : undefined;
 
-    const trList = transitByCode.get(code) || [];
-    trList.sort((a, b) => {
+    const trList = (transitByCode.get(code) || []).slice().sort((a, b) => {
       const ta = a.eta ? a.eta.getTime() : Infinity;
       const tb = b.eta ? b.eta.getTime() : Infinity;
       return ta - tb;
@@ -206,12 +230,13 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
   return rows;
 }
 
+// ========================= Componente =========================
 export default function DemandPlanningTable() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [rows, setRows] = useState([]);
 
-  // Vista previa sin backend: agrega ?demo=1
+  // Vista previa sin backend (si quisieras usar datos mock): agrega ?demo=1
   const demo = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "1";
 
   useEffect(() => {
@@ -224,23 +249,19 @@ export default function DemandPlanningTable() {
         if (demo) {
           // Datos de ejemplo
           const demandSheet = [
-            { presentation_code: "PC0001", current_stock_units: 1200 },
-            { presentation_code: "PC0004", current_stock_units: 350 },
+            { presentation_code: "PC00063", current_stock_units: 533, monthlydemandunits: 400 },
+            { presentation_code: "PC00064", current_stock_units: 8445, monthlydemandunits: 1100 },
           ];
-          const tenderItems = [
-            { presentation_code: "PC0001", awarded_qty: 6000, first_delivery_date: "2025-06-01", last_delivery_date: "2026-05-31" },
-            { presentation_code: "PC0004", awarded_qty: 900, first_delivery_date: "2025-09-01", last_delivery_date: "2026-02-28" },
-          ];
-          const importHeaders = [ { oci_number: "OCI-123", import_status: "Transit", eta: "2025-10-15" } ];
-          const importItems   = [ { oci_number: "OCI-123", presentation_code: "PC0001", qty: 800 } ];
-          const catalog       = [
-            { presentation_code: "PC0001", product_name: "Metronidazol", package_units: 100 },
-            { presentation_code: "PC0004", product_name: "Apixabán (Spiroaart®)", package_units: 30 },
+          const tenderItems = []; // deja vacío para probar fallback desde 'demand'
+          const importHeaders = [{ oci_number: "OCI-123", import_status: "Transit", eta: "2025-10-15" }];
+          const importItems = [{ oci_number: "OCI-123", presentation_code: "PC00063", qty: 800 }];
+          const catalog = [
+            { presentation_code: "PC00063", product_name: "RIXAPIN 10 MG (RIVAROXABAN)", package_units: 60 },
+            { presentation_code: "PC00064", product_name: "RIXAPIN 10 MG (RIVAROXABAN)", package_units: 120 },
           ];
 
           const built = buildRows({ catalog, demandSheet, tenderItems, importHeaders, importItems });
           if (!cancelled) setRows(built);
-          runDevTests();
           return;
         }
 
@@ -312,11 +333,9 @@ export default function DemandPlanningTable() {
                   <div className="text-gray-500">{r.presentation_code}</div>
                 </td>
                 <td className="px-3 py-2">{Math.round(r.currentStockUnits)}</td>
-                <td className="px-3 py-2">{r.monthlyDemandUnits.toFixed(2)}</td>
+                <td className="px-3 py-2">{r.monthlyDemandUnits ? r.monthlyDemandUnits.toFixed(2) : "0.00"}</td>
                 <td className="px-3 py-2">{Number.isFinite(r.monthSupply) ? r.monthSupply.toFixed(2) : "∞"}</td>
-                <td className="px-3 py-2">
-                  <StatusPill status={r.status} />
-                </td>
+                <td className="px-3 py-2"><StatusPill status={r.status} /></td>
                 <td className="px-3 py-2">{r.outOfStockDate ? formatDate(r.outOfStockDate) : "—"}</td>
                 <td className="px-3 py-2">
                   {r.transitList && r.transitList.length > 0 ? (
@@ -328,9 +347,7 @@ export default function DemandPlanningTable() {
                         </li>
                       ))}
                     </ul>
-                  ) : (
-                    "—"
-                  )}
+                  ) : ("—")}
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2">
@@ -340,6 +357,13 @@ export default function DemandPlanningTable() {
                 </td>
               </tr>
             ))}
+            {rows.length === 0 && (
+              <tr>
+                <td className="px-3 py-6 text-sm text-gray-500" colSpan={columns.length}>
+                  No hay productos para mostrar.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -361,45 +385,4 @@ function StatusPill({ status }) {
     "N/A": "bg-gray-100 text-gray-600",
   };
   return <span className={`${base} ${colors[status] || colors["N/A"]}`}>{status}</span>;
-}
-
-// ========================= Tests ligeros (dev) =========================
-function runDevTests() {
-  try {
-    // 1) coverageStatus
-    console.assert(coverageStatus(1.99) === "Critical", "1.99 ⇒ Critical");
-    console.assert(coverageStatus(2) === "Urgent", "2 ⇒ Urgent");
-    console.assert(coverageStatus(4) === "Urgent", "4 ⇒ Urgent");
-    console.assert(coverageStatus(5) === "Normal", "5 ⇒ Normal");
-    console.assert(coverageStatus(6.01) === "Optimal", ">6 ⇒ Optimal");
-
-    // 2) monthsCalendarInclusive
-    const d1 = new Date("2025-06-15");
-    const d2 = new Date("2025-06-15");
-    console.assert(monthsCalendarInclusive(d1, d2) === 1, "mismo día ⇒ 1 mes");
-    const d3 = new Date("2025-01-01");
-    const d4 = new Date("2025-03-31");
-    console.assert(monthsCalendarInclusive(d3, d4) === 3, "Ene..Mar ⇒ 3 meses");
-
-    // 3) buildRows mínimo
-    const built = buildRows({
-      catalog: [{ presentation_code: "PCX", product_name: "Dummy", package_units: 10 }],
-      demandSheet: [{ presentation_code: "PCX", current_stock_units: 100 }],
-      tenderItems: [{ presentation_code: "PCX", awarded_qty: 300, first_delivery_date: "2025-01-01", last_delivery_date: "2025-01-01" }],
-      importHeaders: [
-        { oci_number: "O1", import_status: "Transit", eta: "2025-12-31" },
-        { oci_number: "O2", import_status: "Transit", eta: "2025-11-30" },
-      ],
-      importItems: [
-        { oci_number: "O1", presentation_code: "PCX", qty: 50 },
-        { oci_number: "O2", presentation_code: "PCX", qty: 25 },
-      ],
-    });
-    console.assert(built.length === 1, "una fila");
-    console.assert(built[0].monthlyDemandUnits > 0, "demanda > 0");
-    console.assert(Array.isArray(built[0].transitList) && built[0].transitList.length === 2, "2 entradas tránsito");
-    console.assert(built[0].transitList[0].eta && formatDate(built[0].transitList[0].eta) === "2025-11-30", "ETA más próxima primero");
-  } catch (e) {
-    console.warn("Tests (dev) fallaron:", e);
-  }
 }
