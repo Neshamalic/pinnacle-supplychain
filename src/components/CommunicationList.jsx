@@ -94,6 +94,7 @@ export default function CommunicationList({
             route: "table",
             name: "communications",
             lt: normType,
+            order: "desc",
           });
           if (linkedId) params.set("lid", String(linkedId).trim());
 
@@ -131,26 +132,46 @@ export default function CommunicationList({
 
   const visibleItems = useMemo(() => items.slice(0, visible), [items, visible]);
 
-  const handleToggleExpand = async (id) => {
+  /** Marca como leído en servidor usando el formato correcto { row: {...} }.
+   *  Si no hay id, usa created_date + subject (snake_case) como fallback.
+   */
+  const markReadIfNeeded = async (item) => {
+    if (!item?.unread) return;
+    // Optimista en UI
     setItems((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, _expanded: !c._expanded } : c))
+      prev.map((c) => (c.id === item.id ? { ...c, unread: false } : c))
     );
-    const current = (items || []).find((x) => x.id === id);
-    if (current && current.unread && !current._expanded) {
-      // marcar como leído en UI + server
-      setItems((prev) => prev.map((c) => (c.id === id ? { ...c, unread: false } : c)));
-      try {
-        await postJSON(`${API_BASE}?route=write&action=update&name=communications`, {
-          id,
-          unread: false,
-        });
-      } catch {
-        setItems((prev) => prev.map((c) => (c.id === id ? { ...c, unread: true } : c)));
-      }
+
+    const row =
+      item.id
+        ? { id: item.id, unread: false }
+        : { created_date: item.createdDate, subject: item.subject, unread: false };
+
+    try {
+      await postJSON(`${API_BASE}?route=write&action=update&name=communications`, { row });
+    } catch {
+      // Si falla, revertimos optimismo
+      setItems((prev) =>
+        prev.map((c) => (c.id === item.id ? { ...c, unread: true } : c))
+      );
     }
   };
 
-  const handleDelete = async (item) => {
+  const handleToggleExpand = async (item) => {
+    setItems((prev) =>
+      prev.map((c) => (c.id === item.id ? { ...c, _expanded: !c._expanded } : c))
+    );
+
+    // si pasamos a expandido → marcar leído
+    const current = (items || []).find((x) => x.id === item.id);
+    const willExpand = !(current && current._expanded);
+    if (willExpand) {
+      await markReadIfNeeded(item);
+    }
+  };
+
+  const handleDelete = async (item, e) => {
+    if (e) e.stopPropagation(); // no marcar como leído al borrar
     if (!item?.id) {
       alert('No se puede eliminar: falta "id" en esa fila de la planilla.');
       return;
@@ -207,7 +228,8 @@ export default function CommunicationList({
         return (
           <div
             key={c.id || i}
-            className="rounded-lg border bg-muted/40 p-4 hover:bg-muted transition-colors"
+            className="rounded-lg border bg-muted/40 p-4 hover:bg-muted transition-colors cursor-pointer"
+            onClick={() => markReadIfNeeded(c)} // ← clic en toda la tarjeta: marca leído
           >
             {/* header */}
             <div className="flex items-start justify-between gap-3">
@@ -217,9 +239,16 @@ export default function CommunicationList({
                   <div className="font-medium text-foreground">
                     {c.subject || "(sin asunto)"} {unreadBadge(c.unread)}
                   </div>
-                  <span className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs ${badge.cls}`}>
+                  <span
+                    className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs ${badge.cls}`}
+                  >
                     {badge.label}
                   </span>
+                  {c.linked_id ? (
+                    <span className="ml-1 inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs text-indigo-800">
+                      {c.linked_id}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
                   {c.type || "note"} • {c.participants || "—"}
@@ -232,7 +261,7 @@ export default function CommunicationList({
                   variant="destructive"
                   size="sm"
                   iconName="Trash2"
-                  onClick={() => handleDelete(c)}
+                  onClick={(e) => handleDelete(c, e)}
                 >
                   Delete
                 </Button>
@@ -252,7 +281,10 @@ export default function CommunicationList({
                 <div className="mt-2">
                   <button
                     className="text-primary text-sm underline underline-offset-2"
-                    onClick={() => handleToggleExpand(c.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();     // no dispare el click de la tarjeta
+                      handleToggleExpand(c);
+                    }}
                   >
                     {expanded ? "Show less" : "Show more"}
                   </button>
