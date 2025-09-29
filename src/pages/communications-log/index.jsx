@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import Button from "@/components/ui/Button";
 import Icon from "@/components/AppIcon";
-import CommunicationTimeline from "./components/CommunicationTimeline";
+import CommunicationList from "@/components/CommunicationList";
 import NewCommunicationModal from "./components/NewCommunicationModal";
 
 export default function CommunicationsLogPage() {
@@ -11,22 +11,32 @@ export default function CommunicationsLogPage() {
 
   const handleSaved = () => {
     setOpenNew(false);
-    setReloadKey(k => k + 1); // fuerza que CommunicationTimeline pida de nuevo
+    setReloadKey((k) => k + 1); // fuerza que la lista recargue
   };
 
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between mb-4">
+      <div className="mb-4 flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Communications Timeline</h1>
-          <p className="text-sm text-muted-foreground">All messages across tenders, orders and imports.</p>
+          <h1 className="text-xl font-semibold">Communications</h1>
+          <p className="text-sm text-muted-foreground">
+            Click en cualquier mensaje para marcarlo como leído (Unread → Read). Usa “Show more” para expandir.
+          </p>
         </div>
-        <Button onClick={() => setOpenNew(true)} iconName="Plus">New Communication</Button>
+        <Button onClick={() => setOpenNew(true)} iconName="Plus">
+          New Communication
+        </Button>
       </div>
 
-      {/* clave de recarga para forzar reread */}
+      {/* Clave de recarga para forzar refetch en la lista */}
       <div key={reloadKey}>
-        <CommunicationTimeline />
+        {/* Sin filtros: lista completa (orden descendente por fecha desde el backend) */}
+        <CommunicationList />
+        {/*
+          Si quisieras ver solo por entidad, puedes usar:
+          <CommunicationList linkedType="orders" />
+          <CommunicationList linkedType="orders" linkedId="PO-171" />
+        */}
       </div>
 
       {openNew && (
@@ -39,4 +49,3 @@ export default function CommunicationsLogPage() {
     </div>
   );
 }
-
