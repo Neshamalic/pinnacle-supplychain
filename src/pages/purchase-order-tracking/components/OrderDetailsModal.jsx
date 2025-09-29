@@ -16,18 +16,13 @@ function parseNumLocale(v) {
   if (v == null || v === '') return 0;
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const s = String(v).trim();
-  // tiene punto y coma → decidir decimal por el separador más a la derecha
   if (s.includes('.') && s.includes(',')) {
     if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
       return parseFloat(s.replace(/\./g, '').replace(',', '.')); // "1.234,56"
     }
     return parseFloat(s.replace(/,/g, '')); // "1,234.56"
   }
-  // solo coma → decimal con coma
-  if (s.includes(',') && !s.includes('.')) {
-    return parseFloat(s.replace(',', '.'));
-  }
-  // solo punto o sin separadores
+  if (s.includes(',') && !s.includes('.')) return parseFloat(s.replace(',', '.'));
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : 0;
 }
@@ -82,7 +77,6 @@ function ItemEditModal({ open, onClose, line, onSaved }) {
 
   async function handleSave() {
     if (!line) return;
-
     const cleanQty = parseNumLocale(qty);
     const cleanPrice = parseNumLocale(price);
 
@@ -315,16 +309,44 @@ function ProductLine({ line, onEdit }) {
 }
 
 function CommCard({ c, onDelete }) {
-  const isUnread = String(c.unread) === 'true';
+  const [expanded, setExpanded] = useState(false);
+  const [unread, setUnread] = useState(String(c.unread) === 'true');
+
+  const content = c.content || c.preview || '';
+  const LIMIT = 220;
+  const needsToggle = content.length > LIMIT;
+  const visible = expanded ? content : content.slice(0, LIMIT);
+
+  async function markReadIfNeeded() {
+    if (!unread) return;
+    setUnread(false); // optimista
+    try {
+      const row =
+        c.id
+          ? { id: c.id, unread: false }
+          : { created_date: c.created_date, subject: c.subject, unread: false };
+      await postJSON(`${API_BASE}?route=write&action=update&name=communications`, { row });
+    } catch {
+      // si falla, no interrumpimos la UX
+    }
+  }
+
+  async function onToggle() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next) await markReadIfNeeded();
+  }
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
+      {/* Encabezado */}
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2">
             <div className="text-base font-semibold text-slate-800">
               {c.subject || '(no subject)'}
             </div>
-            {isUnread && <Badge className="bg-amber-100 text-amber-700">Unread</Badge>}
+            {unread && <Badge className="bg-amber-100 text-amber-700">Unread</Badge>}
             {c.linked_type ? (
               <Badge className="bg-blue-50 text-blue-700">{c.linked_type}</Badge>
             ) : null}
@@ -336,8 +358,18 @@ function CommCard({ c, onDelete }) {
         <div className="text-xs text-slate-500">{formatDate(c.created_date)}</div>
       </div>
 
+      {/* Contenido con Show more/less */}
       <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700">
-        {c.content || c.preview || ''}
+        {visible}
+        {(!expanded && needsToggle) ? '… ' : ' '}
+        {needsToggle && (
+          <button
+            className="text-violet-700 underline underline-offset-2"
+            onClick={onToggle}
+          >
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
       </div>
 
       <div className="mt-3 text-xs text-slate-500">
@@ -386,7 +418,6 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
     if (!po) return;
     setLoading(true);
     try {
-      // 1) purchase_orders de este PO (y oci si viene)
       const poURL = `${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(
         po
       )}${oci ? `&oci=${encodeURIComponent(oci)}` : ''}`;
@@ -397,14 +428,12 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
             po
           )}&order=desc`
         ),
-        // masters (tolerantes a que no existan)
         fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`).catch(() => ({
           rows: [],
         })),
         fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`).catch(() => ({
           rows: [],
         })),
-        // imports (si hay oci o po)
         fetchJSON(
           `${API_BASE}?route=table&name=imports${po ? `&po=${encodeURIComponent(po)}` : ''}${
             oci ? `&oci=${encodeURIComponent(oci)}` : ''
@@ -428,7 +457,6 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
         created_date: first.created_date || seed?.created_date || '',
       });
 
-      // Map master (product name + pack)
       const master = new Map();
       for (const m of (pm1.rows || []).concat(pm2.rows || [])) {
         const key = String(m.presentation_code || m.product_code || m.code || '').trim();
@@ -439,10 +467,8 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
         });
       }
 
-      // import principal (primera fila relevante)
       const importRow = (importsRes.rows || [])[0] || null;
 
-      // import_items → sumatoria por code
       const importedMap = new Map();
       for (const it of importItemsRes.rows || []) {
         const code = String(it.presentation_code || '').trim();
@@ -451,7 +477,6 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
         importedMap.set(code, (importedMap.get(code) || 0) + qty);
       }
 
-      // Consolidar líneas por presentation_code
       const linesMap = new Map();
       for (const r of rowsPO) {
         const code = String(r.presentation_code || '').trim();
@@ -478,7 +503,6 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
       }
       setLines(Array.from(linesMap.values()));
 
-      // communications
       setComms(commRes.rows || []);
     } finally {
       setLoading(false);
@@ -489,7 +513,6 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
     if (open) loadAll().catch(console.error);
   }, [open, loadAll]);
 
-  // estados/acciones para modales
   const [editLine, setEditLine] = useState(null);
   const [showComm, setShowComm] = useState(false);
 
@@ -513,7 +536,7 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
           <div className="text-sm text-slate-500">Created: {formatDate(header.created_date)}</div>
         </div>
 
-        {/* Tabs propios */}
+        {/* Tabs */}
         <Tabs>
           <Tab title="Items">
             <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-3">
