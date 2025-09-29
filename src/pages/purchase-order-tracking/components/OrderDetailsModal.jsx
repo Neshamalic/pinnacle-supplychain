@@ -11,7 +11,6 @@ import {
 } from '../../../lib/utils';
 
 /* ───────── helpers locales ───────── */
-// Convierte números con coma/punto y miles: "1.234,56" -> 1234.56, "1,234.56" -> 1234.56, "1,14" -> 1.14
 function parseNumLocale(v) {
   if (v == null || v === '') return 0;
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -321,24 +320,31 @@ function CommCard({ c, onDelete }) {
     if (!unread) return;
     setUnread(false); // optimista
     try {
-      const row =
-        c.id
-          ? { id: c.id, unread: false }
-          : { created_date: c.created_date, subject: c.subject, unread: false };
+      const row = c.id
+        ? { id: c.id, unread: false }
+        : { created_date: c.created_date, subject: c.subject, unread: false };
       await postJSON(`${API_BASE}?route=write&action=update&name=communications`, { row });
     } catch {
-      // si falla, no interrumpimos la UX
+      // no interrumpimos la UX si falla
     }
   }
 
-  async function onToggle() {
+  async function onToggle(e) {
+    e.stopPropagation();
     const next = !expanded;
     setExpanded(next);
     if (next) await markReadIfNeeded();
   }
 
+  async function handleCardClick() {
+    await markReadIfNeeded(); // marcar como leído al hacer clic en cualquier parte
+  }
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
+    <div
+      className="rounded-xl border border-slate-200 bg-white p-4 cursor-pointer"
+      onClick={handleCardClick}
+    >
       {/* Encabezado */}
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -379,7 +385,10 @@ function CommCard({ c, onDelete }) {
       <div className="mt-3">
         <button
           className="rounded-lg bg-rose-600 px-3 py-1.5 text-white hover:bg-rose-700"
-          onClick={() => onDelete(c)}
+          onClick={(e) => {
+            e.stopPropagation(); // no dispare el "mark read" extra
+            onDelete(c);
+          }}
         >
           Delete
         </button>
@@ -398,7 +407,6 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
   const po = String(seed?.po_number || '').trim();
   const oci = String(seed?.oci_number || '').trim();
 
-  // Título “limpio”: OCI-xxx / PO-xxx (solo una vez)
   const headerTitle = useMemo(() => {
     const a = oci ? `OCI-${oci.replace(/^OCI-?/i, '')}` : '';
     const b = po ? `PO-${po.replace(/^PO-?/i, '')}` : '';
@@ -528,7 +536,6 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4">
       <div className="mx-auto w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-xl">
-        {/* Header: SOLO una vez “OCI-xxx / PO-xxx” */}
         <div className="flex items-center justify-between border-b px-5 py-4">
           <div className="text-xl font-semibold text-slate-900">
             Order Details — {headerTitle}
@@ -536,7 +543,6 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
           <div className="text-sm text-slate-500">Created: {formatDate(header.created_date)}</div>
         </div>
 
-        {/* Tabs */}
         <Tabs>
           <Tab title="Items">
             <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-3">
