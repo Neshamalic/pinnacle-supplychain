@@ -1,6 +1,36 @@
 // src/pages/purchase-order-tracking/components/OrderDetailsModal.jsx
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { API_BASE, fetchJSON, postJSON, formatCurrency, formatDate, formatNumber, badgeClass } from '../../../lib/utils';
+import {
+  API_BASE,
+  fetchJSON,
+  postJSON,
+  formatCurrency,
+  formatDate,
+  formatNumber,
+  badgeClass,
+} from '../../../lib/utils';
+
+/* ───────── helpers locales ───────── */
+// Convierte números con coma/punto y miles: "1.234,56" -> 1234.56, "1,234.56" -> 1234.56, "1,14" -> 1.14
+function parseNumLocale(v) {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const s = String(v).trim();
+  // tiene punto y coma → decidir decimal por el separador más a la derecha
+  if (s.includes('.') && s.includes(',')) {
+    if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
+      return parseFloat(s.replace(/\./g, '').replace(',', '.')); // "1.234,56"
+    }
+    return parseFloat(s.replace(/,/g, '')); // "1,234.56"
+  }
+  // solo coma → decimal con coma
+  if (s.includes(',') && !s.includes('.')) {
+    return parseFloat(s.replace(',', '.'));
+  }
+  // solo punto o sin separadores
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+}
 
 /* ───────── UI helpers ───────── */
 function Modal({ open, onClose, children, title }) {
@@ -10,7 +40,13 @@ function Modal({ open, onClose, children, title }) {
       <div className="relative mx-auto w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b px-5 py-4">
           <div className="text-lg font-semibold text-slate-900">{title}</div>
-          <button onClick={onClose} className="rounded-full p-2 text-slate-500 hover:bg-slate-100" aria-label="Close">×</button>
+          <button
+            onClick={onClose}
+            className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
+            aria-label="Close"
+          >
+            ×
+          </button>
         </div>
         <div className="p-5">{children}</div>
       </div>
@@ -19,7 +55,11 @@ function Modal({ open, onClose, children, title }) {
 }
 
 function Badge({ children, className = '' }) {
-  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>{children}</span>;
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>
+      {children}
+    </span>
+  );
 }
 function InfoTile({ label, value }) {
   return (
@@ -32,22 +72,26 @@ function InfoTile({ label, value }) {
 
 /* ───────── Modal: editar línea (price + qty) ───────── */
 function ItemEditModal({ open, onClose, line, onSaved }) {
-  const [qty, setQty] = useState(0);
-  const [price, setPrice] = useState(0);
+  const [qty, setQty] = useState('');
+  const [price, setPrice] = useState('');
 
   useEffect(() => {
-    setQty(line?.total_qty ?? 0);
-    setPrice(line?.cost_usd ?? 0);
+    setQty(line?.total_qty ?? '');
+    setPrice(line?.cost_usd ?? '');
   }, [line]);
 
   async function handleSave() {
     if (!line) return;
+
+    const cleanQty = parseNumLocale(qty);
+    const cleanPrice = parseNumLocale(price);
+
     await postJSON(`${API_BASE}?route=write&action=update&name=purchase_orders`, {
       row: {
         po_number: line.po_number,
         presentation_code: line.presentation_code,
-        total_qty: Number(String(qty).replace(/\./g, '').replace(',', '.')),
-        cost_usd: Number(String(price).replace(/\./g, '').replace(',', '.')),
+        total_qty: cleanQty,
+        cost_usd: cleanPrice,
       },
     });
     onSaved?.();
@@ -55,21 +99,44 @@ function ItemEditModal({ open, onClose, line, onSaved }) {
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={`Edit item — ${line?.product_name || line?.presentation_code || ''}`}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Edit item — ${line?.product_name || line?.presentation_code || ''}`}
+    >
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1">
           <span className="text-sm text-slate-600">Total qty (requested)</span>
-          <input type="number" min={0} value={qty} onChange={(e)=>setQty(e.target.value)} className="rounded-lg border p-2" />
+          <input
+            inputMode="decimal"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            className="rounded-lg border p-2"
+            placeholder="Ej: 4.560"
+          />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-sm text-slate-600">Unit price (USD)</span>
-          <input type="number" step="0.0001" min={0} value={price} onChange={(e)=>setPrice(e.target.value)} className="rounded-lg border p-2" />
+          <input
+            inputMode="decimal"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            className="rounded-lg border p-2"
+            placeholder="Ej: 1,14"
+          />
         </label>
       </div>
 
       <div className="mt-6 flex justify-end gap-2">
-        <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
-        <button onClick={handleSave} className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">Save</button>
+        <button onClick={onClose} className="rounded-lg border px-4 py-2">
+          Cancel
+        </button>
+        <button
+          onClick={handleSave}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
+        >
+          Save
+        </button>
       </div>
     </Modal>
   );
@@ -92,8 +159,14 @@ function CommunicationModal({ open, onClose, defaultLinked, onSaved }) {
   async function handleSave() {
     await postJSON(`${API_BASE}?route=write&name=communications&action=create`, {
       row: {
-        type, subject, participants, linked_type: linkedType, linked_id: linkedId, content,
-        unread: 'true', created_date: new Date().toISOString(),
+        type,
+        subject,
+        participants,
+        linked_type: linkedType,
+        linked_id: linkedId,
+        content,
+        unread: 'true',
+        created_date: new Date().toISOString(),
       },
     });
     onSaved?.();
@@ -106,7 +179,11 @@ function CommunicationModal({ open, onClose, defaultLinked, onSaved }) {
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1">
             <span className="text-sm text-slate-600">Type</span>
-            <select value={type} onChange={(e)=>setType(e.target.value)} className="rounded-lg border p-2">
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              className="rounded-lg border p-2"
+            >
               <option value="meeting">Meeting</option>
               <option value="mail">Mail</option>
               <option value="call">Call</option>
@@ -116,19 +193,33 @@ function CommunicationModal({ open, onClose, defaultLinked, onSaved }) {
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-sm text-slate-600">Participants</span>
-            <input value={participants} onChange={(e)=>setParticipants(e.target.value)} placeholder="Name1@…, Name2@…" className="rounded-lg border p-2" />
+            <input
+              value={participants}
+              onChange={(e) => setParticipants(e.target.value)}
+              placeholder="Name1@…, Name2@…"
+              className="rounded-lg border p-2"
+            />
           </label>
         </div>
 
         <label className="flex flex-col gap-1">
           <span className="text-sm text-slate-600">Subject</span>
-          <input value={subject} onChange={(e)=>setSubject(e.target.value)} placeholder="Ej: Weekly review – Q4 tenders" className="rounded-lg border p-2" />
+          <input
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="Ej: Weekly review – Q4 tenders"
+            className="rounded-lg border p-2"
+          />
         </label>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1">
             <span className="text-sm text-slate-600">Linked Type</span>
-            <select value={linkedType} onChange={(e)=>setLinkedType(e.target.value)} className="rounded-lg border p-2">
+            <select
+              value={linkedType}
+              onChange={(e) => setLinkedType(e.target.value)}
+              className="rounded-lg border p-2"
+            >
               <option value="orders">Orders</option>
               <option value="imports">Imports</option>
               <option value="tender">Tender</option>
@@ -136,19 +227,37 @@ function CommunicationModal({ open, onClose, defaultLinked, onSaved }) {
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-sm text-slate-600">Linked ID</span>
-            <input value={linkedId} onChange={(e)=>setLinkedId(e.target.value)} placeholder="PO-xxx / OCI-… / Tender id" className="rounded-lg border p-2" />
+            <input
+              value={linkedId}
+              onChange={(e) => setLinkedId(e.target.value)}
+              placeholder="PO-xxx / OCI-… / Tender id"
+              className="rounded-lg border p-2"
+            />
           </label>
         </div>
 
         <label className="flex flex-col gap-1">
           <span className="text-sm text-slate-600">Content</span>
-          <textarea rows={6} value={content} onChange={(e)=>setContent(e.target.value)} className="w-full rounded-lg border p-2" placeholder="Escribe la nota, resumen de reunión, correo, etc." />
+          <textarea
+            rows={6}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            className="w-full rounded-lg border p-2"
+            placeholder="Escribe la nota, resumen de reunión, correo, etc."
+          />
         </label>
       </div>
 
       <div className="mt-6 flex justify-end gap-2">
-        <button onClick={onClose} className="rounded-lg border px-4 py-2">Cancel</button>
-        <button onClick={handleSave} className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">Save</button>
+        <button onClick={onClose} className="rounded-lg border px-4 py-2">
+          Cancel
+        </button>
+        <button
+          onClick={handleSave}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
+        >
+          Save
+        </button>
       </div>
     </Modal>
   );
@@ -170,17 +279,29 @@ function ProductLine({ line, onEdit }) {
             {line.product_name || line.presentation_code}
           </div>
           <div className="text-xs text-slate-500">
-            Code: {line.presentation_code}{line.package_units ? ` • ${formatNumber(line.package_units)} units/pack` : ''}
+            Code: {line.presentation_code}
+            {line.package_units ? ` • ${formatNumber(line.package_units)} units/pack` : ''}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            {line.import_status ? <Badge className="bg-emerald-50 text-emerald-700">{line.import_status}</Badge> : null}
+            {line.import_status ? (
+              <Badge className="bg-emerald-50 text-emerald-700">{line.import_status}</Badge>
+            ) : null}
             {line.transport_type ? <Badge className={transportCls}>{line.transport_type}</Badge> : null}
-            {line.oci_number ? <Badge className="bg-indigo-50 text-indigo-700">OCI {line.oci_number}</Badge> : null}
+            {line.oci_number ? (
+              <Badge className="bg-indigo-50 text-indigo-700">OCI {line.oci_number}</Badge>
+            ) : null}
           </div>
         </div>
         <div className="shrink-0 text-right">
-          <div className="text-sm text-slate-500">{formatCurrency(price)} <span className="text-xs">/ unit</span></div>
-          <button className="mt-2 rounded-lg border px-3 py-1.5 text-slate-700 hover:bg-slate-50" onClick={()=>onEdit(line)}>Edit</button>
+          <div className="text-sm text-slate-500">
+            {formatCurrency(price)} <span className="text-xs">/ unit</span>
+          </div>
+          <button
+            className="mt-2 rounded-lg border px-3 py-1.5 text-slate-700 hover:bg-slate-50"
+            onClick={() => onEdit(line)}
+          >
+            Edit
+          </button>
         </div>
       </div>
 
@@ -200,15 +321,21 @@ function CommCard({ c, onDelete }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2">
-            <div className="text-base font-semibold text-slate-800">{c.subject || '(no subject)'}</div>
+            <div className="text-base font-semibold text-slate-800">
+              {c.subject || '(no subject)'}
+            </div>
             {isUnread && <Badge className="bg-amber-100 text-amber-700">Unread</Badge>}
+            {c.linked_type ? (
+              <Badge className="bg-blue-50 text-blue-700">{c.linked_type}</Badge>
+            ) : null}
           </div>
-          <div className="text-xs text-slate-500">{(c.type || '').toLowerCase()} • {c.participants || ''}</div>
+          <div className="text-xs text-slate-500">
+            {(c.type || '').toLowerCase()} • {c.participants || ''}
+          </div>
         </div>
         <div className="text-xs text-slate-500">{formatDate(c.created_date)}</div>
       </div>
 
-      {/* aquí forzamos los saltos de línea y el “wrap” */}
       <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700">
         {c.content || c.preview || ''}
       </div>
@@ -218,7 +345,12 @@ function CommCard({ c, onDelete }) {
       </div>
 
       <div className="mt-3">
-        <button className="rounded-lg bg-rose-600 px-3 py-1.5 text-white hover:bg-rose-700" onClick={()=>onDelete(c)}>Delete</button>
+        <button
+          className="rounded-lg bg-rose-600 px-3 py-1.5 text-white hover:bg-rose-700"
+          onClick={() => onDelete(c)}
+        >
+          Delete
+        </button>
       </div>
     </div>
   );
@@ -227,62 +359,99 @@ function CommCard({ c, onDelete }) {
 /* ───────── Componente principal ───────── */
 export default function OrderDetailsModal({ open, onClose, seed }) {
   const [loading, setLoading] = useState(false);
-  const [header, setHeader]   = useState({ po_number: '', oci_number: '', created_date: '' });
-  const [lines, setLines]     = useState([]);
-  const [comms, setComms]     = useState([]);
+  const [header, setHeader] = useState({ po_number: '', oci_number: '', created_date: '' });
+  const [lines, setLines] = useState([]);
+  const [comms, setComms] = useState([]);
 
-  const po  = String(seed?.po_number || '').trim();
+  const po = String(seed?.po_number || '').trim();
   const oci = String(seed?.oci_number || '').trim();
 
   // Título “limpio”: OCI-xxx / PO-xxx (solo una vez)
   const headerTitle = useMemo(() => {
     const a = oci ? `OCI-${oci.replace(/^OCI-?/i, '')}` : '';
-    const b = po  ? `PO-${po.replace(/^PO-?/i, '')}`   : '';
+    const b = po ? `PO-${po.replace(/^PO-?/i, '')}` : '';
     return [a, b].filter(Boolean).join(' / ');
   }, [po, oci]);
 
-  const totalUSD = useMemo(() => lines.reduce((acc, l) => acc + Number(l.cost_usd || 0) * Number(l.total_qty || 0), 0), [lines]);
+  const totalUSD = useMemo(
+    () =>
+      lines.reduce(
+        (acc, l) => acc + Number(l.cost_usd || 0) * Number(l.total_qty || 0),
+        0
+      ),
+    [lines]
+  );
 
   const loadAll = useCallback(async () => {
     if (!po) return;
     setLoading(true);
     try {
-      // 1) purchase_orders (backend ya acepta filtros)
-      const poRes  = await fetchJSON(`${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(po)}${oci ? `&oci=${encodeURIComponent(oci)}` : ''}`);
-      const rowsPO = (poRes.rows || []).filter(r => String(r.po_number || '').trim() === po);
-      const first  = rowsPO[0] || seed || {};
-      setHeader({ po_number: po, oci_number: first.oci_number || oci || '', created_date: first.created_date || seed?.created_date || '' });
+      // 1) purchase_orders de este PO (y oci si viene)
+      const poURL = `${API_BASE}?route=table&name=purchase_orders&po=${encodeURIComponent(
+        po
+      )}${oci ? `&oci=${encodeURIComponent(oci)}` : ''}`;
+      const [poRes, commRes, pm1, pm2, importsRes, importItemsRes] = await Promise.all([
+        fetchJSON(poURL),
+        fetchJSON(
+          `${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(
+            po
+          )}&order=desc`
+        ),
+        // masters (tolerantes a que no existan)
+        fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`).catch(() => ({
+          rows: [],
+        })),
+        fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`).catch(() => ({
+          rows: [],
+        })),
+        // imports (si hay oci o po)
+        fetchJSON(
+          `${API_BASE}?route=table&name=imports${po ? `&po=${encodeURIComponent(po)}` : ''}${
+            oci ? `&oci=${encodeURIComponent(oci)}` : ''
+          }`
+        ).catch(() => ({ rows: [] })),
+        fetchJSON(
+          `${API_BASE}?route=table&name=import_items${po ? `&po=${encodeURIComponent(po)}` : ''}${
+            oci ? `&oci=${encodeURIComponent(oci)}` : ''
+          }`
+        ).catch(() => ({ rows: [] })),
+      ]);
 
+      const rowsPO = (poRes.rows || []).filter(
+        (r) => String(r.po_number || '').trim() === po
+      );
+      const first = rowsPO[0] || seed || {};
       const ociNow = (first.oci_number || oci || '').trim();
+      setHeader({
+        po_number: po,
+        oci_number: ociNow,
+        created_date: first.created_date || seed?.created_date || '',
+      });
 
-      // 2) master (nombre y pack)
-      const pm1 = await fetchJSON(`${API_BASE}?route=table&name=product_presentation_master`).catch(()=>({rows:[]}));
-      const pm2 = await fetchJSON(`${API_BASE}?route=table&name=producto_presentation_master`).catch(()=>({rows:[]}));
+      // Map master (product name + pack)
       const master = new Map();
-      for (const m of (pm1.rows||[]).concat(pm2.rows||[])) {
+      for (const m of (pm1.rows || []).concat(pm2.rows || [])) {
         const key = String(m.presentation_code || m.product_code || m.code || '').trim();
         if (!key) continue;
-        master.set(key, { product_name: m.product_name || m.name || '', package_units: Number(m.package_units || m.units_per_package || m.units || 0) });
+        master.set(key, {
+          product_name: m.product_name || m.name || '',
+          package_units: Number(m.package_units || m.units_per_package || m.units || 0),
+        });
       }
 
-      // 3) imports (estado + transporte)
-      let importRow = null;
-      if (ociNow || po) {
-        const impRes = await fetchJSON(`${API_BASE}?route=table&name=imports${po ? `&po=${encodeURIComponent(po)}` : ''}${ociNow ? `&oci=${encodeURIComponent(ociNow)}` : ''}`);
-        importRow = (impRes.rows || [])[0] || null;
-      }
+      // import principal (primera fila relevante)
+      const importRow = (importsRes.rows || [])[0] || null;
 
-      // 4) import_items: sumatorias por presentation_code
-      const iiRes = await fetchJSON(`${API_BASE}?route=table&name=import_items${po ? `&po=${encodeURIComponent(po)}` : ''}${ociNow ? `&oci=${encodeURIComponent(ociNow)}` : ''}`);
+      // import_items → sumatoria por code
       const importedMap = new Map();
-      for (const it of (iiRes.rows || [])) {
+      for (const it of importItemsRes.rows || []) {
         const code = String(it.presentation_code || '').trim();
-        const qty  = Number(it.qty || it.quantity || 0);
+        const qty = Number(it.qty || it.quantity || 0);
         if (!code) continue;
         importedMap.set(code, (importedMap.get(code) || 0) + qty);
       }
 
-      // 5) Consolidar líneas por presentation_code
+      // Consolidar líneas por presentation_code
       const linesMap = new Map();
       for (const r of rowsPO) {
         const code = String(r.presentation_code || '').trim();
@@ -309,15 +478,16 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
       }
       setLines(Array.from(linesMap.values()));
 
-      // 6) communications
-      const commRes = await fetchJSON(`${API_BASE}?route=table&name=communications&lt=orders&lid=${encodeURIComponent(po)}&order=desc`);
+      // communications
       setComms(commRes.rows || []);
     } finally {
       setLoading(false);
     }
   }, [po, oci, seed]);
 
-  useEffect(() => { if (open) loadAll().catch(console.error); }, [open, loadAll]);
+  useEffect(() => {
+    if (open) loadAll().catch(console.error);
+  }, [open, loadAll]);
 
   // estados/acciones para modales
   const [editLine, setEditLine] = useState(null);
@@ -337,7 +507,9 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
       <div className="mx-auto w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-xl">
         {/* Header: SOLO una vez “OCI-xxx / PO-xxx” */}
         <div className="flex items-center justify-between border-b px-5 py-4">
-          <div className="text-xl font-semibold text-slate-900">Order Details — {headerTitle}</div>
+          <div className="text-xl font-semibold text-slate-900">
+            Order Details — {headerTitle}
+          </div>
           <div className="text-sm text-slate-500">Created: {formatDate(header.created_date)}</div>
         </div>
 
@@ -353,8 +525,14 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
             <div className="px-5 pb-5">
               <div className="mb-2 text-sm font-medium text-slate-700">Products</div>
               <div className="grid grid-cols-1 gap-4">
-                {lines.map(l => <ProductLine key={l.presentation_code} line={l} onEdit={setEditLine} />)}
-                {lines.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">No items found.</div>}
+                {lines.map((l) => (
+                  <ProductLine key={l.presentation_code} line={l} onEdit={setEditLine} />
+                ))}
+                {lines.length === 0 && (
+                  <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">
+                    No items found.
+                  </div>
+                )}
               </div>
             </div>
           </Tab>
@@ -362,20 +540,43 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
           <Tab title="Communications">
             <div className="flex items-center justify-between px-5 pt-5">
               <div className="text-sm text-slate-600">
-                Linked to <b>Orders</b> • <b>{po}</b>{header.oci_number ? <> — <b>Imports</b> • <b>{header.oci_number}</b></> : null}
+                Linked to <b>Orders</b> • <b>{po}</b>
+                {header.oci_number ? (
+                  <>
+                    {' '}
+                    — <b>Imports</b> • <b>{header.oci_number}</b>
+                  </>
+                ) : null}
               </div>
-              <button className="rounded-lg bg-violet-600 px-3 py-1.5 text-white hover:bg-violet-700" onClick={()=>setShowComm(true)}>+ Add</button>
+              <button
+                className="rounded-lg bg-violet-600 px-3 py-1.5 text-white hover:bg-violet-700"
+                onClick={() => setShowComm(true)}
+              >
+                + Add
+              </button>
             </div>
 
             <div className="grid gap-4 p-5">
-              {comms.map(c => <CommCard key={c.id || c._virtual_id || `${c.created_date}::${c.subject}`} c={c} onDelete={handleDeleteComm} />)}
-              {comms.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">No communications for this PO.</div>}
+              {comms.map((c, i) => (
+                <CommCard
+                  key={c.id || c._virtual_id || c.created_date || `comm-${i}`}
+                  c={c}
+                  onDelete={handleDeleteComm}
+                />
+              ))}
+              {comms.length === 0 && (
+                <div className="rounded-lg border border-dashed p-8 text-center text-slate-500">
+                  No communications for this PO.
+                </div>
+              )}
             </div>
           </Tab>
         </Tabs>
 
         <div className="flex items-center justify-end gap-2 border-t px-5 py-3">
-          <button className="rounded-lg border px-4 py-2" onClick={onClose}>Close</button>
+          <button className="rounded-lg border px-4 py-2" onClick={onClose}>
+            Close
+          </button>
         </div>
 
         {loading && (
@@ -386,8 +587,18 @@ export default function OrderDetailsModal({ open, onClose, seed }) {
       </div>
 
       {/* Modales secundarios */}
-      <ItemEditModal open={!!editLine} onClose={()=>setEditLine(null)} line={editLine} onSaved={loadAll} />
-      <CommunicationModal open={showComm} onClose={()=>setShowComm(false)} defaultLinked={{ type: 'orders', id: po }} onSaved={loadAll} />
+      <ItemEditModal
+        open={!!editLine}
+        onClose={() => setEditLine(null)}
+        line={editLine}
+        onSaved={loadAll}
+      />
+      <CommunicationModal
+        open={showComm}
+        onClose={() => setShowComm(false)}
+        defaultLinked={{ type: 'orders', id: po }}
+        onSaved={loadAll}
+      />
     </div>
   );
 }
@@ -400,7 +611,15 @@ function Tabs({ children }) {
     <>
       <div className="flex gap-6 border-b px-5 pt-3">
         {items.map((c, i) => (
-          <button key={i} onClick={() => setIdx(i)} className={`-mb-px border-b-2 px-1.5 py-2 text-sm ${i === idx ? 'border-violet-600 text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+          <button
+            key={i}
+            onClick={() => setIdx(i)}
+            className={`-mb-px border-b-2 px-1.5 py-2 text-sm ${
+              i === idx
+                ? 'border-violet-600 text-violet-700'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
             {c.props.title}
           </button>
         ))}
@@ -409,4 +628,6 @@ function Tabs({ children }) {
     </>
   );
 }
-function Tab({ children }) { return children; }
+function Tab({ children }) {
+  return children;
+}
