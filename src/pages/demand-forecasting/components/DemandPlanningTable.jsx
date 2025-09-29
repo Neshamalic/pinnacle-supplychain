@@ -48,8 +48,26 @@ function formatDate(d) {
 async function readTable(name) {
   const url = `${BASE_URL}?route=table&name=${encodeURIComponent(name)}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Error leyendo ${name}: ${res.status}`);
-  return await res.json();
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Error leyendo ${name}: ${res.status}`);
+  }
+  // Intenta parsear JSON; si no es JSON válido, devuelve [] para evitar errores de iteración
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // puede ser HTML (captcha) u otro texto
+    return [];
+  }
+  // Si el backend avisa error en JSON (ok:false), levanta la excepción con el detalle
+  if (data && typeof data === 'object' && data.ok === false) {
+    throw new Error(data.error || `Backend devolvió ok:false para ${name}`);
+  }
+  // Normaliza a arreglo
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.values)) return data.values; // fallback por si el backend usa {values: []}
+  return [];
 }
 
 // ========================= Reglas de negocio =========================
@@ -65,7 +83,7 @@ function coverageStatus(months) {
 function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importItems }) {
   // Catálogo por código
   const catByCode = new Map();
-  for (const c of catalog || []) {
+  for (const c of (Array.isArray(catalog) ? catalog : [])) {
     const code = String(c.presentation_code || "").trim();
     if (!code) continue;
     catByCode.set(code, {
@@ -76,7 +94,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
 
   // Stock por código desde hoja demand
   const stockByCode = new Map();
-  for (const d of demandSheet || []) {
+  for (const d of (Array.isArray(demandSheet) ? demandSheet : [])) {
     const code = String(d.presentation_code || d.presentationCode || "").trim();
     if (!code) continue;
     const stock = Number(d.current_stock_units || d.currentStockUnits || 0);
@@ -85,7 +103,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
 
   // Demanda mensual por tender_items (meses calendario exactos)
   const monthlyDemandByCode = new Map();
-  for (const ti of tenderItems || []) {
+  for (const ti of (Array.isArray(tenderItems) ? tenderItems : [])) {
     const code = String(ti.presentation_code || ti.presentationCode || "").trim();
     if (!code) continue;
     const awarded = Number(ti.awarded_qty || 0);
@@ -98,14 +116,14 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
 
   // Encabezados de importaciones por OCI
   const headerByOCI = new Map();
-  for (const h of importHeaders || []) {
+  for (const h of (Array.isArray(importHeaders) ? importHeaders : [])) {
     if (!h.oci_number) continue;
     headerByOCI.set(String(h.oci_number), h);
   }
 
   // Tránsito detallado por código (case-insensitive)
   const transitByCode = new Map(); // code => [{oci, qty, eta}, ...]
-  for (const ii of importItems || []) {
+  for (const ii of (Array.isArray(importItems) ? importItems : [])) {
     const oci = String(ii.oci_number || "").trim();
     const head = headerByOCI.get(oci);
     if (!head) continue;
@@ -357,3 +375,4 @@ function runDevTests() {
     console.warn("Tests (dev) fallaron:", e);
   }
 }
+
