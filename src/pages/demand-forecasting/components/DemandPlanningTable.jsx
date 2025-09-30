@@ -23,6 +23,13 @@ function addMonthsApprox(base,monthsFloat){const ms=monthsFloat*30.437*24*60*60*
 function formatDate(d){const yyyy=d.getFullYear();const mm=String(d.getMonth()+1).padStart(2,"0");const dd=String(d.getDate()).padStart(2,"0");return `${yyyy}-${mm}-${dd}`}
 function coverageStatus(months){if(!isFinite(months)||months<=0)return"Critical";if(months<2)return"Critical";if(months<=4)return"Urgent";if(months<=6)return"Normal";return"Optimal"}
 
+/* yyyy-mm de una fecha */
+function ymOf(dateObj){
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth()+1).padStart(2,"0");
+  return `${y}-${m}`;
+}
+
 /* ========================= GAS ========================= */
 async function readTable(name){
   const url = `${GAS_BASE}?route=table&name=${encodeURIComponent(name)}`;
@@ -168,7 +175,7 @@ function buildRows({ catalog, demandSheet, tenderItems, importHeaders, importIte
 
     return {
       presentation_code: normCode,                                // normalizado
-      product_code: displayCodeByCode.get(normCode)||normCode,    // como venía en demand/tender
+      product_code: (displayCodeByCode.get(normCode)||normCode),  // como venía en demand/tender
       product_name: productName,
       package_units: packageUnits,
       currentStockUnits: stock,
@@ -264,7 +271,16 @@ export default function DemandPlanningTable(){
   ],[]);
 
   function onView(row){ setViewRow(row); }
-  function onUpdateStock(){ alert("El stock proviene de ManagerMas y no es editable desde aquí."); }
+
+  // NUEVO: abrir Sales con code + rango últimos 12 meses
+  function onOpenSales(presentationCode){
+    const now = new Date();
+    const fromDate = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    const fromYM = ymOf(fromDate);
+    const toYM   = ymOf(now);
+    const url = `/sales-analytics?presentation_code=${encodeURIComponent(presentationCode)}&from=${encodeURIComponent(fromYM)}&to=${encodeURIComponent(toYM)}`;
+    window.open(url, "_blank"); // nueva pestaña
+  }
 
   if(loading) return <div className="p-4">Cargando Demand Planning…</div>;
 
@@ -310,7 +326,10 @@ export default function DemandPlanningTable(){
                   <td className="px-3 py-2">
                     <div className="flex gap-2">
                       <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={()=>onView(r)}>View</button>
-                      <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={onUpdateStock}>Update stock</button>
+                      {/* Reemplazo: antes era "Update stock" */}
+                      <button className="px-2 py-1 rounded-xl border hover:bg-gray-50" onClick={()=>onOpenSales(r.presentation_code)}>
+                        Sales
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -402,3 +421,4 @@ function TransitPill({yes}){
 function InfoItem({label,value}){
   return (<div className="flex flex-col"><span className="text-gray-500">{label}</span><span className="font-medium">{value}</span></div>);
 }
+
