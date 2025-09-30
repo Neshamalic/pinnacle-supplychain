@@ -1,4 +1,6 @@
 // api/mm-proxy.js
+// Proxy ManagerMas con fallback Token/Bearer y parser ajustado a saldo_total + stock[].saldo
+
 const MM_BASE = process.env.VITE_MM_BASE || "https://pinnacle.managermas.cl/api/stock";
 const MM_RUT  = process.env.VITE_MM_RUT  || "77091384-5";
 const TOKEN   = process.env.MANAGERMAS_TOKEN || "";
@@ -9,6 +11,7 @@ function yyyymmdd(d = new Date()) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}${m}${day}`;
 }
+
 function buildItemUrl(code, dt) {
   const date = dt || yyyymmdd();
   const base = MM_BASE.replace(/\/+$/, "");
@@ -26,19 +29,52 @@ function readNumeric(obj, keys) {
   return NaN;
 }
 
-// Parser robusto (agregué más claves típicas)
+/** 
+ * Parser específico para el formato observado:
+ * body = { retorno: true, data: [ { saldo_total, stock: [ { saldo }, ... ] } ] }
+ * Reglas:
+ *   - si hay saldo_total -> usarlo como total
+ *   - si stock[] existe -> sumar sus saldo y, si es mayor a saldo_total, usar la suma
+ *   - si no existe data[], intentar los nombres genéricos
+ */
 function parseMMStock(data) {
+  // 1) Caso más común observado
+  try {
+    if (data && typeof data === "object" && Array.isArray(data.data)) {
+      let best = 0;
+      for (const item of data.data) {
+        const st = Number(item?.saldo_total ?? 0) || 0;
+
+        let sumStock = 0;
+        if (Array.isArray(item?.stock)) {
+          sumStock = item.stock.reduce((acc, it) => acc + (Number(it?.saldo) || 0), 0);
+        }
+        // preferimos el mayor de ambos por seguridad
+        const total = Math.max(st, sumStock);
+        best += total;
+      }
+      if (best > 0) return Math.round(best);
+    }
+  } catch {}
+
+  // 2) Genérico/robusto (por si cambia el formato)
   const NUM_KEYS = [
-    "stock","stock_total","current_stock_units","quantity","qty",
-    "disponible","saldo","existencia","units","stock_disponible",
-    "stock_total_disponible","on_hand","available"
+    "saldo_total",                              // <- clave nueva detectada
+    "stock","stock_total","current_stock_units",
+    "quantity","qty","disponible","saldo","existencia","units",
+    "stock_disponible","stock_total_disponible","on_hand","available"
   ];
 
+  // número directo
   if (typeof data === "number") return Math.max(0, Math.round(data));
+
+  // array de partidas
   if (Array.isArray(data)) {
     const s = data.reduce((acc, it) => acc + (Number(readNumeric(it, NUM_KEYS)) || 0), 0);
     return Math.max(0, Math.round(s));
   }
+
+  // objeto con posibles arrays internos
   if (data && typeof data === "object") {
     const direct = readNumeric(data, NUM_KEYS);
     if (Number.isFinite(direct)) return Math.max(0, Math.round(direct));
@@ -46,15 +82,26 @@ function parseMMStock(data) {
     for (const k of ["dets","details","items","rows","data","productos","result","results"]) {
       const arr = data[k];
       if (Array.isArray(arr)) {
-        const s = arr.reduce((acc, it) => acc + (Number(readNumeric(it, NUM_KEYS)) || 0), 0);
-        if (s > 0) return Math.max(0, Math.round(s));
+        let total = 0;
+        for (const it of arr) {
+          let v = readNumeric(it, NUM_KEYS);
+          if (!Number.isFinite(v)) v = 0;
+
+          // Si el item tiene sub-array "stock", sumamos sus "saldo"
+          if (Array.isArray(it?.stock)) {
+            const sub = it.stock.reduce((a, s) => a + (Number(s?.saldo) || 0), 0);
+            v = Math.max(v, sub);
+          }
+          total += (Number(v) || 0);
+        }
+        if (total > 0) return Math.round(total);
       }
     }
 
     // búsqueda profunda simple
     try {
       const json = JSON.stringify(data);
-      const matches = json.match(/"(stock|stock_total|current_stock_units|quantity|qty|disponible|saldo|existencia|units|stock_disponible|on_hand|available)"\s*:\s*([0-9.]+)/gi);
+      const matches = json.match(/"(saldo_total|stock|stock_total|current_stock_units|quantity|qty|disponible|saldo|existencia|units|stock_disponible|on_hand|available)"\s*:\s*([0-9.]+)/gi);
       if (matches) {
         const total = matches.reduce((acc, m) => {
           const num = Number(m.split(":")[1]);
@@ -64,10 +111,11 @@ function parseMMStock(data) {
       }
     } catch {}
   }
+
   return 0;
 }
 
-async function fetchMM(url, scheme /* "Token" | "Bearer" */) {
+async function fetchMM(url, scheme) {
   const headers = {};
   if (TOKEN) headers.Authorization = `${scheme} ${TOKEN}`;
   const r = await fetch(url, { method: "GET", headers });
@@ -77,15 +125,13 @@ async function fetchMM(url, scheme /* "Token" | "Bearer" */) {
   return { res: r, bodyText: text, bodyJson: json };
 }
 
-async function fetchOne(code, dt, debug = false) {
+async function fetchOne(code, dt, debug=false) {
   const url = buildItemUrl(code, dt);
 
-  // 1) Intento con "Token"
+  // 1) Token
   let attempt = await fetchMM(url, "Token");
-  if (attempt.res.status === 401) {
-    // 2) Reintento con "Bearer"
-    attempt = await fetchMM(url, "Bearer");
-  }
+  // 2) si 401, probar Bearer
+  if (attempt.res.status === 401) attempt = await fetchMM(url, "Bearer");
 
   const { res, bodyText, bodyJson } = attempt;
   if (!res.ok) {
