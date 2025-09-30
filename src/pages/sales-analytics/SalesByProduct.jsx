@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-/** Helpers */
+function padYM(ym) {
+  // Admite "YYYY-M" o "YYYY-MM" y normaliza a "YYYY-MM"
+  if (!ym) return ym;
+  const [y, m] = String(ym).split("-");
+  if (!y || !m) return ym;
+  return `${y}-${String(Number(m)).padStart(2, "0")}`;
+}
 function ymAdd(months = 0) {
   const d = new Date();
   d.setMonth(d.getMonth() + months);
@@ -16,10 +22,9 @@ function getQueryParam(name) {
 }
 
 export default function SalesByProduct() {
-  // Lee ?presentation_code=&from=&to= si vienen en la URL
   const initialCode = getQueryParam("presentation_code") || "PC00063";
-  const initialFrom = getQueryParam("from") || ymAdd(-11);
-  const initialTo   = getQueryParam("to")   || ymAdd(0);
+  const initialFrom = padYM(getQueryParam("from")) || ymAdd(-11);
+  const initialTo   = padYM(getQueryParam("to"))   || ymAdd(0);
 
   const [presentationCode, setPresentationCode] = useState(initialCode);
   const [fromYM, setFromYM] = useState(initialFrom);
@@ -28,6 +33,7 @@ export default function SalesByProduct() {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
   const [data, setData]       = useState(null);
+  const [debug, setDebug]     = useState(null);
 
   const totalUnits = useMemo(() => {
     if (!data?.series) return 0;
@@ -39,17 +45,30 @@ export default function SalesByProduct() {
       setLoading(true);
       setError(null);
       setData(null);
+      setDebug(null);
+
+      const normFrom = padYM(fromYM);
+      const normTo   = padYM(toYM);
 
       const u = new URL("/api/mm-sales", window.location.origin);
-      // Acepta presentation_code o code; devolvemos presentation_code en JSON
       u.searchParams.set("presentation_code", presentationCode.trim());
-      u.searchParams.set("from", fromYM.trim());
-      u.searchParams.set("to", toYM.trim());
+      u.searchParams.set("from", normFrom);
+      u.searchParams.set("to", normTo);
+      // Enciende debug temporal si necesitas ver qué está respondiendo el backend:
+      // u.searchParams.set("debug", "1");
 
       const r = await fetch(u.toString());
-      const j = await r.json();
-      if (!r.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${r.status}`);
+      const txt = await r.text();
+      let j = null; try { j = JSON.parse(txt); } catch { /* respuesta no JSON */ }
+
+      if (!r.ok || j?.ok === false) {
+        setDebug({ url: u.toString(), status: r.status, body: txt?.slice?.(0, 2000) });
+        throw new Error(j?.error || `HTTP ${r.status}`);
+      }
+
+      // Estructura esperada: { ok:true, presentation_code, from, to, series: [[YYYY-MM, units], ...], _debug? }
       setData(j);
+      if (j?._debug) setDebug(j._debug);
     } catch (e) {
       setError(e?.message || "Error");
     } finally {
@@ -68,7 +87,7 @@ export default function SalesByProduct() {
           presentation_code: data.presentation_code,
           from: data.from,
           to: data.to,
-          series: data.series, // [[YYYY-MM, units], ...]
+          series: data.series,
         }),
       });
       const text = await res.text();
@@ -80,7 +99,6 @@ export default function SalesByProduct() {
     }
   }
 
-  // Buscar automáticamente si llegó ?presentation_code en la URL
   useEffect(() => {
     if (initialCode) fetchSales();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,7 +125,7 @@ export default function SalesByProduct() {
           <input
             className="border rounded-xl px-2 py-1"
             value={fromYM}
-            onChange={e => setFromYM(e.target.value)}
+            onChange={e => setFromYM(padYM(e.target.value))}
             placeholder="2025-01"
             spellCheck="false"
           />
@@ -118,7 +136,7 @@ export default function SalesByProduct() {
           <input
             className="border rounded-xl px-2 py-1"
             value={toYM}
-            onChange={e => setToYM(e.target.value)}
+            onChange={e => setToYM(padYM(e.target.value))}
             placeholder="2025-09"
             spellCheck="false"
           />
@@ -137,7 +155,7 @@ export default function SalesByProduct() {
 
       {loading && <div>Cargando…</div>}
       {error && (
-        <div className="rounded-xl border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
+        <div className="rounded-xl border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800 mb-3">
           {error}
         </div>
       )}
@@ -173,6 +191,12 @@ export default function SalesByProduct() {
             </table>
           </div>
         </div>
+      )}
+
+      {debug && (
+        <pre className="mt-3 p-3 text-xs bg-gray-50 rounded-xl border overflow-auto">
+{JSON.stringify(debug, null, 2)}
+        </pre>
       )}
 
       {!loading && !error && !data && (
