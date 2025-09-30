@@ -5,12 +5,17 @@ const TOKEN = String(process.env.MANAGERMAS_TOKEN || "").replace(/\s+/g,"").trim
 const RUT   = String(process.env.VITE_MM_RUT || "77091384-5").trim();
 
 const VENTAS_CYCLE = "V";
-// Solo los tres tipos que usas:
+// Solo los tipos que usas:
 const DOC_TYPES = [
   { code: "FAVE", sign: +1 },
   { code: "NDVE", sign: +1 },
   { code: "NCVE", sign: -1 },
 ];
+
+// Config de rendimiento/robustez
+const REQUEST_TIMEOUT_MS = 12000; // 12s para endpoints lentos
+const MONTH_CONCURRENCY  = 4;     // 4 meses a la vez
+const RETRIES            = 1;     // reintentar 1 vez si aborta o 5xx
 
 function yearMonthRange(fromYM, toYM) {
   const [fy, fm] = fromYM.split("-").map(Number);
@@ -32,35 +37,85 @@ function monthStartEnd(ym) {
 }
 function ymd(s) { return String(s).replaceAll("-",""); }
 
-async function fetchJsonWithTimeout(url, ms, debugArr) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), ms);
+async function fetchJsonWithTimeout(url, ms, debugArr, attemptLabel) {
   const headers = { "Accept":"application/json" };
   if (TOKEN) headers.Authorization = `Token ${TOKEN}`;
-  try {
-    const r = await fetch(url, { headers, signal: controller.signal });
-    const text = await r.text();
-    let json = null; try { json = JSON.parse(text); } catch {}
-    debugArr && debugArr.push({ url, status: r.status, ok: r.ok, sample: text.slice(0,180) });
-    return { ok: r.ok, status: r.status, json, text };
-  } catch (e) {
-    debugArr && debugArr.push({ url, error: String(e?.name || e?.message || e) });
-    return { ok: false, status: 0, json: null, text: "" };
-  } finally {
-    clearTimeout(t);
-  }
-}
 
-function sumUnits(payload, code, sign) {
-  const data = Array.isArray(payload?.data) ? payload.data : [];
-  let acc = 0;
-  for (const doc of data) {
-    const det = Array.isArray(doc?.detalle) ? doc.detalle : [];
-    for (const it of det) {
-      const cod = String(it?.cod_prod || it?.codigo || "").trim();
-      if (cod === code) acc += sign * (Number(it?.cantidad || it?.qty || 0) || 0);
+  let last;
+  for (let k = 0; k <= RETRIES; k++) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), ms);
+    try {
+      const r = await fetch(url, { headers, signal: controller.signal });
+      const text = await r.text();
+      let json = null; try { json = JSON.parse(text); } catch {}
+      last = { ok: r.ok, status: r.status, json, text, aborted: false };
+      if (debugArr) debugArr.push({ url, status: r.status, ok: r.ok, sample: text.slice(0,180), attempt: k, label: attemptLabel });
+      if (r.ok) return last; // éxito, salimos
+      // Si es 5xx, reintenta una vez
+      if (r.status >= 500 && k < RETRIES) continue;
+      return last;
+    } catch (e) {
+      last = { ok: false, status: 0, json: null, text: "", aborted: (e?.name === "AbortError") };
+      if (debugArr) debugArr.push({ url, error: String(e?.name || e?.message || e), attempt: k, label: attemptLabel });
+      if (k < RETRIES) continue; // reintento
+      return last;
+    } finally {
+      clearTimeout(t);
     }
   }
+  return last;
+}
+
+function firstExisting(obj, keys, fallback) {
+  for (const k of keys) {
+    if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+  }
+  return fallback;
+}
+
+// Extrae un array de líneas de detalle, tolerando distintos nombres
+function extractDetailLines(doc) {
+  const candidates = [
+    "detalle", "detalles", "items", "lineas", "line_items", "detail", "detail_lines"
+  ];
+  for (const key of candidates) {
+    const v = doc?.[key];
+    if (Array.isArray(v)) return v;
+  }
+  return [];
+}
+
+// Obtiene el código y la cantidad con múltiples alias
+function readLineCode(line) {
+  const code = firstExisting(line, [
+    "cod_prod", "codigo", "producto_codigo", "coditem", "codigo_item",
+    "product_code", "sku", "codigo_prod"
+  ], "");
+  return String(code || "").trim();
+}
+function readLineQty(line) {
+  const qty = firstExisting(line, ["cantidad","qty","unidades","units"], 0);
+  const n = Number(qty);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// Suma unidades del producto en el detalle de cada documento, aplicando signo
+function sumUnits(payload, code, sign, debugSink) {
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  let acc = 0, matched = 0;
+  for (const doc of data) {
+    const lines = extractDetailLines(doc);
+    for (const ln of lines) {
+      const cod = readLineCode(ln);
+      if (cod === code) {
+        const qty = readLineQty(ln);
+        acc += sign * qty;
+        matched += qty;
+      }
+    }
+  }
+  if (debugSink) debugSink.matchedUnits = matched;
   return acc;
 }
 
@@ -68,13 +123,19 @@ async function computeMonthTotal({ ym, code, debug, dbg }) {
   const { start, end } = monthStartEnd(ym);
   const df = ymd(start), dt = ymd(end);
 
-  // Llamadas en paralelo por tipo (3 concurrentes)
+  // 3 fetch en paralelo (FAVE/NDVE/NCVE)
   const promises = DOC_TYPES.map(({ code: t, sign }) => (async () => {
-    const url = `${BASE}/documents/${encodeURIComponent(RUT)}/${encodeURIComponent(t)}/` +
-                `${VENTAS_CYCLE}/?df=${df}&dt=${dt}&details=1`;
-    const r = await fetchJsonWithTimeout(url, 5000, debug ? dbg.attempts : null);
-    if (r.ok && r.json?.retorno) return sumUnits(r.json, code, sign);
-    return 0;
+    const url = `${BASE}/documents/${encodeURIComponent(RUT)}/${encodeURIComponent(t)}/${VENTAS_CYCLE}/?df=${df}&dt=${dt}&details=1`;
+    const dbgItem = debug ? { ym, type: t } : null;
+    const r = await fetchJsonWithTimeout(url, REQUEST_TIMEOUT_MS, debug ? dbg.attempts : null, `${ym}-${t}`);
+    if (r.ok && r.json?.retorno) {
+      const units = sumUnits(r.json, code, sign, dbgItem);
+      if (debug && dbgItem) dbg.attempts.push({ ym, type: t, url, status: r.status, ok: true, matchedUnits: dbgItem.matchedUnits });
+      return units;
+    } else {
+      if (debug) dbg.attempts.push({ ym, type: t, url, status: r.status, ok: false, note: r.aborted ? "aborted/timeout" : "error" });
+      return 0;
+    }
   })());
 
   const results = await Promise.all(promises);
@@ -122,11 +183,8 @@ module.exports = async (req, res) => {
 
   try {
     const months = yearMonthRange(fromYM, toYM);
-
-    // Procesamos 4 meses en paralelo, cada mes con 3 fetch en paralelo
     const pairs = await mapWithConcurrency(
-      months,
-      4,
+      months, MONTH_CONCURRENCY,
       async (ym) => await computeMonthTotal({ ym, code, debug, dbg })
     );
 
