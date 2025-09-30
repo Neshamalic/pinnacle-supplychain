@@ -16,6 +16,8 @@ const ImportManagement      = lazy(() => import("./pages/import-management/index
 const CommunicationsLog     = lazy(() => import("./pages/communications-log/index.jsx"));
 // Si tienes Demand Forecasting, déjala; si no, bórrala
 const DemandForecasting     = lazy(() => import("./pages/demand-forecasting/index.jsx"));
+// NUEVA página de analytics de ventas
+const SalesByProduct        = lazy(() => import("./pages/sales-analytics/SalesByProduct.jsx"));
 
 export default function AppRoutes() {
   return (
@@ -34,6 +36,8 @@ export default function AppRoutes() {
           <Route path="/import-management" element={<ImportManagement />} />
           <Route path="/communications-log" element={<CommunicationsLog />} />
           <Route path="/demand-forecasting" element={<DemandForecasting />} />
+          {/* NUEVA ruta */}
+          <Route path="/sales-analytics" element={<SalesByProduct />} />
 
           {/* Aliases por compatibilidad */}
           <Route path="/communications" element={<Navigate to="/communications-log" replace />} />
