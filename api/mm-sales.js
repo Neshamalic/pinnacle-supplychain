@@ -37,6 +37,24 @@ function monthStartEnd(ym) {
 }
 function ymd(s) { return String(s).replaceAll("-",""); }
 
+// Rango → sub-rangos de N días (incluye bordes)
+function splitRangeByDays(df, dt, days = 7) {
+  const chunks = [];
+  const start = new Date(df.slice(0,4), Number(df.slice(4,6))-1, Number(df.slice(6,8)));
+  const end   = new Date(dt.slice(0,4), Number(dt.slice(4,6))-1, Number(dt.slice(6,8)));
+  let cursor = new Date(start);
+  while (cursor <= end) {
+    const to = new Date(cursor);
+    to.setDate(to.getDate() + (days - 1));
+    if (to > end) to.setTime(end.getTime());
+    const dfStr = `${cursor.getFullYear()}${String(cursor.getMonth()+1).padStart(2,"0")}${String(cursor.getDate()).padStart(2,"0")}`;
+    const dtStr = `${to.getFullYear()}${String(to.getMonth()+1).padStart(2,"0")}${String(to.getDate()).padStart(2,"0")}`;
+    chunks.push([dfStr, dtStr]);
+    cursor.setDate(cursor.getDate() + days);
+  }
+  return chunks;
+}
+
 // ---------- fetch con timeout + retry ----------
 async function fetchJsonWithTimeout(url, ms, debugArr, attemptLabel) {
   const headers = { "Accept":"application/json" };
@@ -89,15 +107,12 @@ function extractDetailLines(doc) {
   return [];
 }
 function readLineCode(line) {
-  // directos
   const direct = firstExisting(line, [
     "cod_prod","codigo","producto_codigo","coditem","codigo_item",
     "product_code","sku","codigo_prod"
   ], undefined);
-
   if (direct != null && direct !== "") return String(direct).trim();
 
-  // anidados frecuentes
   const nestedPaths = [
     ["producto","codigo"], ["producto","cod_prod"], ["item","codigo"], ["item","cod_prod"],
     ["product","code"], ["product","sku"], ["producto","sku"]
@@ -108,7 +123,6 @@ function readLineCode(line) {
     if (v != null && v !== "") return String(v).trim();
   }
 
-  // fallback heurístico: primer campo string que parezca código (empiece por PC)
   for (const [k,v] of Object.entries(line)) {
     if (typeof v === "string" && /^PC[0-9]/i.test(v)) return v.trim();
   }
@@ -120,20 +134,18 @@ function readLineQty(line) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function sumUnits(payload, inputCodeNorm, debugSink) {
+function sumUnits(payload, codeNorm, debugSink) {
   const data = Array.isArray(payload?.data) ? payload.data : [];
   let acc = 0, matched = 0;
   const sampleCodes = new Set();
-
   for (const doc of data) {
     const lines = extractDetailLines(doc);
     for (const ln of lines) {
       const codeRaw = readLineCode(ln);
       if (!codeRaw) continue;
-      const codeNorm = normalizeCode(codeRaw);
-      sampleCodes.size < 6 && sampleCodes.add(codeNorm);
-
-      if (codeNorm === inputCodeNorm) {
+      const code = normalizeCode(codeRaw);
+      if (sampleCodes.size < 6) sampleCodes.add(code);
+      if (code === codeNorm) {
         const qty = readLineQty(ln);
         matched += qty;
         acc += qty;
@@ -141,36 +153,50 @@ function sumUnits(payload, inputCodeNorm, debugSink) {
     }
   }
   if (debugSink) {
-    debugSink.matchedUnits = matched;
-    debugSink.sampleLineCodes = Array.from(sampleCodes);
+    debugSink.matchedUnits = (debugSink.matchedUnits || 0) + matched;
+    const prev = new Set(debugSink.sampleLineCodes || []);
+    sampleCodes.forEach(c => prev.add(c));
+    debugSink.sampleLineCodes = Array.from(prev);
   }
   return acc;
 }
 
-// ---------- cálculo por mes ----------
-async function computeMonthTotal({ ym, codeNorm, debug, dbg }) {
+// fetch de documentos (posible chunking por tipo)
+async function fetchDocsRange(type, df, dt, debug, dbgArr, label) {
+  const url = `${BASE}/documents/${encodeURIComponent(RUT)}/${encodeURIComponent(type)}/${VENTAS_CYCLE}/?df=${df}&dt=${dt}&details=1`;
+  return await fetchJsonWithTimeout(url, REQUEST_TIMEOUT_MS, debug ? dbgArr : null, label);
+}
+
+async function computeByType({ ym, type, sign, codeNorm, debug, dbg }) {
   const { start, end } = monthStartEnd(ym);
   const df = ymd(start), dt = ymd(end);
 
-  const promises = DOC_TYPES.map(({ code: t, sign }) => (async () => {
-    const url = `${BASE}/documents/${encodeURIComponent(RUT)}/${encodeURIComponent(t)}/${VENTAS_CYCLE}/?df=${df}&dt=${dt}&details=1`;
-    const dbgItem = debug ? { ym, type: t } : null;
-    const r = await fetchJsonWithTimeout(url, REQUEST_TIMEOUT_MS, debug ? dbg.attempts : null, `${ym}-${t}`);
+  // Para FAVE hacemos chunking de 7 días para evitar timeouts
+  const ranges = (type === "FAVE") ? splitRangeByDays(df, dt, 7) : [[df, dt]];
 
+  let total = 0;
+  for (let i = 0; i < ranges.length; i++) {
+    const [a, b] = ranges[i];
+    const dbgItem = debug ? { ym, type, chunk: `${a}-${b}`, matchedUnits: 0, sampleLineCodes: [] } : null;
+    const r = await fetchDocsRange(type, a, b, debug, dbg?.attempts, `${ym}-${type}#${i+1}/${ranges.length}`);
     if (r.ok && r.json?.retorno) {
       const units = sumUnits(r.json, codeNorm, dbgItem);
-      const signed = units * (t === "NCVE" ? -1 : +1); // aplica signo
-      if (debug && dbgItem) dbg.attempts.push({ ym, type: t, url, status: r.status, ok: true, matchedUnits: dbgItem.matchedUnits, sampleLineCodes: dbgItem.sampleLineCodes });
-      return signed;
+      total += (type === "NCVE" ? -units : +units) * sign; // sign ya es +1 en nuestra tabla
+      if (debug && dbgItem) dbg.attempts.push({ ym, type, chunk: `${a}-${b}`, ok: true, status: r.status, matchedUnits: dbgItem.matchedUnits, sampleLineCodes: dbgItem.sampleLineCodes });
     } else {
-      if (debug) dbg.attempts.push({ ym, type: t, url, status: r.status, ok: false, note: r.aborted ? "aborted/timeout" : "error" });
-      return 0;
+      if (debug) dbg.attempts.push({ ym, type, chunk: `${a}-${b}`, ok: false, status: r.status, note: r.aborted ? "aborted/timeout" : "error" });
     }
-  })());
+  }
+  return total;
+}
 
-  const results = await Promise.all(promises);
-  const total = results.reduce((a,b)=>a+b,0);
-  return [ym, total];
+async function computeMonthTotal({ ym, codeNorm, debug, dbg }) {
+  const results = await Promise.all(
+    DOC_TYPES.map(({ code: t, sign }) =>
+      computeByType({ ym, type: t, sign, codeNorm, debug, dbg })
+    )
+  );
+  return [ym, results.reduce((a,b)=>a+b,0)];
 }
 
 // ---------- concurrencia limitada ----------
@@ -219,7 +245,6 @@ module.exports = async (req, res) => {
       months, MONTH_CONCURRENCY,
       async (ym) => await computeMonthTotal({ ym, codeNorm, debug, dbg })
     );
-
     const payload = { ok:true, presentation_code: inputCode, from: fromYM, to: toYM, series: pairs };
     if (debug) payload._debug = dbg;
     return res.status(200).json(payload);
@@ -227,3 +252,4 @@ module.exports = async (req, res) => {
     return res.status(502).json({ ok:false, error: String(e?.message || e) });
   }
 };
+
