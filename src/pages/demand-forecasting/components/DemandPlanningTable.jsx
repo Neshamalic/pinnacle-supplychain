@@ -422,3 +422,4 @@ function InfoItem({label,value}){
   return (<div className="flex flex-col"><span className="text-gray-500">{label}</span><span className="font-medium">{value}</span></div>);
 }
 
+
