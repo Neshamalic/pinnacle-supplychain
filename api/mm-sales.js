@@ -1,25 +1,24 @@
 // api/mm-sales.js
-// /api/mm-sales?code=PC00063&from=2025-01&to=2025-09[&debug=1]
-const BASE  = (process.env.VITE_MM_BASE_PUBLIC || "https://pinnacle.managermas.cl/api").replace(/\/+$/,'');
-const TOKEN = String(process.env.MANAGERMAS_TOKEN || "").replace(/\s+/g,"").trim();
-const RUT   = String(process.env.VITE_MM_RUT || "77091384-5").trim();
+// /api/mm-sales?presentation_code=PC00063&from=2025-08&to=2025-09&fast=1&max=2&debug=1
+const BASE  = (process.env.VITE_MM_BASE_PUBLIC || "https://pinnacle.managermas.cl/api").replace(/\/+$/,"");
+const RUT   = (process.env.VITE_MM_RUT || "77091384-5").trim();
+const TOKEN = (process.env.MANAGERMAS_TOKEN || "").replace(/\s+/g,"").trim();
 
-const VENTAS_CYCLE = "V";
-const DOC_TYPES = [
-  { code: "FAVE", sign: +1 },
-  { code: "NDVE", sign: +1 },
-  { code: "NCVE", sign: -1 },
-];
+const PER_REQUEST_TIMEOUT_MS = Number(process.env.MM_REQ_TIMEOUT_MS || 8000);  // 8s por request
+const GLOBAL_TIMEOUT_MS      = Number(process.env.MM_GLOBAL_TIMEOUT_MS || 20000); // 20s total
 
-// Rendimiento / robustez
-const REQUEST_TIMEOUT_MS = 20000; // 20s
-const MONTH_CONCURRENCY  = 2;     // 2 meses a la vez
-const RETRIES            = 1;     // 1 reintento
+const DOC_TYPES = ["FAVE","NCVE","NDVE"]; // Facturas, Notas Crédito, Notas Débito
 
-// ---------- helpers de fecha ----------
-function yearMonthRange(fromYM, toYM) {
-  const [fy, fm] = fromYM.split("-").map(Number);
-  const [ty, tm] = toYM.split("-").map(Number);
+function monthStartEnd(ym){
+  const [y,m] = ym.split("-").map(Number);
+  const start = `${y}-${String(m).padStart(2,"0")}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${y}-${String(m).padStart(2,"0")}-${String(lastDay).padStart(2,"0")}`;
+  return { start, end };
+}
+function yearMonthRange(fromYM, toYM){
+  const [fy,fm] = fromYM.split("-").map(Number);
+  const [ty,tm] = toYM.split("-").map(Number);
   const out = [];
   let y = fy, m = fm;
   while (y < ty || (y === ty && m <= tm)) {
@@ -28,195 +27,82 @@ function yearMonthRange(fromYM, toYM) {
   }
   return out;
 }
-function monthStartEnd(ym) {
-  const [y, m] = ym.split("-").map(Number);
-  const start = `${y}-${String(m).padStart(2,"0")}-01`;
-  const lastDay = new Date(y, m, 0).getDate();
-  const end = `${y}-${String(m).padStart(2,"0")}-${String(lastDay).padStart(2,"0")}`;
-  return { start, end };
+function signForDocType(t){
+  if (t === "NCVE") return -1;    // Nota de Crédito resta
+  if (t === "FAVE" || t === "NDVE") return +1; // Factura/Nota Débito suman
+  return 0;
 }
-function ymd(s) { return String(s).replaceAll("-",""); }
-
-// Rango → sub-rangos de N días (incluye bordes)
-function splitRangeByDays(df, dt, days = 7) {
-  const chunks = [];
-  const start = new Date(df.slice(0,4), Number(df.slice(4,6))-1, Number(df.slice(6,8)));
-  const end   = new Date(dt.slice(0,4), Number(dt.slice(4,6))-1, Number(dt.slice(6,8)));
-  let cursor = new Date(start);
-  while (cursor <= end) {
-    const to = new Date(cursor);
-    to.setDate(to.getDate() + (days - 1));
-    if (to > end) to.setTime(end.getTime());
-    const dfStr = `${cursor.getFullYear()}${String(cursor.getMonth()+1).padStart(2,"0")}${String(cursor.getDate()).padStart(2,"0")}`;
-    const dtStr = `${to.getFullYear()}${String(to.getMonth()+1).padStart(2,"0")}${String(to.getDate()).padStart(2,"0")}`;
-    chunks.push([dfStr, dtStr]);
-    cursor.setDate(cursor.getDate() + days);
-  }
-  return chunks;
+function get(o, keys, dflt){
+  for (const k of keys) if (o && Object.prototype.hasOwnProperty.call(o, k)) return o[k];
+  return dflt;
 }
-
-// ---------- fetch con timeout + retry ----------
-async function fetchJsonWithTimeout(url, ms, debugArr, attemptLabel) {
-  const headers = { "Accept":"application/json" };
-  if (TOKEN) headers.Authorization = `Token ${TOKEN}`;
-
-  let last;
-  for (let k = 0; k <= RETRIES; k++) {
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), ms);
-    try {
-      const r = await fetch(url, { headers, signal: controller.signal });
-      const text = await r.text();
-      let json = null; try { json = JSON.parse(text); } catch {}
-      last = { ok: r.ok, status: r.status, json, text, aborted: false };
-      if (debugArr) debugArr.push({ url, status: r.status, ok: r.ok, sample: text.slice(0,180), attempt: k, label: attemptLabel });
-      if (r.ok) return last;
-      if (r.status >= 500 && k < RETRIES) continue;
-      return last;
-    } catch (e) {
-      last = { ok: false, status: 0, json: null, text: "", aborted: (e?.name === "AbortError") };
-      if (debugArr) debugArr.push({ url, error: String(e?.name || e?.message || e), attempt: k, label: attemptLabel });
-      if (k < RETRIES) continue;
-      return last;
-    } finally {
-      clearTimeout(t);
-    }
-  }
-  return last;
-}
-
-// ---------- normalización y lectura de líneas ----------
-function normalizeCode(x) {
-  // Mayúsculas, remueve no-alfanum, y saca ceros de cola (PC000640 -> PC00064)
-  let s = String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-  while (s.endsWith("0") && s.length > 2) s = s.slice(0, -1);
-  return s;
-}
-function firstExisting(obj, keys, fallback) {
-  for (const k of keys) {
-    if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
-  }
-  return fallback;
-}
-function extractDetailLines(doc) {
-  const candidates = ["detalle", "detalles", "items", "lineas", "line_items", "detail", "detail_lines"];
-  for (const key of candidates) {
-    const v = doc?.[key];
-    if (Array.isArray(v)) return v;
-  }
-  return [];
-}
-function readLineCode(line) {
-  const direct = firstExisting(line, [
-    "cod_prod","codigo","producto_codigo","coditem","codigo_item",
-    "product_code","sku","codigo_prod"
-  ], undefined);
-  if (direct != null && direct !== "") return String(direct).trim();
-
-  const nestedPaths = [
-    ["producto","codigo"], ["producto","cod_prod"], ["item","codigo"], ["item","cod_prod"],
-    ["product","code"], ["product","sku"], ["producto","sku"]
-  ];
-  for (const p of nestedPaths) {
-    let v = line;
-    for (const part of p) v = (v && typeof v === "object") ? v[part] : undefined;
-    if (v != null && v !== "") return String(v).trim();
-  }
-
-  for (const [k,v] of Object.entries(line)) {
-    if (typeof v === "string" && /^PC[0-9]/i.test(v)) return v.trim();
-  }
-  return "";
-}
-function readLineQty(line) {
-  const qty = firstExisting(line, ["cantidad","qty","unidades","units"], 0);
-  const n = Number(qty);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function sumUnits(payload, codeNorm, debugSink) {
-  const data = Array.isArray(payload?.data) ? payload.data : [];
-  let acc = 0, matched = 0;
-  const sampleCodes = new Set();
-  for (const doc of data) {
-    const lines = extractDetailLines(doc);
-    for (const ln of lines) {
-      const codeRaw = readLineCode(ln);
-      if (!codeRaw) continue;
-      const code = normalizeCode(codeRaw);
-      if (sampleCodes.size < 6) sampleCodes.add(code);
-      if (code === codeNorm) {
-        const qty = readLineQty(ln);
-        matched += qty;
-        acc += qty;
+function parseUnitsFromDocs(json, code, type){
+  const sign = signForDocType(type);
+  if (!sign) return 0;
+  const data = get(json, ["data","items","rows"], []);
+  let acc = 0;
+  for (const doc of (Array.isArray(data) ? data : [])) {
+    const det = get(doc, ["detalle","detalles","items","lineas"], []);
+    for (const it of (Array.isArray(det) ? det : [])) {
+      const lineCode = String(get(it,["cod_prod","codigo","sku","producto_codigo","presentation_code"],"")).trim();
+      if (lineCode === code) {
+        const qty = Number(get(it,["cantidad","qty","unidades","units"],0) || 0);
+        acc += sign * qty;
       }
     }
   }
-  if (debugSink) {
-    debugSink.matchedUnits = (debugSink.matchedUnits || 0) + matched;
-    const prev = new Set(debugSink.sampleLineCodes || []);
-    sampleCodes.forEach(c => prev.add(c));
-    debugSink.sampleLineCodes = Array.from(prev);
-  }
   return acc;
 }
-
-// fetch de documentos (posible chunking por tipo)
-async function fetchDocsRange(type, df, dt, debug, dbgArr, label) {
-  const url = `${BASE}/documents/${encodeURIComponent(RUT)}/${encodeURIComponent(type)}/${VENTAS_CYCLE}/?df=${df}&dt=${dt}&details=1`;
-  return await fetchJsonWithTimeout(url, REQUEST_TIMEOUT_MS, debug ? dbgArr : null, label);
+function withTimeout(promise, ms, reason="timeout"){
+  const ac = new AbortController();
+  const t = setTimeout(()=> ac.abort(reason), ms);
+  return {
+    run: () => promise(ac.signal).finally(()=>clearTimeout(t)),
+    signal: ac.signal
+  };
 }
 
-async function computeByType({ ym, type, sign, codeNorm, debug, dbg }) {
-  const { start, end } = monthStartEnd(ym);
-  const df = ymd(start), dt = ymd(end);
-
-  // Para FAVE hacemos chunking de 7 días para evitar timeouts
-  const ranges = (type === "FAVE") ? splitRangeByDays(df, dt, 7) : [[df, dt]];
-
-  let total = 0;
-  for (let i = 0; i < ranges.length; i++) {
-    const [a, b] = ranges[i];
-    const dbgItem = debug ? { ym, type, chunk: `${a}-${b}`, matchedUnits: 0, sampleLineCodes: [] } : null;
-    const r = await fetchDocsRange(type, a, b, debug, dbg?.attempts, `${ym}-${type}#${i+1}/${ranges.length}`);
-    if (r.ok && r.json?.retorno) {
-      const units = sumUnits(r.json, codeNorm, dbgItem);
-      total += (type === "NCVE" ? -units : +units) * sign; // sign ya es +1 en nuestra tabla
-      if (debug && dbgItem) dbg.attempts.push({ ym, type, chunk: `${a}-${b}`, ok: true, status: r.status, matchedUnits: dbgItem.matchedUnits, sampleLineCodes: dbgItem.sampleLineCodes });
-    } else {
-      if (debug) dbg.attempts.push({ ym, type, chunk: `${a}-${b}`, ok: false, status: r.status, note: r.aborted ? "aborted/timeout" : "error" });
-    }
+async function fetchJson(url, signal) {
+  const headers = { "Accept": "application/json" };
+  if (TOKEN) headers.Authorization = `Token ${TOKEN}`;
+  const r = await fetch(url, { headers, signal });
+  const text = await r.text();
+  try {
+    const json = JSON.parse(text);
+    return { ok: r.ok, status: r.status, json, text };
+  } catch {
+    return { ok: r.ok, status: r.status, json: null, text };
   }
-  return total;
+}
+function buildDocUrl({ type, rut, df, dt }){
+  // /documents/{rut}/{type}/V/?df=YYYYMMDD&dt=YYYYMMDD&details=1
+  const u = new URL(`${BASE}/documents/${encodeURIComponent(rut)}/${type}/V/`);
+  u.searchParams.set("df", df);
+  u.searchParams.set("dt", dt);
+  u.searchParams.set("details", "1");
+  return u.toString();
 }
 
-async function computeMonthTotal({ ym, codeNorm, debug, dbg }) {
-  const results = await Promise.all(
-    DOC_TYPES.map(({ code: t, sign }) =>
-      computeByType({ ym, type: t, sign, codeNorm, debug, dbg })
-    )
-  );
-  return [ym, results.reduce((a,b)=>a+b,0)];
+// Pequeña cola de concurrencia (máx 2 simultáneas)
+async function runLimited(tasks, limit=2){
+  const results = [];
+  let idx = 0;
+  let running = 0;
+  return await new Promise((resolve) => {
+    const next = () => {
+      if (idx >= tasks.length && running === 0) return resolve(results);
+      while (running < limit && idx < tasks.length) {
+        const curr = tasks[idx++];
+        running++;
+        curr().then((r)=>results.push(r))
+              .catch((e)=>results.push({ error: String(e?.message||e)}))
+              .finally(()=>{ running--; next(); });
+      }
+    };
+    next();
+  });
 }
 
-// ---------- concurrencia limitada ----------
-async function mapWithConcurrency(items, limit, mapper) {
-  const out = new Array(items.length);
-  let i = 0;
-  async function worker() {
-    while (i < items.length) {
-      const idx = i++;
-      out[idx] = await mapper(items[idx], idx);
-    }
-  }
-  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
-  await Promise.all(workers);
-  return out;
-}
-
-// ... (deja todo lo demás igual: helpers, normalización, etc.)
-
-// === handler (reemplazar esta función completa) ===
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin","*");
   res.setHeader("Access-Control-Allow-Methods","GET, OPTIONS");
@@ -224,73 +110,94 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "GET") return res.status(405).json({ ok:false, error:"Use GET" });
 
-  const inputCode  = String(req.query?.code || req.query?.presentation_code || "").trim();
-  const debug = String(req.query?.debug || "") === "1";
-  const fast  = String(req.query?.fast  || "") === "1";      // ← FAST MODE
-  const maxMonths = Math.max(1, Number(req.query?.maxMonths || (fast ? 2 : 12))); // ← FAST: por defecto 2 meses
+  const code  = String(req.query?.presentation_code || req.query?.code || "").trim();
+  const from  = String(req.query?.from || "").trim();
+  const to    = String(req.query?.to || "").trim();
+  const fast  = String(req.query?.fast || "").trim() === "1";
+  const max   = Math.max(1, Number(req.query?.max || 12));
+  const debug = String(req.query?.debug || "").trim() === "1";
 
+  if (!code) return res.status(400).json({ ok:false, error:'Falta ?presentation_code=PC00063' });
+
+  // Fechas por defecto (últimos 12 meses)
   const now = new Date();
-  const defTo = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
-  const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-  const defFrom = `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,"0")}`;
+  const defTo   = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+  const past = new Date(now.getFullYear(), now.getMonth()-11, 1);
+  const defFrom = `${past.getFullYear()}-${String(past.getMonth()+1).padStart(2,"0")}`;
+  const fromYM = from || defFrom;
+  const toYM   = to   || defTo;
 
-  const fromYM = String(req.query?.from || defFrom);
-  const toYM   = String(req.query?.to   || defTo);
+  // Rango mes a mes (y recorte por max)
+  let months = yearMonthRange(fromYM, toYM);
+  if (fast && months.length > max) months = months.slice(-max);
 
-  if (!inputCode)  return res.status(400).json({ ok:false, error:'Falta ?presentation_code=PC00063 (o ?code=...)' });
-  if (!TOKEN)      return res.status(401).json({ ok:false, error:'MANAGERMAS_TOKEN no configurado en Vercel' });
+  const started = Date.now();
+  const globalAbort = new AbortController();
+  const gtimeout = setTimeout(()=>globalAbort.abort("global-timeout"), GLOBAL_TIMEOUT_MS);
 
-  const dbg = debug ? { base: BASE, rut: RUT, attempts: [] } : null;
-  const codeNorm = normalizeCode(inputCode);
+  const attempts = [];
+  const skipped = [];
 
   try {
-    let months = yearMonthRange(fromYM, toYM);
-    // FAST MODE: recortar para no pasarse de tiempo
-    if (months.length > maxMonths) months = months.slice(-maxMonths);
+    const series = [];
 
-    // En FAST MODE reducimos concurrencia para bajar presión
-    const concurrency = fast ? 1 : MONTH_CONCURRENCY;
+    // Creamos una lista de tareas (cada tarea = 1 mes x 3 doc-types)
+    const tasks = [];
+    for (const ym of months) {
+      const { start, end } = monthStartEnd(ym);
+      const df = start.replace(/-/g, "");
+      const dt = end.replace(/-/g, "");
 
-    // Parche simple: cuando fast=1 NO troceamos FAVE (un request por mes/tipo)
-    const pairs = await mapWithConcurrency(
-      months, concurrency,
-      async (ym) => await computeMonthTotalFastAware({ ym, codeNorm, debug, dbg, fast })
-    );
+      tasks.push(async () => {
+        let monthUnits = 0;
+        for (const type of DOC_TYPES) {
+          // Timeout por request
+          const wrapped = withTimeout(async (signal) => {
+            const url = buildDocUrl({ type, rut: RUT, df, dt });
+            const r = await fetchJson(url, signal);
+            if (debug) attempts.push({ ym, type, url, status: r.status, ok: r.ok });
+            if (!r.ok || r.status >= 400) {
+              skipped.push({ ym, type, reason: `HTTP ${r.status}` });
+              continue;
+            }
+            monthUnits += parseUnitsFromDocs(r.json||{}, code, type);
+          }, PER_REQUEST_TIMEOUT_MS, "req-timeout");
+          try {
+            await wrapped.run();
+          } catch (e) {
+            skipped.push({ ym, type, reason: String(e?.message||e) });
+          }
+        }
+        series.push([ym, monthUnits]);
+      });
+    }
 
-    const payload = { ok:true, presentation_code: inputCode, from: months[0], to: months[months.length-1], series: pairs };
-    if (debug) payload._debug = dbg;
+    // Ejecutar con concurrencia limitada
+    await runLimited(tasks, fast ? 2 : 1);
+
+    clearTimeout(gtimeout);
+
+    const payload = {
+      ok: true,
+      presentation_code: code,
+      from: months.at(0) || fromYM,
+      to:   months.at(-1) || toYM,
+      series: series.sort((a,b)=>a[0].localeCompare(b[0])),
+    };
+
+    if (skipped.length) payload.partial = true;
+    if (debug) payload._debug = {
+      base: BASE, rut: RUT,
+      elapsed_ms: Date.now() - started,
+      attempts, skipped
+    };
+
     return res.status(200).json(payload);
-  } catch (e) {
-    return res.status(502).json({ ok:false, error: String(e?.message || e) });
+  } catch (err) {
+    clearTimeout(gtimeout);
+    const msg = globalAbort.signal.aborted ? "Global timeout" : String(err?.message||err);
+    return res.status(504).json({ ok:false, error: msg });
   }
 };
-
-// === función wrapper que respeta fast ===
-async function computeMonthTotalFastAware({ ym, codeNorm, debug, dbg, fast }) {
-  const types = DOC_TYPES.map(({ code, sign }) => ({ type: code, sign }));
-  const results = [];
-  for (const { type, sign } of types) {
-    const { start, end } = monthStartEnd(ym);
-    const df = ymd(start), dt = ymd(end);
-    // FAST MODE: 1 solo rango por tipo
-    const ranges = fast ? [[df, dt]] : (type === "FAVE" ? splitRangeByDays(df, dt, 7) : [[df, dt]]);
-
-    let total = 0;
-    for (let i = 0; i < ranges.length; i++) {
-      const [a, b] = ranges[i];
-      const dbgItem = debug ? { ym, type, chunk: `${a}-${b}`, matchedUnits: 0, sampleLineCodes: [] } : null;
-      const r = await fetchDocsRange(type, a, b, debug, dbg?.attempts, `${ym}-${type}#${i+1}/${ranges.length}`);
-      if (r.ok && r.json?.retorno) {
-        const units = sumUnits(r.json, codeNorm, dbgItem);
-        total += (type === "NCVE" ? -units : +units);
-        if (debug && dbgItem) dbg.attempts.push({ ym, type, chunk: `${a}-${b}`, ok: true, status: r.status, matchedUnits: dbgItem.matchedUnits, sampleLineCodes: dbgItem.sampleLineCodes });
-      } else {
-        if (debug) dbg.attempts.push({ ym, type, chunk: `${a}-${b}`, ok: false, status: r.status, note: r.aborted ? "aborted/timeout" : "error" });
-      }
-    }
-    results.push(total);
-  }
-  return [ym, results.reduce((a,b)=>a+b,0)];
-}
 
 
