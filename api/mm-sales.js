@@ -214,7 +214,9 @@ async function mapWithConcurrency(items, limit, mapper) {
   return out;
 }
 
-// ---------- handler ----------
+// ... (deja todo lo demás igual: helpers, normalización, etc.)
+
+// === handler (reemplazar esta función completa) ===
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin","*");
   res.setHeader("Access-Control-Allow-Methods","GET, OPTIONS");
@@ -224,6 +226,8 @@ module.exports = async (req, res) => {
 
   const inputCode  = String(req.query?.code || req.query?.presentation_code || "").trim();
   const debug = String(req.query?.debug || "") === "1";
+  const fast  = String(req.query?.fast  || "") === "1";      // ← FAST MODE
+  const maxMonths = Math.max(1, Number(req.query?.maxMonths || (fast ? 2 : 12))); // ← FAST: por defecto 2 meses
 
   const now = new Date();
   const defTo = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
@@ -240,16 +244,53 @@ module.exports = async (req, res) => {
   const codeNorm = normalizeCode(inputCode);
 
   try {
-    const months = yearMonthRange(fromYM, toYM);
+    let months = yearMonthRange(fromYM, toYM);
+    // FAST MODE: recortar para no pasarse de tiempo
+    if (months.length > maxMonths) months = months.slice(-maxMonths);
+
+    // En FAST MODE reducimos concurrencia para bajar presión
+    const concurrency = fast ? 1 : MONTH_CONCURRENCY;
+
+    // Parche simple: cuando fast=1 NO troceamos FAVE (un request por mes/tipo)
     const pairs = await mapWithConcurrency(
-      months, MONTH_CONCURRENCY,
-      async (ym) => await computeMonthTotal({ ym, codeNorm, debug, dbg })
+      months, concurrency,
+      async (ym) => await computeMonthTotalFastAware({ ym, codeNorm, debug, dbg, fast })
     );
-    const payload = { ok:true, presentation_code: inputCode, from: fromYM, to: toYM, series: pairs };
+
+    const payload = { ok:true, presentation_code: inputCode, from: months[0], to: months[months.length-1], series: pairs };
     if (debug) payload._debug = dbg;
     return res.status(200).json(payload);
   } catch (e) {
     return res.status(502).json({ ok:false, error: String(e?.message || e) });
   }
 };
+
+// === función wrapper que respeta fast ===
+async function computeMonthTotalFastAware({ ym, codeNorm, debug, dbg, fast }) {
+  const types = DOC_TYPES.map(({ code, sign }) => ({ type: code, sign }));
+  const results = [];
+  for (const { type, sign } of types) {
+    const { start, end } = monthStartEnd(ym);
+    const df = ymd(start), dt = ymd(end);
+    // FAST MODE: 1 solo rango por tipo
+    const ranges = fast ? [[df, dt]] : (type === "FAVE" ? splitRangeByDays(df, dt, 7) : [[df, dt]]);
+
+    let total = 0;
+    for (let i = 0; i < ranges.length; i++) {
+      const [a, b] = ranges[i];
+      const dbgItem = debug ? { ym, type, chunk: `${a}-${b}`, matchedUnits: 0, sampleLineCodes: [] } : null;
+      const r = await fetchDocsRange(type, a, b, debug, dbg?.attempts, `${ym}-${type}#${i+1}/${ranges.length}`);
+      if (r.ok && r.json?.retorno) {
+        const units = sumUnits(r.json, codeNorm, dbgItem);
+        total += (type === "NCVE" ? -units : +units);
+        if (debug && dbgItem) dbg.attempts.push({ ym, type, chunk: `${a}-${b}`, ok: true, status: r.status, matchedUnits: dbgItem.matchedUnits, sampleLineCodes: dbgItem.sampleLineCodes });
+      } else {
+        if (debug) dbg.attempts.push({ ym, type, chunk: `${a}-${b}`, ok: false, status: r.status, note: r.aborted ? "aborted/timeout" : "error" });
+      }
+    }
+    results.push(total);
+  }
+  return [ym, results.reduce((a,b)=>a+b,0)];
+}
+
 
