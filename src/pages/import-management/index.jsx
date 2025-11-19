@@ -43,8 +43,8 @@ const pillStatus = (s = "") => {
   const x = normalizeStatus(s);
   const cls =
     x === "transit" ? tones.amber :
-    x === "warehouse" ? tones.slate :
-    x === "delivered" || x === "arrived" ? tones.green :
+    x === "warehouse" ? tones.green :
+    x === "delivered" || x === "arrived" ? tones.slate :
     tones.gray;
   return <span className={`${pill} ${cls}`}>{x || "—"}</span>;
 };
