@@ -118,7 +118,7 @@ export default function ImportDetailsDrawer({ open, onClose, importRow }) {
 
   const transportTone = (t) => (t?.toLowerCase?.() === "air" ? "blue" : t?.toLowerCase?.() === "sea" ? "indigo" : "slate");
   const statusTone = (s) =>
-    (s?.toLowerCase?.() === "transit" ? "amber" : ["warehouse", "wharehouse"].includes((s || "").toLowerCase()) ? "slate" : "green");
+    (s?.toLowerCase?.() === "transit" ? "amber" : ["warehouse", "wharehouse"].includes((s || "").toLowerCase()) ? "slate" : "gray");
 
   return (
     <div className="fixed inset-0 z-[2100] bg-black/40 flex justify-end">
