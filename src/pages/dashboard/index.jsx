@@ -36,7 +36,7 @@ const Dashboard = () => {
   const { rows: importRows = [] } = useSheet('imports', mapImports);
   const { rows: demandRows = [] } = useSheet('demand', mapDemand);
 
-  // ✅ Cálculo de métricas del Dashboard (incluye tránsito y cobertura promedio)
+  // ✅ Cálculo de métricas del Dashboard
   const metricsData = useMemo(() => {
     const isEs = currentLanguage === 'es';
 
@@ -58,47 +58,15 @@ const Dashboard = () => {
       return ['draft', 'pending', 'submitted', 'borrador', 'pendiente'].includes(s);
     });
 
-    // --- IMPORTACIONES ---
-    // Estados que consideramos "cerrados" (no se cuentan como abiertos / en tránsito)
-    const isClosedImport = (s) => {
-      if (!s) return false;
-      return [
-        'delivered',
-        'warehouse',
-        'completed',
-        'entregado',
-        'en bodega',
-        'completado',
-        'closed',
-        'cerrado',
-      ].includes(s);
-    };
-
-    // Estados que consideramos "en tránsito" (shipment realmente en movimiento / aduana)
-    const isTransitImport = (s) => {
-      if (!s) return false;
-      if (isClosedImport(s)) return false;
-      return (
-        s.includes('transit') || // transit / in transit
-        s.includes('tránsito') ||
-        s.includes('transito') ||
-        s.includes('customs') || // in customs / customs clearance
-        s.includes('aduana') ||
-        s.includes('shipment') ||
-        s.includes('embarque') ||
-        s.includes('shipped') ||
-        s.includes('en viaje') ||
-        s.includes('en ruta')
-      );
-    };
-
-    // 🔹 Solo shipments en tránsito (esto es lo que mostrará la tarjeta)
+    // --- IMPORTACIONES (solo status = "transit") ---
+    // Aquí aplicamos exactamente lo que pediste:
+    // solo consideramos importaciones cuyo status sea "transit".
     const transitImports = imports.filter((imp) => {
       const s = normalizeStatus(imp.importStatus || imp.status);
-      return isTransitImport(s);
+      return s === 'transit';
     });
 
-    // 🔹 De esos, cuántos son marítimos
+    // De esas mismas, cuántas son marítimas (según transportType / mode)
     const seaTransitImports = transitImports.filter((imp) => {
       const transport = String(imp.transportType || imp.mode || '').toLowerCase();
       return (
@@ -108,7 +76,7 @@ const Dashboard = () => {
       );
     });
 
-    // --- DEMANDA / STOCK ---
+    // --- DEMANDA / STOCK (crítico desde demand) ---
     let lowAlerts = 0;
     let criticalAlerts = 0;
     const daysList = [];
@@ -116,7 +84,7 @@ const Dashboard = () => {
     demand.forEach((row) => {
       let days = row.daysSupply;
 
-      // Si la hoja no trae days_supply o es 0, lo calculamos: stock / demanda * 30 días
+      // Si daysSupply no viene o es inválido, lo calculamos: stock / demanda * 30 días
       if (
         days === null ||
         days === undefined ||
@@ -135,12 +103,16 @@ const Dashboard = () => {
 
       if (days !== null && Number.isFinite(days) && days > 0) {
         daysList.push(days);
+
+        // Umbrales:
+        // - Stock bajo: <= 10 días
+        // - Stock crítico: <= 5 días
         if (days <= 10) lowAlerts += 1;
         if (days <= 5) criticalAlerts += 1;
       }
     });
 
-    // Usamos solo días válidos (>0) para el promedio
+    // Promedio de días de cobertura (solo días válidos)
     const averageDays =
       daysList.length > 0
         ? daysList.reduce((acc, val) => acc + val, 0) / daysList.length
@@ -186,7 +158,7 @@ const Dashboard = () => {
         trend: null,
         onClick: () => navigate('/tender-management'),
       },
-      // 2) Importaciones abiertas = shipments en tránsito
+      // 2) Importaciones pendientes = SOLO status "transit"
       {
         title: isEs ? 'Importaciones Pendientes' : 'Pending Imports',
         value: String(transitImports.length),
@@ -198,13 +170,13 @@ const Dashboard = () => {
         trend: null,
         onClick: () => navigate('/import-management'),
       },
-      // 3) Alertas de stock bajo
+      // 3) Stock crítico (desde demand)
       {
-        title: isEs ? 'Alertas Stock Bajo' : 'Low Stock Alerts',
-        value: String(lowAlerts),
+        title: isEs ? 'Stock Crítico' : 'Critical Stock',
+        value: String(criticalAlerts), // 👈 aquí mostramos SOLO productos críticos
         subtitle: isEs
-          ? `${criticalAlerts} críticas`
-          : `${criticalAlerts} critical`,
+          ? `${lowAlerts} con stock bajo`
+          : `${lowAlerts} with low stock`,
         icon: 'AlertTriangle',
         color: 'red',
         trend: null,
